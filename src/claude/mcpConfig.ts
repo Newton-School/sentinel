@@ -56,8 +56,82 @@ export function getMcpConfigPath(): string {
     },
   };
 
+  // Slack search — requires user token
+  if (config.SLACK_USER_TOKEN) {
+    mcpConfig.mcpServers["slack-search"] = {
+      command: "node",
+      args: [join(process.cwd(), "dist", "mcp", "slack.js")],
+      env: {
+        SLACK_USER_TOKEN: config.SLACK_USER_TOKEN,
+      },
+    };
+    log.info("Slack search MCP server registered");
+  } else {
+    log.warn("SLACK_USER_TOKEN not set — Slack search disabled");
+  }
+
+  // Google Workspace (Gmail, Calendar, Transcripts) — requires OAuth credentials
+  const hasGoogle =
+    config.GOOGLE_CLIENT_ID &&
+    config.GOOGLE_CLIENT_SECRET &&
+    config.GOOGLE_REFRESH_TOKEN;
+
+  if (hasGoogle) {
+    const googleEnv = {
+      GOOGLE_CLIENT_ID: config.GOOGLE_CLIENT_ID!,
+      GOOGLE_CLIENT_SECRET: config.GOOGLE_CLIENT_SECRET!,
+      GOOGLE_REFRESH_TOKEN: config.GOOGLE_REFRESH_TOKEN!,
+    };
+
+    mcpConfig.mcpServers.gmail = {
+      command: "node",
+      args: [join(process.cwd(), "dist", "mcp", "gmail.js")],
+      env: googleEnv,
+    };
+
+    mcpConfig.mcpServers["google-calendar"] = {
+      command: "node",
+      args: [join(process.cwd(), "dist", "mcp", "calendar.js")],
+      env: googleEnv,
+    };
+
+    mcpConfig.mcpServers["meeting-transcripts"] = {
+      command: "node",
+      args: [join(process.cwd(), "dist", "mcp", "transcripts.js")],
+      env: googleEnv,
+    };
+
+    log.info("Google Workspace MCP servers registered (Gmail, Calendar, Transcripts)");
+  } else {
+    log.warn("Google credentials not set — Gmail, Calendar, and Transcripts disabled");
+  }
+
   writeFileSync(configPath, JSON.stringify(mcpConfig, null, 2));
-  log.info({ path: configPath }, "Wrote MCP config");
+  log.info({ path: configPath, servers: Object.keys(mcpConfig.mcpServers) }, "Wrote MCP config");
 
   return configPath;
+}
+
+/**
+ * Returns the list of data sources that are NOT available due to missing config.
+ */
+export function getUnavailableSources(): string[] {
+  const unavailable: string[] = [];
+
+  if (!config.SLACK_USER_TOKEN) {
+    unavailable.push("Slack search");
+  }
+
+  const hasGoogle =
+    config.GOOGLE_CLIENT_ID &&
+    config.GOOGLE_CLIENT_SECRET &&
+    config.GOOGLE_REFRESH_TOKEN;
+
+  if (!hasGoogle) {
+    unavailable.push("Gmail");
+    unavailable.push("Google Calendar");
+    unavailable.push("Meeting Transcripts");
+  }
+
+  return unavailable;
 }

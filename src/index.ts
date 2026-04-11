@@ -1,7 +1,7 @@
 import { config } from "./config.js";
 import { createLogger } from "./logging/logger.js";
 import { getDb, closeDb } from "./state/db.js";
-import { getMcpConfigPath } from "./claude/mcpConfig.js";
+import { getMcpConfigPath, getUnavailableSources } from "./claude/mcpConfig.js";
 import { createSlackApp } from "./slack/socketClient.js";
 import { fetchThreadContext } from "./slack/threadContext.js";
 import { getOrCreatePersona, getTraits } from "./persona/store.js";
@@ -71,7 +71,8 @@ async function handleEvent(
     // Load/create persona and build system prompt
     const persona = getOrCreatePersona(envelope.userId, displayName);
     const traits = getTraits(envelope.userId);
-    const systemPrompt = buildSystemPrompt(persona, traits);
+    const unavailableSources = getUnavailableSources();
+    const systemPrompt = buildSystemPrompt(persona, traits, unavailableSources);
 
     // Run Claude
     log.info(
@@ -109,13 +110,15 @@ async function handleEvent(
       // Reaction management is best-effort
     }
 
-    // Track query for persona evolution
-    trackQuery(
-      envelope.userId,
-      envelope.channelId,
-      envelope.threadTs,
-      envelope.text
-    );
+    // Track query for persona evolution and audit logging
+    trackQuery({
+      userId: envelope.userId,
+      channelId: envelope.channelId,
+      threadTs: envelope.threadTs,
+      queryText: envelope.text,
+      responseText: response.text,
+      responseDurationMs: response.durationMs,
+    });
 
     log.info(
       { userId: envelope.userId, durationMs: response.durationMs },
@@ -123,6 +126,21 @@ async function handleEvent(
     );
   } catch (err) {
     log.error({ err, userId: envelope.userId }, "Failed to handle event");
+
+    const errorMessage =
+      err instanceof Error && err.message.includes("timed out")
+        ? ":warning: The request timed out — the query may have been too complex or a data source was slow. Try a more specific question."
+        : ":warning: Sorry, I hit an error processing that request. Please try again.";
+
+    try {
+      await client.reactions.remove({
+        channel: envelope.channelId,
+        timestamp: envelope.messageTs,
+        name: "eyes",
+      });
+    } catch {
+      // May not have been added
+    }
 
     try {
       await client.reactions.add({
@@ -133,7 +151,7 @@ async function handleEvent(
       await client.chat.postMessage({
         channel: envelope.channelId,
         thread_ts: envelope.threadTs,
-        text: ":warning: Sorry, I hit an error processing that request. Please try again.",
+        text: errorMessage,
       });
     } catch {
       // Best effort error reporting

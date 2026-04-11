@@ -21,6 +21,7 @@ export function getDb(): Database.Database {
 function runMigrations(db: Database.Database): void {
   log.info("Running database migrations");
 
+  // Initial schema
   db.exec(`
     CREATE TABLE IF NOT EXISTS personas (
       user_id TEXT PRIMARY KEY,
@@ -52,6 +53,25 @@ function runMigrations(db: Database.Database): void {
       created_at TEXT NOT NULL
     );
   `);
+
+  // Migration: add response audit columns to query_log
+  const columns = db.pragma("table_info(query_log)") as Array<{ name: string }>;
+  const columnNames = new Set(columns.map((c) => c.name));
+
+  if (!columnNames.has("response_text")) {
+    db.exec(`ALTER TABLE query_log ADD COLUMN response_text TEXT`);
+    log.info("Added response_text column to query_log");
+  }
+
+  if (!columnNames.has("response_duration_ms")) {
+    db.exec(`ALTER TABLE query_log ADD COLUMN response_duration_ms INTEGER`);
+    log.info("Added response_duration_ms column to query_log");
+  }
+
+  if (!columnNames.has("sources_used")) {
+    db.exec(`ALTER TABLE query_log ADD COLUMN sources_used TEXT`);
+    log.info("Added sources_used column to query_log");
+  }
 
   log.info("Migrations complete");
 }
