@@ -8,11 +8,11 @@ const envSchema = z.object({
   BOT_USER_ID: z.string().min(1),
   CLAUDE_BIN: z.string().default("claude"),
   ANTHROPIC_API_KEY: z.string().min(1),
-  METABASE_URL: z.string().url(),
-  METABASE_USERNAME: z.string().min(1),
-  METABASE_PASSWORD: z.string().min(1),
-  GITHUB_TOKEN: z.string().min(1),
-  NOTION_API_KEY: z.string().min(1),
+  METABASE_URL: z.string().url().optional(),
+  METABASE_USERNAME: z.string().min(1).optional(),
+  METABASE_PASSWORD: z.string().min(1).optional(),
+  GITHUB_TOKEN: z.string().min(1).optional(),
+  NOTION_API_KEY: z.string().min(1).optional(),
   SLACK_USER_TOKEN: z.string().startsWith("xoxp-").optional(),
   GOOGLE_CLIENT_ID: z.string().min(1).optional(),
   GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
@@ -167,6 +167,63 @@ describe("config schema", () => {
         expect(result.data.GOOGLE_CLIENT_ID).toBe("test-client-id");
         expect(result.data.GOOGLE_CLIENT_SECRET).toBeUndefined();
       }
+    });
+  });
+
+  describe("optional data source vars", () => {
+    const minimalEnv = {
+      SLACK_BOT_TOKEN: "xoxb-test-token",
+      SLACK_APP_TOKEN: "xapp-test-token",
+      BOT_USER_ID: "U123456",
+      ANTHROPIC_API_KEY: "sk-ant-test",
+      ALLOWED_USER_IDS: "U123",
+    };
+
+    it("parses successfully with only Slack + Claude vars (no Metabase/GitHub/Notion)", () => {
+      const result = envSchema.safeParse(minimalEnv);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.METABASE_URL).toBeUndefined();
+        expect(result.data.METABASE_USERNAME).toBeUndefined();
+        expect(result.data.METABASE_PASSWORD).toBeUndefined();
+        expect(result.data.GITHUB_TOKEN).toBeUndefined();
+        expect(result.data.NOTION_API_KEY).toBeUndefined();
+      }
+    });
+
+    it("parses successfully with Slack + Claude + Google vars (no Metabase/GitHub/Notion)", () => {
+      const result = envSchema.safeParse({
+        ...minimalEnv,
+        GOOGLE_CLIENT_ID: "client-id",
+        GOOGLE_CLIENT_SECRET: "client-secret",
+        GOOGLE_REFRESH_TOKEN: "refresh-token",
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.GOOGLE_CLIENT_ID).toBe("client-id");
+        expect(result.data.METABASE_URL).toBeUndefined();
+      }
+    });
+
+    it("still accepts Metabase vars when provided", () => {
+      const result = envSchema.safeParse({
+        ...minimalEnv,
+        METABASE_URL: "https://metabase.example.com",
+        METABASE_USERNAME: "admin@test.com",
+        METABASE_PASSWORD: "pass",
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.METABASE_URL).toBe("https://metabase.example.com");
+      }
+    });
+
+    it("still rejects invalid METABASE_URL when provided", () => {
+      const result = envSchema.safeParse({
+        ...minimalEnv,
+        METABASE_URL: "not-a-url",
+      });
+      expect(result.success).toBe(false);
     });
   });
 });

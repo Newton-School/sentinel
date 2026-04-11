@@ -9,13 +9,16 @@ const envSchema = z.object({
   CLAUDE_BIN: z.string().default("claude"),
   ANTHROPIC_API_KEY: z.string().min(1),
 
-  METABASE_URL: z.string().url(),
-  METABASE_USERNAME: z.string().min(1),
-  METABASE_PASSWORD: z.string().min(1),
+  // Metabase (optional — bot starts without it)
+  METABASE_URL: z.string().url().optional(),
+  METABASE_USERNAME: z.string().min(1).optional(),
+  METABASE_PASSWORD: z.string().min(1).optional(),
 
-  GITHUB_TOKEN: z.string().min(1),
+  // GitHub (optional)
+  GITHUB_TOKEN: z.string().min(1).optional(),
 
-  NOTION_API_KEY: z.string().min(1),
+  // Notion (optional)
+  NOTION_API_KEY: z.string().min(1).optional(),
 
   // Slack search (user token for search:read scope)
   SLACK_USER_TOKEN: z.string().startsWith("xoxp-").optional(),

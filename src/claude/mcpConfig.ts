@@ -26,35 +26,60 @@ export function getMcpConfigPath(): string {
   configPath = join(dir, "mcp-config.json");
 
   const mcpConfig: McpConfig = {
-    mcpServers: {
-      metabase: {
-        command: "node",
-        args: [join(process.cwd(), "dist", "mcp", "metabase.js")],
-        env: {
-          METABASE_URL: config.METABASE_URL,
-          METABASE_USERNAME: config.METABASE_USERNAME,
-          METABASE_PASSWORD: config.METABASE_PASSWORD,
-        },
-      },
-      github: {
-        command: "npx",
-        args: ["-y", "@modelcontextprotocol/server-github"],
-        env: {
-          GITHUB_PERSONAL_ACCESS_TOKEN: config.GITHUB_TOKEN,
-        },
-      },
-      notion: {
-        command: "npx",
-        args: ["-y", "@notionhq/notion-mcp-server"],
-        env: {
-          OPENAPI_MCP_HEADERS: JSON.stringify({
-            Authorization: `Bearer ${config.NOTION_API_KEY}`,
-            "Notion-Version": "2022-06-28",
-          }),
-        },
-      },
-    },
+    mcpServers: {},
   };
+
+  // Metabase — requires URL + credentials
+  const hasMetabase =
+    config.METABASE_URL &&
+    config.METABASE_USERNAME &&
+    config.METABASE_PASSWORD;
+
+  if (hasMetabase) {
+    mcpConfig.mcpServers.metabase = {
+      command: "node",
+      args: [join(process.cwd(), "dist", "mcp", "metabase.js")],
+      env: {
+        METABASE_URL: config.METABASE_URL!,
+        METABASE_USERNAME: config.METABASE_USERNAME!,
+        METABASE_PASSWORD: config.METABASE_PASSWORD!,
+      },
+    };
+    log.info("Metabase MCP server registered");
+  } else {
+    log.warn("Metabase credentials not set — Metabase disabled");
+  }
+
+  // GitHub — requires token
+  if (config.GITHUB_TOKEN) {
+    mcpConfig.mcpServers.github = {
+      command: "npx",
+      args: ["-y", "@modelcontextprotocol/server-github"],
+      env: {
+        GITHUB_PERSONAL_ACCESS_TOKEN: config.GITHUB_TOKEN,
+      },
+    };
+    log.info("GitHub MCP server registered");
+  } else {
+    log.warn("GITHUB_TOKEN not set — GitHub disabled");
+  }
+
+  // Notion — requires API key
+  if (config.NOTION_API_KEY) {
+    mcpConfig.mcpServers.notion = {
+      command: "npx",
+      args: ["-y", "@notionhq/notion-mcp-server"],
+      env: {
+        OPENAPI_MCP_HEADERS: JSON.stringify({
+          Authorization: `Bearer ${config.NOTION_API_KEY}`,
+          "Notion-Version": "2022-06-28",
+        }),
+      },
+    };
+    log.info("Notion MCP server registered");
+  } else {
+    log.warn("NOTION_API_KEY not set — Notion disabled");
+  }
 
   // Slack search — requires user token
   if (config.SLACK_USER_TOKEN) {
@@ -117,6 +142,23 @@ export function getMcpConfigPath(): string {
  */
 export function getUnavailableSources(): string[] {
   const unavailable: string[] = [];
+
+  const hasMetabase =
+    config.METABASE_URL &&
+    config.METABASE_USERNAME &&
+    config.METABASE_PASSWORD;
+
+  if (!hasMetabase) {
+    unavailable.push("Metabase");
+  }
+
+  if (!config.GITHUB_TOKEN) {
+    unavailable.push("GitHub");
+  }
+
+  if (!config.NOTION_API_KEY) {
+    unavailable.push("Notion");
+  }
 
   if (!config.SLACK_USER_TOKEN) {
     unavailable.push("Slack search");

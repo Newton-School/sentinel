@@ -106,6 +106,67 @@ describe("getUnavailableSources", () => {
 
     expect(unavailable).toEqual(["Slack search"]);
   });
+
+  it("reports Metabase as unavailable when METABASE_URL is not set", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: undefined,
+        GITHUB_TOKEN: "ghp_test",
+        NOTION_API_KEY: "ntn_test",
+        SLACK_USER_TOKEN: "xoxp-test",
+        GOOGLE_CLIENT_ID: "client-id",
+        GOOGLE_CLIENT_SECRET: "client-secret",
+        GOOGLE_REFRESH_TOKEN: "refresh-token",
+      },
+    }));
+
+    const { getUnavailableSources } = await import("../src/claude/mcpConfig.js");
+    const unavailable = getUnavailableSources();
+
+    expect(unavailable).toContain("Metabase");
+  });
+
+  it("reports GitHub as unavailable when GITHUB_TOKEN is not set", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: "https://metabase.test",
+        METABASE_USERNAME: "admin",
+        METABASE_PASSWORD: "pass",
+        GITHUB_TOKEN: undefined,
+        NOTION_API_KEY: "ntn_test",
+        SLACK_USER_TOKEN: "xoxp-test",
+        GOOGLE_CLIENT_ID: "client-id",
+        GOOGLE_CLIENT_SECRET: "client-secret",
+        GOOGLE_REFRESH_TOKEN: "refresh-token",
+      },
+    }));
+
+    const { getUnavailableSources } = await import("../src/claude/mcpConfig.js");
+    const unavailable = getUnavailableSources();
+
+    expect(unavailable).toContain("GitHub");
+  });
+
+  it("reports Notion as unavailable when NOTION_API_KEY is not set", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: "https://metabase.test",
+        METABASE_USERNAME: "admin",
+        METABASE_PASSWORD: "pass",
+        GITHUB_TOKEN: "ghp_test",
+        NOTION_API_KEY: undefined,
+        SLACK_USER_TOKEN: "xoxp-test",
+        GOOGLE_CLIENT_ID: "client-id",
+        GOOGLE_CLIENT_SECRET: "client-secret",
+        GOOGLE_REFRESH_TOKEN: "refresh-token",
+      },
+    }));
+
+    const { getUnavailableSources } = await import("../src/claude/mcpConfig.js");
+    const unavailable = getUnavailableSources();
+
+    expect(unavailable).toContain("Notion");
+  });
 });
 
 describe("getMcpConfigPath", () => {
@@ -113,7 +174,7 @@ describe("getMcpConfigPath", () => {
     vi.resetModules();
   });
 
-  it("always includes metabase, github, and notion servers", async () => {
+  it("includes metabase, github, and notion when their credentials are set", async () => {
     vi.doMock("../src/config.js", () => ({
       config: {
         METABASE_URL: "https://metabase.test",
@@ -257,5 +318,98 @@ describe("getMcpConfigPath", () => {
     expect(config.mcpServers).not.toHaveProperty("gmail");
     expect(config.mcpServers).not.toHaveProperty("google-calendar");
     expect(config.mcpServers).not.toHaveProperty("meeting-transcripts");
+  });
+
+  it("excludes metabase when METABASE_URL is not set", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: undefined,
+        METABASE_USERNAME: undefined,
+        METABASE_PASSWORD: undefined,
+        GITHUB_TOKEN: undefined,
+        NOTION_API_KEY: undefined,
+        SLACK_USER_TOKEN: undefined,
+        GOOGLE_CLIENT_ID: "client-id",
+        GOOGLE_CLIENT_SECRET: "client-secret",
+        GOOGLE_REFRESH_TOKEN: "refresh-token",
+      },
+    }));
+
+    const { getMcpConfigPath } = await import("../src/claude/mcpConfig.js");
+    const configPath = getMcpConfigPath();
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+
+    expect(config.mcpServers).not.toHaveProperty("metabase");
+  });
+
+  it("excludes github when GITHUB_TOKEN is not set", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: undefined,
+        METABASE_USERNAME: undefined,
+        METABASE_PASSWORD: undefined,
+        GITHUB_TOKEN: undefined,
+        NOTION_API_KEY: undefined,
+        SLACK_USER_TOKEN: undefined,
+        GOOGLE_CLIENT_ID: undefined,
+        GOOGLE_CLIENT_SECRET: undefined,
+        GOOGLE_REFRESH_TOKEN: undefined,
+      },
+    }));
+
+    const { getMcpConfigPath } = await import("../src/claude/mcpConfig.js");
+    const configPath = getMcpConfigPath();
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+
+    expect(config.mcpServers).not.toHaveProperty("github");
+  });
+
+  it("excludes notion when NOTION_API_KEY is not set", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: undefined,
+        METABASE_USERNAME: undefined,
+        METABASE_PASSWORD: undefined,
+        GITHUB_TOKEN: undefined,
+        NOTION_API_KEY: undefined,
+        SLACK_USER_TOKEN: undefined,
+        GOOGLE_CLIENT_ID: undefined,
+        GOOGLE_CLIENT_SECRET: undefined,
+        GOOGLE_REFRESH_TOKEN: undefined,
+      },
+    }));
+
+    const { getMcpConfigPath } = await import("../src/claude/mcpConfig.js");
+    const configPath = getMcpConfigPath();
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+
+    expect(config.mcpServers).not.toHaveProperty("notion");
+  });
+
+  it("registers only Google servers when only Google credentials are set", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: undefined,
+        METABASE_USERNAME: undefined,
+        METABASE_PASSWORD: undefined,
+        GITHUB_TOKEN: undefined,
+        NOTION_API_KEY: undefined,
+        SLACK_USER_TOKEN: undefined,
+        GOOGLE_CLIENT_ID: "client-id",
+        GOOGLE_CLIENT_SECRET: "client-secret",
+        GOOGLE_REFRESH_TOKEN: "refresh-token",
+      },
+    }));
+
+    const { getMcpConfigPath } = await import("../src/claude/mcpConfig.js");
+    const configPath = getMcpConfigPath();
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+
+    expect(config.mcpServers).toHaveProperty("gmail");
+    expect(config.mcpServers).toHaveProperty("google-calendar");
+    expect(config.mcpServers).toHaveProperty("meeting-transcripts");
+    expect(config.mcpServers).not.toHaveProperty("metabase");
+    expect(config.mcpServers).not.toHaveProperty("github");
+    expect(config.mcpServers).not.toHaveProperty("notion");
   });
 });
