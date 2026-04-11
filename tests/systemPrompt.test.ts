@@ -76,6 +76,13 @@ describe("buildSystemPrompt", () => {
       const prompt = buildSystemPrompt(basePersona, []);
       expect(prompt).toContain("Surface conflicts");
     });
+
+    it("includes Slack mrkdwn formatting rules", () => {
+      const prompt = buildSystemPrompt(basePersona, []);
+      expect(prompt).toContain("Slack mrkdwn");
+      expect(prompt).toContain("single asterisks, NOT double");
+      expect(prompt).toContain("No horizontal rules");
+    });
   });
 
   describe("source transparency", () => {

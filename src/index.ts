@@ -8,6 +8,7 @@ import { getOrCreatePersona, getTraits } from "./persona/store.js";
 import { buildSystemPrompt } from "./claude/systemPrompt.js";
 import { runClaude } from "./claude/runner.js";
 import { trackQuery } from "./persona/tracker.js";
+import { markdownToSlackMrkdwn } from "./slack/formatters.js";
 import type { SlackEventEnvelope } from "./types/contracts.js";
 
 const log = createLogger("main");
@@ -86,11 +87,12 @@ async function handleEvent(
 
     const response = await runClaude(systemPrompt, envelope.text, threadContext);
 
-    // Post response
+    // Post response (convert Markdown to Slack mrkdwn)
+    const slackText = markdownToSlackMrkdwn(response.text);
     await client.chat.postMessage({
       channel: envelope.channelId,
       thread_ts: envelope.threadTs,
-      text: response.text,
+      text: slackText,
       unfurl_links: false,
     });
 
