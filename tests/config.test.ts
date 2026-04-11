@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
 
-// Test the schema logic directly (without triggering process.exit from config.ts)
+// Replicate the schema from config.ts to test it directly (avoids process.exit)
 const envSchema = z.object({
   SLACK_BOT_TOKEN: z.string().startsWith("xoxb-"),
   SLACK_APP_TOKEN: z.string().startsWith("xapp-"),
@@ -13,6 +13,10 @@ const envSchema = z.object({
   METABASE_PASSWORD: z.string().min(1),
   GITHUB_TOKEN: z.string().min(1),
   NOTION_API_KEY: z.string().min(1),
+  SLACK_USER_TOKEN: z.string().startsWith("xoxp-").optional(),
+  GOOGLE_CLIENT_ID: z.string().min(1).optional(),
+  GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
+  GOOGLE_REFRESH_TOKEN: z.string().min(1).optional(),
   SQLITE_DB_PATH: z.string().default("./sentinel.db"),
   ALLOWED_USER_IDS: z
     .string()
@@ -104,5 +108,65 @@ describe("config schema", () => {
       LOG_LEVEL: "verbose",
     });
     expect(result.success).toBe(false);
+  });
+
+  describe("optional env vars", () => {
+    it("parses successfully without optional vars", () => {
+      const result = envSchema.safeParse(validEnv);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.SLACK_USER_TOKEN).toBeUndefined();
+        expect(result.data.GOOGLE_CLIENT_ID).toBeUndefined();
+        expect(result.data.GOOGLE_CLIENT_SECRET).toBeUndefined();
+        expect(result.data.GOOGLE_REFRESH_TOKEN).toBeUndefined();
+      }
+    });
+
+    it("accepts valid SLACK_USER_TOKEN with xoxp- prefix", () => {
+      const result = envSchema.safeParse({
+        ...validEnv,
+        SLACK_USER_TOKEN: "xoxp-test-user-token",
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.SLACK_USER_TOKEN).toBe("xoxp-test-user-token");
+      }
+    });
+
+    it("rejects SLACK_USER_TOKEN with wrong prefix", () => {
+      const result = envSchema.safeParse({
+        ...validEnv,
+        SLACK_USER_TOKEN: "xoxb-wrong-prefix",
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it("accepts Google credentials when all three are provided", () => {
+      const result = envSchema.safeParse({
+        ...validEnv,
+        GOOGLE_CLIENT_ID: "test-client-id",
+        GOOGLE_CLIENT_SECRET: "test-client-secret",
+        GOOGLE_REFRESH_TOKEN: "test-refresh-token",
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.GOOGLE_CLIENT_ID).toBe("test-client-id");
+        expect(result.data.GOOGLE_CLIENT_SECRET).toBe("test-client-secret");
+        expect(result.data.GOOGLE_REFRESH_TOKEN).toBe("test-refresh-token");
+      }
+    });
+
+    it("accepts partial Google credentials (validation is per-field)", () => {
+      const result = envSchema.safeParse({
+        ...validEnv,
+        GOOGLE_CLIENT_ID: "test-client-id",
+        // GOOGLE_CLIENT_SECRET and GOOGLE_REFRESH_TOKEN omitted
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.GOOGLE_CLIENT_ID).toBe("test-client-id");
+        expect(result.data.GOOGLE_CLIENT_SECRET).toBeUndefined();
+      }
+    });
   });
 });

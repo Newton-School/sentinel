@@ -1,0 +1,261 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { readFileSync } from "node:fs";
+
+// Mock pino
+vi.mock("pino", () => {
+  const noop = () => {};
+  const logger = { info: noop, warn: noop, error: noop, debug: noop, fatal: noop, trace: noop, child: () => logger };
+  const pino = () => logger;
+  pino.stdTimeFunctions = { isoTime: () => "" };
+  return { default: pino };
+});
+
+describe("getUnavailableSources", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("reports all optional sources as unavailable when no optional env vars set", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: "https://metabase.test",
+        METABASE_USERNAME: "admin",
+        METABASE_PASSWORD: "pass",
+        GITHUB_TOKEN: "ghp_test",
+        NOTION_API_KEY: "ntn_test",
+        SLACK_USER_TOKEN: undefined,
+        GOOGLE_CLIENT_ID: undefined,
+        GOOGLE_CLIENT_SECRET: undefined,
+        GOOGLE_REFRESH_TOKEN: undefined,
+      },
+    }));
+
+    const { getUnavailableSources } = await import("../src/claude/mcpConfig.js");
+    const unavailable = getUnavailableSources();
+
+    expect(unavailable).toContain("Slack search");
+    expect(unavailable).toContain("Gmail");
+    expect(unavailable).toContain("Google Calendar");
+    expect(unavailable).toContain("Meeting Transcripts");
+    expect(unavailable).toHaveLength(4);
+  });
+
+  it("reports no unavailable sources when all optional vars are set", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: "https://metabase.test",
+        METABASE_USERNAME: "admin",
+        METABASE_PASSWORD: "pass",
+        GITHUB_TOKEN: "ghp_test",
+        NOTION_API_KEY: "ntn_test",
+        SLACK_USER_TOKEN: "xoxp-test",
+        GOOGLE_CLIENT_ID: "client-id",
+        GOOGLE_CLIENT_SECRET: "client-secret",
+        GOOGLE_REFRESH_TOKEN: "refresh-token",
+      },
+    }));
+
+    const { getUnavailableSources } = await import("../src/claude/mcpConfig.js");
+    const unavailable = getUnavailableSources();
+
+    expect(unavailable).toHaveLength(0);
+  });
+
+  it("reports only Google sources when Slack token is set but Google is not", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: "https://metabase.test",
+        METABASE_USERNAME: "admin",
+        METABASE_PASSWORD: "pass",
+        GITHUB_TOKEN: "ghp_test",
+        NOTION_API_KEY: "ntn_test",
+        SLACK_USER_TOKEN: "xoxp-test",
+        GOOGLE_CLIENT_ID: undefined,
+        GOOGLE_CLIENT_SECRET: undefined,
+        GOOGLE_REFRESH_TOKEN: undefined,
+      },
+    }));
+
+    const { getUnavailableSources } = await import("../src/claude/mcpConfig.js");
+    const unavailable = getUnavailableSources();
+
+    expect(unavailable).not.toContain("Slack search");
+    expect(unavailable).toContain("Gmail");
+    expect(unavailable).toContain("Google Calendar");
+    expect(unavailable).toContain("Meeting Transcripts");
+    expect(unavailable).toHaveLength(3);
+  });
+
+  it("reports only Slack when Google is set but Slack token is not", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: "https://metabase.test",
+        METABASE_USERNAME: "admin",
+        METABASE_PASSWORD: "pass",
+        GITHUB_TOKEN: "ghp_test",
+        NOTION_API_KEY: "ntn_test",
+        SLACK_USER_TOKEN: undefined,
+        GOOGLE_CLIENT_ID: "client-id",
+        GOOGLE_CLIENT_SECRET: "client-secret",
+        GOOGLE_REFRESH_TOKEN: "refresh-token",
+      },
+    }));
+
+    const { getUnavailableSources } = await import("../src/claude/mcpConfig.js");
+    const unavailable = getUnavailableSources();
+
+    expect(unavailable).toEqual(["Slack search"]);
+  });
+});
+
+describe("getMcpConfigPath", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("always includes metabase, github, and notion servers", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: "https://metabase.test",
+        METABASE_USERNAME: "admin",
+        METABASE_PASSWORD: "pass",
+        GITHUB_TOKEN: "ghp_test",
+        NOTION_API_KEY: "ntn_test",
+        SLACK_USER_TOKEN: undefined,
+        GOOGLE_CLIENT_ID: undefined,
+        GOOGLE_CLIENT_SECRET: undefined,
+        GOOGLE_REFRESH_TOKEN: undefined,
+      },
+    }));
+
+    const { getMcpConfigPath } = await import("../src/claude/mcpConfig.js");
+    const configPath = getMcpConfigPath();
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+
+    expect(config.mcpServers).toHaveProperty("metabase");
+    expect(config.mcpServers).toHaveProperty("github");
+    expect(config.mcpServers).toHaveProperty("notion");
+  });
+
+  it("includes slack-search server when SLACK_USER_TOKEN is set", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: "https://metabase.test",
+        METABASE_USERNAME: "admin",
+        METABASE_PASSWORD: "pass",
+        GITHUB_TOKEN: "ghp_test",
+        NOTION_API_KEY: "ntn_test",
+        SLACK_USER_TOKEN: "xoxp-test-token",
+        GOOGLE_CLIENT_ID: undefined,
+        GOOGLE_CLIENT_SECRET: undefined,
+        GOOGLE_REFRESH_TOKEN: undefined,
+      },
+    }));
+
+    const { getMcpConfigPath } = await import("../src/claude/mcpConfig.js");
+    const configPath = getMcpConfigPath();
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+
+    expect(config.mcpServers).toHaveProperty("slack-search");
+    expect(config.mcpServers["slack-search"].env.SLACK_USER_TOKEN).toBe("xoxp-test-token");
+  });
+
+  it("excludes slack-search server when SLACK_USER_TOKEN is not set", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: "https://metabase.test",
+        METABASE_USERNAME: "admin",
+        METABASE_PASSWORD: "pass",
+        GITHUB_TOKEN: "ghp_test",
+        NOTION_API_KEY: "ntn_test",
+        SLACK_USER_TOKEN: undefined,
+        GOOGLE_CLIENT_ID: undefined,
+        GOOGLE_CLIENT_SECRET: undefined,
+        GOOGLE_REFRESH_TOKEN: undefined,
+      },
+    }));
+
+    const { getMcpConfigPath } = await import("../src/claude/mcpConfig.js");
+    const configPath = getMcpConfigPath();
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+
+    expect(config.mcpServers).not.toHaveProperty("slack-search");
+  });
+
+  it("includes Google servers when all Google credentials are set", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: "https://metabase.test",
+        METABASE_USERNAME: "admin",
+        METABASE_PASSWORD: "pass",
+        GITHUB_TOKEN: "ghp_test",
+        NOTION_API_KEY: "ntn_test",
+        SLACK_USER_TOKEN: undefined,
+        GOOGLE_CLIENT_ID: "client-id",
+        GOOGLE_CLIENT_SECRET: "client-secret",
+        GOOGLE_REFRESH_TOKEN: "refresh-token",
+      },
+    }));
+
+    const { getMcpConfigPath } = await import("../src/claude/mcpConfig.js");
+    const configPath = getMcpConfigPath();
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+
+    expect(config.mcpServers).toHaveProperty("gmail");
+    expect(config.mcpServers).toHaveProperty("google-calendar");
+    expect(config.mcpServers).toHaveProperty("meeting-transcripts");
+
+    // Verify Google env vars are passed
+    expect(config.mcpServers.gmail.env.GOOGLE_CLIENT_ID).toBe("client-id");
+    expect(config.mcpServers["google-calendar"].env.GOOGLE_CLIENT_SECRET).toBe("client-secret");
+    expect(config.mcpServers["meeting-transcripts"].env.GOOGLE_REFRESH_TOKEN).toBe("refresh-token");
+  });
+
+  it("excludes Google servers when Google credentials are missing", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: "https://metabase.test",
+        METABASE_USERNAME: "admin",
+        METABASE_PASSWORD: "pass",
+        GITHUB_TOKEN: "ghp_test",
+        NOTION_API_KEY: "ntn_test",
+        SLACK_USER_TOKEN: undefined,
+        GOOGLE_CLIENT_ID: undefined,
+        GOOGLE_CLIENT_SECRET: undefined,
+        GOOGLE_REFRESH_TOKEN: undefined,
+      },
+    }));
+
+    const { getMcpConfigPath } = await import("../src/claude/mcpConfig.js");
+    const configPath = getMcpConfigPath();
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+
+    expect(config.mcpServers).not.toHaveProperty("gmail");
+    expect(config.mcpServers).not.toHaveProperty("google-calendar");
+    expect(config.mcpServers).not.toHaveProperty("meeting-transcripts");
+  });
+
+  it("excludes Google servers when only partial credentials are set", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: "https://metabase.test",
+        METABASE_USERNAME: "admin",
+        METABASE_PASSWORD: "pass",
+        GITHUB_TOKEN: "ghp_test",
+        NOTION_API_KEY: "ntn_test",
+        SLACK_USER_TOKEN: undefined,
+        GOOGLE_CLIENT_ID: "client-id",
+        GOOGLE_CLIENT_SECRET: undefined, // Missing
+        GOOGLE_REFRESH_TOKEN: "refresh-token",
+      },
+    }));
+
+    const { getMcpConfigPath } = await import("../src/claude/mcpConfig.js");
+    const configPath = getMcpConfigPath();
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+
+    expect(config.mcpServers).not.toHaveProperty("gmail");
+    expect(config.mcpServers).not.toHaveProperty("google-calendar");
+    expect(config.mcpServers).not.toHaveProperty("meeting-transcripts");
+  });
+});

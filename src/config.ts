@@ -17,6 +17,14 @@ const envSchema = z.object({
 
   NOTION_API_KEY: z.string().min(1),
 
+  // Slack search (user token for search:read scope)
+  SLACK_USER_TOKEN: z.string().startsWith("xoxp-").optional(),
+
+  // Google Workspace (for Gmail, Calendar, Drive/Transcripts)
+  GOOGLE_CLIENT_ID: z.string().min(1).optional(),
+  GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
+  GOOGLE_REFRESH_TOKEN: z.string().min(1).optional(),
+
   SQLITE_DB_PATH: z.string().default("./sentinel.db"),
 
   ALLOWED_USER_IDS: z

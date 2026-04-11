@@ -18,8 +18,10 @@ export interface PersonaTrait {
 }
 
 export type QueryCategory =
-  | "revenue"
-  | "engineering"
-  | "product"
-  | "team"
+  | "placements"
+  | "admissions"
+  | "student_health"
+  | "product_execution"
+  | "finance"
+  | "nst_operations"
   | "general";

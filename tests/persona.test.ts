@@ -20,34 +20,39 @@ vi.mock("pino", () => {
 import { categorizeQuery } from "../src/persona/tracker.js";
 
 describe("categorizeQuery", () => {
-  it("categorizes revenue queries", () => {
-    expect(categorizeQuery("What were our revenue numbers last month?")).toBe(
-      "revenue"
-    );
-    expect(categorizeQuery("Show me MRR trends")).toBe("revenue");
-    expect(categorizeQuery("What's our current churn rate?")).toBe("revenue");
+  it("categorizes placements queries", () => {
+    expect(categorizeQuery("What's happening with placements?")).toBe("placements");
+    expect(categorizeQuery("Show me employer activity this week")).toBe("placements");
+    expect(categorizeQuery("Any candidate rejections recently?")).toBe("placements");
   });
 
-  it("categorizes engineering queries", () => {
-    expect(categorizeQuery("Show me open PRs on newton-web")).toBe(
-      "engineering"
-    );
-    expect(categorizeQuery("How many deploys this week?")).toBe("engineering");
-    expect(categorizeQuery("Any recent incidents or outages?")).toBe(
-      "engineering"
-    );
+  it("categorizes admissions queries", () => {
+    expect(categorizeQuery("What's the admissions funnel looking like?")).toBe("admissions");
+    expect(categorizeQuery("Show me enrollment numbers")).toBe("admissions");
+    expect(categorizeQuery("How are counselor conversions?")).toBe("admissions");
   });
 
-  it("categorizes product queries", () => {
-    expect(categorizeQuery("What's on the product roadmap?")).toBe("product");
-    expect(categorizeQuery("Show me user retention metrics")).toBe("product");
-    expect(categorizeQuery("What's our DAU this week?")).toBe("product");
+  it("categorizes student health queries", () => {
+    expect(categorizeQuery("Any student support escalations?")).toBe("student_health");
+    expect(categorizeQuery("What's the dropout risk and student sentiment?")).toBe("student_health");
+    expect(categorizeQuery("Show me student complaint trends")).toBe("student_health");
   });
 
-  it("categorizes team queries", () => {
-    expect(categorizeQuery("How's the hiring going?")).toBe("team");
-    expect(categorizeQuery("Show me team headcount")).toBe("team");
-    expect(categorizeQuery("What's the org structure?")).toBe("team");
+  it("categorizes product execution queries", () => {
+    expect(categorizeQuery("Show me open PRs on newton-web")).toBe("product_execution");
+    expect(categorizeQuery("How many deploys this week?")).toBe("product_execution");
+    expect(categorizeQuery("What's on the product roadmap?")).toBe("product_execution");
+  });
+
+  it("categorizes finance queries", () => {
+    expect(categorizeQuery("What were our revenue numbers last month?")).toBe("finance");
+    expect(categorizeQuery("Show me MRR trends")).toBe("finance");
+    expect(categorizeQuery("What's the current budget spend?")).toBe("finance");
+  });
+
+  it("categorizes NST operations queries", () => {
+    expect(categorizeQuery("What's happening with NST campus operations?")).toBe("nst_operations");
+    expect(categorizeQuery("How's the internship readiness?")).toBe("nst_operations");
   });
 
   it("defaults to general for ambiguous queries", () => {
@@ -59,8 +64,8 @@ describe("categorizeQuery", () => {
   it("picks the category with more keyword matches", () => {
     expect(
       categorizeQuery(
-        "What's our revenue, MRR, and churn rate compared to sales targets?"
+        "What's our revenue, MRR, and churn rate compared to sales targets and budget?"
       )
-    ).toBe("revenue");
+    ).toBe("finance");
   });
 });
