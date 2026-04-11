@@ -18,17 +18,17 @@ describe("markdownToSlackMrkdwn", () => {
     });
   });
 
-  describe("italic conversion", () => {
-    it("converts standalone *italic* to _italic_ (after bold is handled)", () => {
-      expect(markdownToSlackMrkdwn("this is *italic* text")).toBe(
-        "this is _italic_ text"
+  describe("italic / single asterisk handling", () => {
+    it("leaves *text* as-is (Slack renders it as bold, which is acceptable)", () => {
+      expect(markdownToSlackMrkdwn("this is *important* text")).toBe(
+        "this is *important* text"
       );
     });
 
     it("does not break bold conversion when both exist", () => {
-      const input = "**bold** and *italic* text";
+      const input = "**bold** and *emphasis* text";
       const result = markdownToSlackMrkdwn(input);
-      expect(result).toBe("*bold* and _italic_ text");
+      expect(result).toBe("*bold* and *emphasis* text");
     });
   });
 

@@ -101,8 +101,10 @@ function convertInline(text: string): string {
       // Convert __bold__ → placeholder
       t = t.replace(/__(.+?)__/g, `${BOLD_OPEN}$1${BOLD_CLOSE}`);
 
-      // Convert remaining standalone *italic* → _italic_
-      t = t.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "_$1_");
+      // Note: we intentionally do NOT convert *text* → _text_
+      // In Slack mrkdwn, *text* is bold (which is the desired output).
+      // Claude may use *text* for either Markdown italic or Slack bold —
+      // either way, Slack renders it as bold, which is acceptable.
 
       // Restore bold placeholders → *bold*
       t = t.replaceAll(BOLD_OPEN, "*");
