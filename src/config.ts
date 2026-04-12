@@ -28,6 +28,8 @@ const envSchema = z.object({
   GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
   GOOGLE_REFRESH_TOKEN: z.string().min(1).optional(),
 
+  HEALTH_CHECK_PORT: z.coerce.number().default(8080),
+
   SQLITE_DB_PATH: z.string().default("./sentinel.db"),
 
   ALLOWED_USER_IDS: z

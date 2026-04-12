@@ -9,6 +9,7 @@ import { buildSystemPrompt } from "./claude/systemPrompt.js";
 import { runClaude } from "./claude/runner.js";
 import { trackQuery } from "./persona/tracker.js";
 import { markdownToSlackMrkdwn } from "./slack/formatters.js";
+import { startHealthServer, type HealthStatus } from "./health/server.js";
 import type { SlackEventEnvelope } from "./types/contracts.js";
 
 const log = createLogger("main");
@@ -163,6 +164,9 @@ async function handleEvent(
   }
 }
 
+let slackConnected = false;
+const startTime = Date.now();
+
 async function main(): Promise<void> {
   log.info("Starting Sentinel");
 
@@ -174,9 +178,33 @@ async function main(): Promise<void> {
   getMcpConfigPath();
   log.info("MCP config generated");
 
+  // Start health check server
+  const unavailableSources = getUnavailableSources();
+  const allSources = ["Metabase", "GitHub", "Notion", "Slack search", "Gmail", "Google Calendar", "Meeting Transcripts"];
+  const activeSources = allSources.filter((s) => !unavailableSources.includes(s));
+  startHealthServer(config.HEALTH_CHECK_PORT, (): HealthStatus => {
+    let dbStatus: "connected" | "error" = "connected";
+    try {
+      getDb().prepare("SELECT 1").get();
+    } catch {
+      dbStatus = "error";
+    }
+
+    const isOk = slackConnected && dbStatus === "connected";
+    return {
+      status: isOk ? "ok" : "degraded",
+      uptime: Math.floor((Date.now() - startTime) / 1000),
+      slack: slackConnected ? "connected" : "disconnected",
+      database: dbStatus,
+      mcpServers: activeSources,
+      unavailableSources,
+    };
+  });
+
   // Start Slack app
   const app = createSlackApp(handleEvent);
   await app.start();
+  slackConnected = true;
   log.info("Slack Socket Mode connected — Sentinel is ready");
 }
 
