@@ -1,0 +1,45 @@
+version: 0.2
+
+env:
+  variables:
+    ECR_REPO: sentinel
+    NODE_VERSION: "20"
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - npm ci
+
+  pre_build:
+    commands:
+      - echo "Running type check..."
+      - npx tsc --noEmit
+      - echo "Running tests..."
+      - npm test
+      - echo "Logging in to ECR..."
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+
+  build:
+    commands:
+      - echo "Building Docker image..."
+      - IMAGE_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$ECR_REPO
+      - docker build -t $IMAGE_URI:$CODEBUILD_RESOLVED_SOURCE_VERSION -t $IMAGE_URI:latest .
+
+  post_build:
+    commands:
+      - echo "Pushing to ECR..."
+      - docker push $IMAGE_URI:$CODEBUILD_RESOLVED_SOURCE_VERSION
+      - docker push $IMAGE_URI:latest
+      - echo "Writing image definition for K8s deployment..."
+      - printf '{"ImageURI":"%s"}' $IMAGE_URI:$CODEBUILD_RESOLVED_SOURCE_VERSION > imageDetail.json
+
+artifacts:
+  files:
+    - imageDetail.json
+    - k8s/**/*
+
+cache:
+  paths:
+    - node_modules/**/*
