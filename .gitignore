@@ -6,3 +6,4 @@ dist/
 *.db-shm
 *.log
 .DS_Store
+data/

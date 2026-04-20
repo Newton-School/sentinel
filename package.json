@@ -9,7 +9,9 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "meet-bot:setup": "tsx src/meet-bot/setup.ts",
+    "meet-bot:join": "tsx src/meet-bot/joiner.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
@@ -18,6 +20,7 @@
     "dotenv": "^16.5.0",
     "googleapis": "^171.4.0",
     "pino": "^9.6.0",
+    "playwright": "^1.59.1",
     "zod": "^3.24.4"
   },
   "devDependencies": {
