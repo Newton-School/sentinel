@@ -133,6 +133,12 @@ async function joinMeeting(opts: JoinOptions): Promise<void> {
 
     console.log("[meet-bot] Joined the meeting");
 
+    // Give the Meet UI a moment to settle
+    await page.waitForTimeout(5000);
+
+    // Auto-start transcription
+    await startTranscription(page);
+
     // Stay in the call until end/timeout/kicked
     await waitForMeetingEnd(page, opts.maxDurationSec);
 
@@ -209,6 +215,95 @@ async function clickJoinButton(page: Page): Promise<boolean> {
     await page.waitForTimeout(2000);
   }
   return false;
+}
+
+async function startTranscription(page: Page): Promise<void> {
+  console.log("[meet-bot] Attempting to start transcription...");
+
+  try {
+    // Strategy 1: Captions / CC button (easiest — on-screen captions, which don't save a transcript
+    // but signal intent). We actually want "Turn on transcript" which records to Drive.
+
+    // Strategy 2: Activities panel → Transcripts → Start
+    // Open the Activities panel
+    const activitiesBtn = page
+      .locator('[aria-label*="Activities" i], button:has-text("Activities")')
+      .first();
+
+    if (await activitiesBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
+      await activitiesBtn.click();
+      console.log("[meet-bot] Opened Activities panel");
+      await page.waitForTimeout(1500);
+
+      // Click "Transcripts" tile/button in the activities panel
+      const transcriptsTile = page
+        .getByRole("button", { name: /^Transcripts/i })
+        .first();
+
+      if (await transcriptsTile.isVisible({ timeout: 3000 }).catch(() => false)) {
+        await transcriptsTile.click();
+        console.log("[meet-bot] Opened Transcripts section");
+        await page.waitForTimeout(1500);
+
+        // Click "Start transcription" button
+        const startBtn = page
+          .getByRole("button", { name: /Start transcription|Turn on transcript/i })
+          .first();
+
+        if (await startBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+          await startBtn.click();
+          console.log("[meet-bot] Clicked Start transcription");
+          await page.waitForTimeout(1500);
+
+          // Meet may show a confirmation dialog — click Start / Got it
+          const confirmBtn = page
+            .getByRole("button", { name: /^Start$|Got it|Accept|Continue/i })
+            .first();
+          if (await confirmBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+            await confirmBtn.click();
+            console.log("[meet-bot] Confirmed transcription start");
+          }
+
+          console.log("[meet-bot] Transcription started");
+          return;
+        }
+      }
+    }
+
+    // Strategy 3: Fallback — try the three-dot "More options" menu
+    const moreBtn = page
+      .locator('[aria-label*="More options" i]')
+      .first();
+
+    if (await moreBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await moreBtn.click();
+      console.log("[meet-bot] Opened More options menu");
+      await page.waitForTimeout(1000);
+
+      const transcriptItem = page
+        .getByRole("menuitem", { name: /transcript/i })
+        .first();
+
+      if (await transcriptItem.isVisible({ timeout: 3000 }).catch(() => false)) {
+        await transcriptItem.click();
+        console.log("[meet-bot] Clicked transcript menu item");
+        await page.waitForTimeout(1500);
+
+        const startBtn = page
+          .getByRole("button", { name: /Start transcription|Start|Turn on/i })
+          .first();
+        if (await startBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+          await startBtn.click();
+          console.log("[meet-bot] Transcription started (via More options)");
+          return;
+        }
+      }
+    }
+
+    console.warn("[meet-bot] Could not find transcription controls — you may need to start it manually");
+  } catch (err) {
+    console.warn("[meet-bot] Error starting transcription:", err);
+  }
 }
 
 async function waitForMeetingEnd(page: Page, maxDurationSec: number): Promise<void> {

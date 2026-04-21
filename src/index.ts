@@ -10,6 +10,7 @@ import { runClaude } from "./claude/runner.js";
 import { trackQuery } from "./persona/tracker.js";
 import { markdownToSlackMrkdwn } from "./slack/formatters.js";
 import { startHealthServer, type HealthStatus } from "./health/server.js";
+import { startMeetWatcher } from "./meet-bot/watcher.js";
 import type { SlackEventEnvelope } from "./types/contracts.js";
 
 const log = createLogger("main");
@@ -200,6 +201,9 @@ async function main(): Promise<void> {
       unavailableSources,
     };
   });
+
+  // Start Meet watcher (auto-joins upcoming meetings via Playwright bot)
+  startMeetWatcher();
 
   // Start Slack app
   const app = createSlackApp(handleEvent);
