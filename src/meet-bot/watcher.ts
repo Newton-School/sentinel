@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { join } from "node:path";
+import { openSync, mkdirSync } from "node:fs";
 import { google } from "googleapis";
 import { config } from "../config.js";
 import { createLogger } from "../logging/logger.js";
@@ -16,6 +17,7 @@ const JOINED_TTL_MS = 4 * 60 * 60 * 1000; // purge joined-event memory after 4 h
 
 const JOINER_SCRIPT = join(process.cwd(), "dist", "meet-bot", "joiner.js");
 const JOINER_SCRIPT_DEV = join(process.cwd(), "src", "meet-bot", "joiner.ts");
+const JOINER_LOG_DIR = join(process.cwd(), "data", "meet-bot-logs");
 
 // Track joined event IDs with a timestamp for TTL purging
 const joinedAt = new Map<string, number>();
@@ -137,20 +139,28 @@ function spawnJoiner(meetUrl: string, durationSec: number): void {
         ...stayModeArgs,
       ];
 
+  // Pipe joiner's stdout/stderr to a per-spawn log file so failures are debuggable
+  mkdirSync(JOINER_LOG_DIR, { recursive: true });
+  const logPath = join(
+    JOINER_LOG_DIR,
+    `joiner-${new Date().toISOString().replace(/[:.]/g, "-")}.log`
+  );
+  const logFd = openSync(logPath, "a");
+
   const child = spawn(command, args, {
     detached: true,
-    stdio: "ignore",
+    stdio: ["ignore", logFd, logFd],
     env: { ...process.env },
   });
 
   child.on("error", (err) => {
-    log.error({ err, meetUrl }, "Failed to spawn joiner");
+    log.error({ err, meetUrl, logPath }, "Failed to spawn joiner");
   });
 
   // Detach so bot continues even if Sentinel restarts
   child.unref();
 
-  log.info({ meetUrl, pid: child.pid }, "Joiner spawned");
+  log.info({ meetUrl, pid: child.pid, logPath }, "Joiner spawned");
 }
 
 function purgeOldJoinedIds(): void {
