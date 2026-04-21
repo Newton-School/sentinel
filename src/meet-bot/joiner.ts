@@ -18,6 +18,7 @@ import { chromium, type BrowserContext, type Page } from "playwright";
 import { join } from "node:path";
 import { existsSync, readdirSync, unlinkSync, statSync } from "node:fs";
 import { isValidMeetUrl, extractMeetingCode } from "./meetUrl.js";
+import { decideAction, parseStayMode, type StayMode } from "./modeDispatch.js";
 
 const PROFILE_DIR = join(process.cwd(), "data", "sentinel-chrome-profile");
 const DEFAULT_DURATION_SEC = 2 * 60 * 60; // 2 hours max
@@ -26,12 +27,15 @@ interface JoinOptions {
   meetUrl: string;
   maxDurationSec: number;
   headed: boolean;
+  stayMode: StayMode;
 }
 
 function parseArgs(argv: string[]): JoinOptions {
   const meetUrl = argv[0];
   if (!meetUrl) {
-    console.error("Usage: npx tsx src/meet-bot/joiner.ts <meet-url> [--duration <sec>] [--headed]");
+    console.error(
+      "Usage: npx tsx src/meet-bot/joiner.ts <meet-url> [--duration <sec>] [--headed] [--stay-mode <mode>]"
+    );
     process.exit(1);
   }
   if (!isValidMeetUrl(meetUrl)) {
@@ -47,7 +51,12 @@ function parseArgs(argv: string[]): JoinOptions {
 
   const headed = argv.includes("--headed");
 
-  return { meetUrl, maxDurationSec, headed };
+  const stayModeIdx = argv.indexOf("--stay-mode");
+  const stayMode = parseStayMode(
+    stayModeIdx !== -1 ? argv[stayModeIdx + 1] : undefined
+  );
+
+  return { meetUrl, maxDurationSec, headed, stayMode };
 }
 
 function cleanProfileLocks(dir: string): void {
@@ -87,6 +96,7 @@ async function joinMeeting(opts: JoinOptions): Promise<void> {
   console.log(`[meet-bot] Profile: ${PROFILE_DIR}`);
   console.log(`[meet-bot] Max duration: ${opts.maxDurationSec}s`);
   console.log(`[meet-bot] Headed: ${opts.headed}`);
+  console.log(`[meet-bot] Stay mode: ${opts.stayMode}`);
 
   // Clean stale lock files that can prevent Chrome from starting
   cleanProfileLocks(PROFILE_DIR);
@@ -136,13 +146,28 @@ async function joinMeeting(opts: JoinOptions): Promise<void> {
     // Give the Meet UI a moment to settle
     await page.waitForTimeout(5000);
 
-    // Auto-start transcription
-    await startTranscription(page);
+    // Register participation by waiting for the Leave button to appear
+    const registered = await waitForLeaveButton(page, 20_000);
+    if (!registered) {
+      console.warn("[meet-bot] Could not confirm participation (Leave button not seen)");
+    } else {
+      console.log("[meet-bot] Participation registered (Leave button visible)");
+    }
 
-    // Stay in the call until end/timeout/kicked
-    await waitForMeetingEnd(page, opts.maxDurationSec);
+    // Auto-start transcription and track whether it succeeded
+    const transcriptionOn = await startTranscription(page);
+    console.log(`[meet-bot] Transcription on: ${transcriptionOn}`);
 
-    console.log("[meet-bot] Meeting ended or timeout reached");
+    const action = decideAction(opts.stayMode, transcriptionOn);
+    console.log(`[meet-bot] Decided action: ${action}`);
+
+    if (action === "leave") {
+      await leaveGracefully(page);
+    } else {
+      await waitForMeetingEnd(page, opts.maxDurationSec);
+    }
+
+    console.log("[meet-bot] Done");
   } catch (err) {
     console.error("[meet-bot] Error:", err);
   } finally {
@@ -217,15 +242,22 @@ async function clickJoinButton(page: Page): Promise<boolean> {
   return false;
 }
 
-async function startTranscription(page: Page): Promise<void> {
+async function startTranscription(page: Page): Promise<boolean> {
   console.log("[meet-bot] Attempting to start transcription...");
 
   try {
-    // Strategy 1: Captions / CC button (easiest — on-screen captions, which don't save a transcript
-    // but signal intent). We actually want "Turn on transcript" which records to Drive.
+    // If already transcribing, short-circuit
+    const alreadyOn = await page
+      .locator('text=/Transcribing|Transcript is on|Transcription is on/i')
+      .first()
+      .isVisible({ timeout: 500 })
+      .catch(() => false);
+    if (alreadyOn) {
+      console.log("[meet-bot] Transcription is already on");
+      return true;
+    }
 
-    // Strategy 2: Activities panel → Transcripts → Start
-    // Open the Activities panel
+    // Strategy 1: Activities panel → Transcripts → Start
     const activitiesBtn = page
       .locator('[aria-label*="Activities" i], button:has-text("Activities")')
       .first();
@@ -235,7 +267,6 @@ async function startTranscription(page: Page): Promise<void> {
       console.log("[meet-bot] Opened Activities panel");
       await page.waitForTimeout(1500);
 
-      // Click "Transcripts" tile/button in the activities panel
       const transcriptsTile = page
         .getByRole("button", { name: /^Transcripts/i })
         .first();
@@ -245,7 +276,6 @@ async function startTranscription(page: Page): Promise<void> {
         console.log("[meet-bot] Opened Transcripts section");
         await page.waitForTimeout(1500);
 
-        // Click "Start transcription" button
         const startBtn = page
           .getByRole("button", { name: /Start transcription|Turn on transcript/i })
           .first();
@@ -255,7 +285,6 @@ async function startTranscription(page: Page): Promise<void> {
           console.log("[meet-bot] Clicked Start transcription");
           await page.waitForTimeout(1500);
 
-          // Meet may show a confirmation dialog — click Start / Got it
           const confirmBtn = page
             .getByRole("button", { name: /^Start$|Got it|Accept|Continue/i })
             .first();
@@ -265,15 +294,13 @@ async function startTranscription(page: Page): Promise<void> {
           }
 
           console.log("[meet-bot] Transcription started");
-          return;
+          return true;
         }
       }
     }
 
-    // Strategy 3: Fallback — try the three-dot "More options" menu
-    const moreBtn = page
-      .locator('[aria-label*="More options" i]')
-      .first();
+    // Strategy 2: Fallback — three-dot "More options" menu
+    const moreBtn = page.locator('[aria-label*="More options" i]').first();
 
     if (await moreBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
       await moreBtn.click();
@@ -295,14 +322,64 @@ async function startTranscription(page: Page): Promise<void> {
         if (await startBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
           await startBtn.click();
           console.log("[meet-bot] Transcription started (via More options)");
-          return;
+          return true;
         }
       }
     }
 
-    console.warn("[meet-bot] Could not find transcription controls — you may need to start it manually");
+    console.warn("[meet-bot] Could not find transcription controls");
+    return false;
   } catch (err) {
     console.warn("[meet-bot] Error starting transcription:", err);
+    return false;
+  }
+}
+
+async function waitForLeaveButton(page: Page, timeoutMs: number): Promise<boolean> {
+  return page
+    .locator('[aria-label*="Leave call" i], [aria-label*="Leave meeting" i]')
+    .first()
+    .isVisible({ timeout: timeoutMs })
+    .catch(() => false);
+}
+
+async function leaveGracefully(page: Page): Promise<void> {
+  console.log("[meet-bot] Leaving the meeting...");
+
+  try {
+    const leaveBtn = page
+      .locator('[aria-label*="Leave call" i], [aria-label*="Leave meeting" i]')
+      .first();
+
+    if (await leaveBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await leaveBtn.click();
+      console.log("[meet-bot] Clicked Leave call");
+
+      // If Meet shows a "Leave / End for everyone" dialog, pick "Just leave"
+      const justLeave = page
+        .getByRole("button", { name: /Just leave the call|Just leave|Leave call/i })
+        .first();
+      if (await justLeave.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await justLeave.click();
+        console.log("[meet-bot] Confirmed 'Just leave the call'");
+      }
+
+      // Wait briefly for the exit confirmation so Meet server registers the leave
+      const confirmed = await page
+        .locator('text=/You left the meeting/i')
+        .first()
+        .isVisible({ timeout: 5000 })
+        .catch(() => false);
+      if (confirmed) {
+        console.log("[meet-bot] Exit confirmed by Meet server");
+      } else {
+        console.log("[meet-bot] Exit confirmation not seen (may still be clean)");
+      }
+    } else {
+      console.warn("[meet-bot] Leave button not visible — forcing Chrome close");
+    }
+  } catch (err) {
+    console.warn("[meet-bot] Error during graceful leave:", err);
   }
 }
 

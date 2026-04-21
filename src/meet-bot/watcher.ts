@@ -119,9 +119,23 @@ function spawnJoiner(meetUrl: string, durationSec: number): void {
   // Prefer compiled dist in prod; fall back to tsx in dev
   const useTsx = process.env.NODE_ENV !== "production";
   const command = useTsx ? "npx" : "node";
+  const stayModeArgs = ["--stay-mode", "leave-after-join"];
   const args = useTsx
-    ? ["tsx", JOINER_SCRIPT_DEV, meetUrl, "--duration", String(durationSec)]
-    : [JOINER_SCRIPT, meetUrl, "--duration", String(durationSec)];
+    ? [
+        "tsx",
+        JOINER_SCRIPT_DEV,
+        meetUrl,
+        "--duration",
+        String(durationSec),
+        ...stayModeArgs,
+      ]
+    : [
+        JOINER_SCRIPT,
+        meetUrl,
+        "--duration",
+        String(durationSec),
+        ...stayModeArgs,
+      ];
 
   const child = spawn(command, args, {
     detached: true,
