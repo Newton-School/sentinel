@@ -11,7 +11,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "meet-bot:setup": "tsx src/meet-bot/setup.ts",
-    "meet-bot:join": "tsx src/meet-bot/joiner.ts"
+    "meet-bot:join": "tsx src/meet-bot/joiner.ts",
+    "monitor:memory": "tsx scripts/monitor-memory.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
