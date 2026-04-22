@@ -16,14 +16,15 @@ interface McpConfig {
   mcpServers: Record<string, McpServerConfig>;
 }
 
-let configPath: string | null = null;
-
 export function getMcpConfigPath(): string {
-  if (configPath) return configPath;
-
-  const dir = join(tmpdir(), "sentinel-mcp");
+  // No cache: always regenerate from current config so env var changes
+  // propagate to MCP servers on restart without manual file cleanup.
+  // Namespaced by SENTINEL_MCP_TMPDIR (set in tests) so test runs can't
+  // clobber a production mcp-config.json in the shared tmpdir.
+  const dir =
+    process.env.SENTINEL_MCP_TMPDIR ?? join(tmpdir(), "sentinel-mcp");
   mkdirSync(dir, { recursive: true });
-  configPath = join(dir, "mcp-config.json");
+  const configPath = join(dir, "mcp-config.json");
 
   const mcpConfig: McpConfig = {
     mcpServers: {},

@@ -1,5 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { readFileSync } from "node:fs";
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
+import { readFileSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // Mock pino
 vi.mock("pino", () => {
@@ -8,6 +10,17 @@ vi.mock("pino", () => {
   const pino = () => logger;
   pino.stdTimeFunctions = { isoTime: () => "" };
   return { default: pino };
+});
+
+// Isolate tests from the shared tmpdir so they can't pollute a real
+// Sentinel mcp-config.json used by a running process.
+const TEST_MCP_DIR = mkdtempSync(join(tmpdir(), "sentinel-mcp-test-"));
+beforeAll(() => {
+  process.env.SENTINEL_MCP_TMPDIR = TEST_MCP_DIR;
+});
+afterAll(() => {
+  delete process.env.SENTINEL_MCP_TMPDIR;
+  rmSync(TEST_MCP_DIR, { recursive: true, force: true });
 });
 
 describe("getUnavailableSources", () => {
