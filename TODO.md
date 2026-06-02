@@ -110,24 +110,24 @@ Priority key: **P0** correctness/security/deploy-blocker · **P1** important gap
   endpoint (with a cache). (New pure `src/mcp/participantName.ts` + `resolveParticipantName`
   with an in-process cache; raw id retained as `participant`/`speakerId`.)
 
-- [ ] **(docs, M) Reconcile README/PLAN/CLAUDE.md data-sources + directory tree with reality.**
+- [x] **(docs, M) Reconcile README/PLAN/CLAUDE.md data-sources + directory tree with reality.** ✅ PR #53
   They describe only Metabase+GitHub+Notion and list non-existent `src/mcp/github.ts` /
   `notion.ts`; actual `src/mcp/` is metabase/slack/gmail/calendar/meet/transcripts (GitHub
   & Notion are npx packages; Notion is `@notionhq/notion-mcp-server`, not
   `@modelcontextprotocol/server-notion`). (`ARCHITECTURE.md` already documents the truth.)
 
-- [ ] **(docs, M) Document the Meet bot, calendar watcher, health server, and audit log.**
+- [x] **(docs, M) Document the Meet bot, calendar watcher, health server, and audit log.** ✅ PR #53
   The largest feature (`src/meet-bot/`) and `meet-bot:setup`/`join` scripts are undocumented
   in README/PLAN/CLAUDE.md; `PLAN.md` still lists the health check as "deferred to v2" though
   `src/health/server.ts` ships `/health` + `/ready`. The `query_log` audit columns are also
   undocumented.
 
-- [ ] **(docs, S) Reconcile `.env.example` Google OAuth scope list with `scripts/google-auth.js`.**
+- [x] **(docs, S) Reconcile `.env.example` Google OAuth scope list with `scripts/google-auth.js`.** ✅ PR #53
   `.env.example` lists only gmail/calendar/drive readonly; `google-auth.js` requests
   `documents.readonly` + `meetings.space.readonly` too (the latter required by `meet.ts`).
   A token minted from the stale list lacks the Meet scope.
 
-- [ ] **(docs, S) Resolve PRD's Jira-as-v1 claim and "no scheduled jobs" framing.**
+- [x] **(docs, S) Resolve PRD's Jira-as-v1 claim and "no scheduled jobs" framing.** ✅ PR #53
   `SENTINEL_PRD_V1.md` lists Jira as a confirmed v1 source (no connector exists in `src/`)
   and frames Sentinel as having no proactive jobs, yet `watcher.ts` now polls calendar every
   60s and auto-launches the bot. Mark Jira not-in-v1 (or build it) and update the framing.
@@ -186,7 +186,7 @@ Priority key: **P0** correctness/security/deploy-blocker · **P1** important gap
   table + race-safe `joinStore` (`markJoined`/`getJoinedIds`/`purgeJoined`); watcher uses it,
   same 4h TTL.)
 
-- [ ] **(docs, S) Reconcile the stay-mode contradiction.**
+- [x] **(docs, S) Reconcile the stay-mode contradiction.** ✅ PR #53
   `modeDispatch.ts:7,29` + `joiner.ts` default to `leave-after-join` ("~60x memory"), but
   `watcher.ts:124` hardcodes `--stay-mode stay-until-end` (PR #17 revert) — production is the
   opposite of the documented default. `docs/MEET_TRANSCRIPT_EXPERIMENT.md` also still says
@@ -271,7 +271,7 @@ Priority key: **P0** correctness/security/deploy-blocker · **P1** important gap
   interests never down-weight. (Read-time exponential decay, 30-day half-life, no row mutation;
   `buildSystemPrompt` caps to the top 8 by decayed confidence. Reinforcement refreshes `updated_at`.)
 
-- [ ] **(feature, M) Add a `/metrics` endpoint + per-request token/cost/tool-use accounting.**
+- [x] **(feature, M) Add a `/metrics` endpoint + per-request token/cost/tool-use accounting.** ✅ PR #54
   `runner.ts` uses `--output-format text` and discards CLI telemetry; `ClaudeResponse` is
   only `{ text, durationMs }`. Capture structured output and expose ops metrics. (A
   standalone memory monitor is in flight — PR #18.)
