@@ -31,10 +31,11 @@ describe("health check server", () => {
   // both endpoints report a consistent value.
   function listen(
     fn: () => HealthStatus,
-    getUptime: () => number = () => fn().uptime
+    getUptime: () => number = () => fn().uptime,
+    getMetricsText?: () => string
   ): Promise<void> {
     statusFn = fn;
-    server = createHealthServer(statusFn, getUptime);
+    server = createHealthServer(statusFn, getUptime, getMetricsText);
     return new Promise<void>((resolve) => {
       server.listen(0, () => {
         const addr = server.address();
@@ -86,13 +87,33 @@ describe("health check server", () => {
     });
   }
 
+  // Raw-text fetch for endpoints (like /metrics) that return non-JSON bodies.
+  function fetchRaw(
+    path: string
+  ): Promise<{ status: number; contentType: string | undefined; text: string }> {
+    return new Promise((resolve, reject) => {
+      http.get(`http://localhost:${port}${path}`, (res) => {
+        let data = "";
+        res.on("data", (chunk) => (data += chunk));
+        res.on("end", () => {
+          resolve({
+            status: res.statusCode ?? 0,
+            contentType: res.headers["content-type"],
+            text: data,
+          });
+        });
+      }).on("error", reject);
+    });
+  }
+
   // Reattach the server with a fresh status function for a single test.
   async function reattach(
     fn: () => HealthStatus,
-    getUptime?: () => number
+    getUptime?: () => number,
+    getMetricsText?: () => string
   ): Promise<void> {
     await close();
-    await listen(fn, getUptime);
+    await listen(fn, getUptime, getMetricsText);
   }
 
   describe("/health (liveness)", () => {
@@ -232,6 +253,43 @@ describe("health check server", () => {
       const res = await fetch("/ready");
       expect(res.status).toBe(503);
       expect((res.body as Record<string, unknown>).status).toBe("degraded");
+    });
+  });
+
+  describe("/metrics (Prometheus)", () => {
+    const PROM_TEXT =
+      "# HELP sentinel_requests_total Total requests\n" +
+      "# TYPE sentinel_requests_total counter\n" +
+      "sentinel_requests_total 5\n";
+
+    it("returns 200 with the Prometheus text from the provider", async () => {
+      await reattach(healthyStatus, undefined, () => PROM_TEXT);
+
+      const res = await fetchRaw("/metrics");
+      expect(res.status).toBe(200);
+      expect(res.text).toBe(PROM_TEXT);
+    });
+
+    it("serves the Prometheus text content type", async () => {
+      await reattach(healthyStatus, undefined, () => PROM_TEXT);
+
+      const res = await fetchRaw("/metrics");
+      expect(res.contentType).toBe("text/plain; version=0.0.4");
+    });
+
+    it("does not consult the readiness status function for /metrics", async () => {
+      const spy = vi.fn(healthyStatus);
+      await reattach(spy, () => 1, () => PROM_TEXT);
+
+      const res = await fetchRaw("/metrics");
+      expect(res.status).toBe(200);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it("returns 404 for /metrics when no metrics provider is configured", async () => {
+      // beforeEach attaches the server without a metrics provider.
+      const res = await fetch("/metrics");
+      expect(res.status).toBe(404);
     });
   });
 

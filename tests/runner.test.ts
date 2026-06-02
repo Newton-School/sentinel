@@ -96,13 +96,26 @@ describe("runClaude", () => {
         "--print",
         "hello world",
         "--output-format",
-        "text",
+        "json",
         "--dangerously-skip-permissions",
         "--system-prompt",
         "SYSTEM PROMPT",
         "--mcp-config",
         MCP_CONFIG_PATH,
       ]);
+    });
+
+    it("requests JSON output so usage/cost telemetry is captured", async () => {
+      const { runClaude } = await import("../src/claude/runner.js");
+
+      const promise = runClaude("sys", "msg");
+      child.emit("close", 0);
+      await promise;
+
+      const args = spawnMock.mock.calls[0][1] as string[];
+      const idx = args.indexOf("--output-format");
+      expect(idx).toBeGreaterThanOrEqual(0);
+      expect(args[idx + 1]).toBe("json");
     });
 
     it("passes the system prompt as the value after --system-prompt", async () => {
@@ -172,32 +185,132 @@ describe("runClaude", () => {
     });
   });
 
-  describe("success path", () => {
-    it("resolves to { text, durationMs } with trimmed collected stdout", async () => {
+  describe("success path — JSON telemetry parsing", () => {
+    // The CLI is run with --output-format json, which prints a single JSON
+    // object: the assistant text under `result` plus usage/cost telemetry.
+    function jsonResult(overrides: Record<string, unknown> = {}): string {
+      return JSON.stringify({
+        type: "result",
+        result: "Hello world",
+        usage: { input_tokens: 123, output_tokens: 45 },
+        total_cost_usd: 0.0123,
+        num_turns: 3,
+        duration_ms: 9999,
+        ...overrides,
+      });
+    }
+
+    it("parses the JSON result text into `text`", async () => {
       const { runClaude } = await import("../src/claude/runner.js");
 
       const promise = runClaude("sys", "msg");
-
-      child.stdout.emit("data", Buffer.from("Hello "));
-      child.stdout.emit("data", Buffer.from("world\n"));
+      child.stdout.emit("data", Buffer.from(jsonResult()));
       child.emit("close", 0);
 
       const result = await promise;
       expect(result.text).toBe("Hello world");
+    });
+
+    it("populates token, cost, and turn fields from the JSON telemetry", async () => {
+      const { runClaude } = await import("../src/claude/runner.js");
+
+      const promise = runClaude("sys", "msg");
+      child.stdout.emit("data", Buffer.from(jsonResult()));
+      child.emit("close", 0);
+
+      const result = await promise;
+      expect(result.inputTokens).toBe(123);
+      expect(result.outputTokens).toBe(45);
+      expect(result.costUsd).toBe(0.0123);
+      expect(result.numTurns).toBe(3);
+    });
+
+    it("durationMs stays wall-clock (not the CLI-reported duration_ms)", async () => {
+      const { runClaude } = await import("../src/claude/runner.js");
+
+      const promise = runClaude("sys", "msg");
+      child.stdout.emit("data", Buffer.from(jsonResult({ duration_ms: 9999 })));
+      child.emit("close", 0);
+
+      const result = await promise;
+      // Wall-clock measured by the runner, not the 9999 echoed by the CLI.
       expect(typeof result.durationMs).toBe("number");
       expect(result.durationMs).toBeGreaterThanOrEqual(0);
+      expect(result.durationMs).not.toBe(9999);
+    });
+
+    it("handles JSON chunked across multiple stdout 'data' events", async () => {
+      const { runClaude } = await import("../src/claude/runner.js");
+
+      const full = jsonResult();
+      const promise = runClaude("sys", "msg");
+      child.stdout.emit("data", Buffer.from(full.slice(0, 20)));
+      child.stdout.emit("data", Buffer.from(full.slice(20)));
+      child.emit("close", 0);
+
+      const result = await promise;
+      expect(result.text).toBe("Hello world");
+      expect(result.inputTokens).toBe(123);
     });
 
     it("ignores stderr content on a successful (code 0) exit", async () => {
       const { runClaude } = await import("../src/claude/runner.js");
 
       const promise = runClaude("sys", "msg");
-      child.stdout.emit("data", Buffer.from("the answer"));
+      child.stdout.emit("data", Buffer.from(jsonResult({ result: "the answer" })));
       child.stderr.emit("data", Buffer.from("some warning"));
       child.emit("close", 0);
 
       const result = await promise;
       expect(result.text).toBe("the answer");
+    });
+  });
+
+  describe("defensive fallback — non-JSON / unexpected shape", () => {
+    it("falls back to raw trimmed stdout as `text` when JSON parsing fails", async () => {
+      const { runClaude } = await import("../src/claude/runner.js");
+
+      const promise = runClaude("sys", "msg");
+      child.stdout.emit("data", Buffer.from("plain non-json text\n"));
+      child.emit("close", 0);
+
+      const result = await promise;
+      expect(result.text).toBe("plain non-json text");
+      // No telemetry could be parsed.
+      expect(result.inputTokens).toBeUndefined();
+      expect(result.outputTokens).toBeUndefined();
+      expect(result.costUsd).toBeUndefined();
+      expect(result.numTurns).toBeUndefined();
+    });
+
+    it("falls back to raw stdout when the JSON lacks the expected result field", async () => {
+      const { runClaude } = await import("../src/claude/runner.js");
+
+      const raw = JSON.stringify({ something: "else", nope: true });
+      const promise = runClaude("sys", "msg");
+      child.stdout.emit("data", Buffer.from(raw));
+      child.emit("close", 0);
+
+      const result = await promise;
+      // Parsing succeeded but the result text was absent → raw stdout is used.
+      expect(result.text).toBe(raw);
+      expect(result.inputTokens).toBeUndefined();
+      expect(result.outputTokens).toBeUndefined();
+    });
+
+    it("uses the parsed result text but omits token fields when usage is absent", async () => {
+      const { runClaude } = await import("../src/claude/runner.js");
+
+      const raw = JSON.stringify({ result: "answer only" });
+      const promise = runClaude("sys", "msg");
+      child.stdout.emit("data", Buffer.from(raw));
+      child.emit("close", 0);
+
+      const result = await promise;
+      expect(result.text).toBe("answer only");
+      expect(result.inputTokens).toBeUndefined();
+      expect(result.outputTokens).toBeUndefined();
+      expect(result.costUsd).toBeUndefined();
     });
   });
 
