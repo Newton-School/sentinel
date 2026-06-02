@@ -23,7 +23,15 @@ const JOINER_LOG_DIR = join(process.cwd(), "data", "meet-bot-logs");
 // Track joined event IDs with a timestamp for TTL purging
 const joinedAt = new Map<string, number>();
 
-export function startMeetWatcher(): void {
+/**
+ * Start the Meet watcher poll loop.
+ *
+ * Returns a `stop()` function that clears the poll interval so no further
+ * joiner subprocesses are spawned. Note: `stop()` does NOT terminate joiner
+ * subprocesses that have already been spawned — they are detached/`unref()`'d
+ * on purpose so the bot keeps running even if Sentinel restarts.
+ */
+export function startMeetWatcher(): () => void {
   const hasGoogle =
     config.GOOGLE_CLIENT_ID &&
     config.GOOGLE_CLIENT_SECRET &&
@@ -31,7 +39,7 @@ export function startMeetWatcher(): void {
 
   if (!hasGoogle) {
     log.warn("Google credentials not set — Meet watcher disabled");
-    return;
+    return () => {};
   }
 
   log.info({ intervalMs: POLL_INTERVAL_MS }, "Starting Meet watcher");
@@ -45,7 +53,12 @@ export function startMeetWatcher(): void {
 
   // Fire once on startup, then on interval
   void runOnce(calendar);
-  setInterval(() => void runOnce(calendar), POLL_INTERVAL_MS);
+  const intervalId = setInterval(() => void runOnce(calendar), POLL_INTERVAL_MS);
+
+  return function stop(): void {
+    clearInterval(intervalId);
+    log.info("Meet watcher poll loop stopped");
+  };
 }
 
 async function runOnce(

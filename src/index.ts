@@ -11,7 +11,9 @@ import { trackQuery } from "./persona/tracker.js";
 import { markdownToSlackMrkdwn } from "./slack/formatters.js";
 import { startHealthServer, type HealthStatus } from "./health/server.js";
 import { startMeetWatcher } from "./meet-bot/watcher.js";
+import { createGracefulShutdown } from "./shutdown.js";
 import type { SlackEventEnvelope } from "./types/contracts.js";
+import type http from "node:http";
 
 const log = createLogger("main");
 
@@ -168,6 +170,11 @@ async function handleEvent(
 let slackConnected = false;
 const startTime = Date.now();
 
+// Module-scope handles assigned in main(), consumed by the shutdown sequence.
+let slackApp: ReturnType<typeof createSlackApp> | null = null;
+let stopWatcher: (() => void) | null = null;
+let healthServer: http.Server | null = null;
+
 async function main(): Promise<void> {
   log.info("Starting Sentinel");
 
@@ -183,7 +190,7 @@ async function main(): Promise<void> {
   const unavailableSources = getUnavailableSources();
   const allSources = ["Metabase", "GitHub", "Notion", "Slack search", "Gmail", "Google Calendar", "Meeting Transcripts", "Google Meet"];
   const activeSources = allSources.filter((s) => !unavailableSources.includes(s));
-  startHealthServer(config.HEALTH_CHECK_PORT, (): HealthStatus => {
+  healthServer = startHealthServer(config.HEALTH_CHECK_PORT, (): HealthStatus => {
     let dbStatus: "connected" | "error" = "connected";
     try {
       getDb().prepare("SELECT 1").get();
@@ -203,10 +210,11 @@ async function main(): Promise<void> {
   });
 
   // Start Meet watcher (auto-joins upcoming meetings via Playwright bot)
-  startMeetWatcher();
+  stopWatcher = startMeetWatcher();
 
   // Start Slack app
   const app = createSlackApp(handleEvent);
+  slackApp = app;
   await app.start();
   slackConnected = true;
   log.info("Slack Socket Mode connected — Sentinel is ready");
@@ -218,17 +226,32 @@ main().catch((err) => {
   process.exit(1);
 });
 
-// Graceful shutdown
-process.on("SIGINT", () => {
-  log.info("Received SIGINT, shutting down");
-  closeDb();
-  cleanupMcpConfig();
-  process.exit(0);
+// Graceful shutdown: stop the watcher poll loop, stop accepting new Slack
+// events, drain in-flight requests, close the health server + DB, then exit.
+// Already-detached Meet joiner subprocesses are intentionally left running.
+const shutdown = createGracefulShutdown({
+  stopWatcher: () => {
+    stopWatcher?.();
+  },
+  stopSlackApp: async () => {
+    if (slackApp) await slackApp.stop();
+  },
+  closeHealthServer: () =>
+    new Promise<void>((resolve) => {
+      if (!healthServer) {
+        resolve();
+        return;
+      }
+      healthServer.close(() => resolve());
+    }),
+  closeDb: () => {
+    closeDb();
+    cleanupMcpConfig();
+  },
+  getActiveRequests: () => activeRequests,
+  exit: (code) => process.exit(code),
+  log,
 });
 
-process.on("SIGTERM", () => {
-  log.info("Received SIGTERM, shutting down");
-  closeDb();
-  cleanupMcpConfig();
-  process.exit(0);
-});
+process.on("SIGINT", (signal) => void shutdown(signal));
+process.on("SIGTERM", (signal) => void shutdown(signal));
