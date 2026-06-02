@@ -20,8 +20,14 @@ const JOINER_SCRIPT = join(process.cwd(), "dist", "meet-bot", "joiner.js");
 const JOINER_SCRIPT_DEV = join(process.cwd(), "src", "meet-bot", "joiner.ts");
 const JOINER_LOG_DIR = join(process.cwd(), "data", "meet-bot-logs");
 
-// Track joined event IDs with a timestamp for TTL purging
-const joinedAt = new Map<string, number>();
+// Track joined event IDs with a timestamp for TTL purging.
+// Exported so tests can inspect/seed dedup + TTL behavior.
+export const joinedAt = new Map<string, number>();
+
+/** Test helper: clears the in-memory join-dedup map. */
+export function resetJoinedAt(): void {
+  joinedAt.clear();
+}
 
 /**
  * Start the Meet watcher poll loop.
@@ -61,7 +67,62 @@ export function startMeetWatcher(): () => void {
   };
 }
 
-async function runOnce(
+/**
+ * Raw Google Calendar event shape we read from. Kept loose (all fields
+ * optional/nullable) to match the googleapis return type without coupling to it.
+ */
+interface RawCalendarEvent {
+  id?: string | null;
+  summary?: string | null;
+  description?: string | null;
+  location?: string | null;
+  hangoutLink?: string | null;
+  conferenceData?: {
+    entryPoints?: Array<{
+      entryPointType?: string | null;
+      uri?: string | null;
+    }> | null;
+  } | null;
+  start?: { dateTime?: string | null; date?: string | null } | null;
+  end?: { dateTime?: string | null; date?: string | null } | null;
+}
+
+/**
+ * Maps raw Google Calendar events to the trimmed `CalendarEventLite` shape used
+ * by `filterEventsToJoin`. Drops events with no `id` and coerces `null` → `undefined`.
+ * Pure — exported for testing the watcher's event mapping in isolation.
+ */
+export function mapCalendarEvents(
+  rawEvents: ReadonlyArray<RawCalendarEvent>
+): CalendarEventLite[] {
+  return rawEvents
+    .filter((e): e is RawCalendarEvent & { id: string } => !!e.id)
+    .map((e) => ({
+      id: e.id,
+      summary: e.summary ?? undefined,
+      description: e.description ?? undefined,
+      location: e.location ?? undefined,
+      hangoutLink: e.hangoutLink ?? undefined,
+      conferenceData: e.conferenceData
+        ? {
+            entryPoints: e.conferenceData.entryPoints?.map((ep) => ({
+              entryPointType: ep.entryPointType ?? undefined,
+              uri: ep.uri ?? undefined,
+            })),
+          }
+        : undefined,
+      start: {
+        dateTime: e.start?.dateTime ?? undefined,
+        date: e.start?.date ?? undefined,
+      },
+      end: {
+        dateTime: e.end?.dateTime ?? undefined,
+        date: e.end?.date ?? undefined,
+      },
+    }));
+}
+
+export async function runOnce(
   calendar: ReturnType<typeof google.calendar>
 ): Promise<void> {
   try {
@@ -80,32 +141,7 @@ async function runOnce(
       maxResults: 25,
     });
 
-    const rawEvents = res.data.items ?? [];
-    const events: CalendarEventLite[] = rawEvents
-      .filter((e): e is NonNullable<typeof e> & { id: string } => !!e.id)
-      .map((e) => ({
-        id: e.id,
-        summary: e.summary ?? undefined,
-        description: e.description ?? undefined,
-        location: e.location ?? undefined,
-        hangoutLink: e.hangoutLink ?? undefined,
-        conferenceData: e.conferenceData
-          ? {
-              entryPoints: e.conferenceData.entryPoints?.map((ep) => ({
-                entryPointType: ep.entryPointType ?? undefined,
-                uri: ep.uri ?? undefined,
-              })),
-            }
-          : undefined,
-        start: {
-          dateTime: e.start?.dateTime ?? undefined,
-          date: e.start?.date ?? undefined,
-        },
-        end: {
-          dateTime: e.end?.dateTime ?? undefined,
-          date: e.end?.date ?? undefined,
-        },
-      }));
+    const events: CalendarEventLite[] = mapCalendarEvents(res.data.items ?? []);
 
     const joinedIds = new Set(joinedAt.keys());
     const toJoin = filterEventsToJoin(events, now.getTime(), joinedIds);
@@ -131,27 +167,54 @@ async function runOnce(
   }
 }
 
+/** Options for building the joiner subprocess command + argument vector. */
+export interface BuildJoinerArgsOptions {
+  meetUrl: string;
+  durationSec: number;
+  /** True → dev path (`npx tsx`); false → prod path (`node`). */
+  useTsx: boolean;
+  /** Path to the TS joiner script (used on the dev/tsx path). */
+  devScript: string;
+  /** Path to the compiled JS joiner script (used on the prod/node path). */
+  prodScript: string;
+  /** Stay-mode flag value forwarded to the joiner. */
+  stayMode: string;
+}
+
+/**
+ * Builds the full argv (command first) for spawning the Meet joiner.
+ *
+ * Dev:  ["npx", "tsx", devScript, meetUrl, "--duration", "<sec>", "--stay-mode", "<mode>"]
+ * Prod: ["node", prodScript, meetUrl, "--duration", "<sec>", "--stay-mode", "<mode>"]
+ *
+ * Pure — no process/env/fs access — so the exact argv can be asserted in tests.
+ */
+export function buildJoinerArgs(opts: BuildJoinerArgsOptions): string[] {
+  const { meetUrl, durationSec, useTsx, devScript, prodScript, stayMode } = opts;
+  const tail = [
+    meetUrl,
+    "--duration",
+    String(durationSec),
+    "--stay-mode",
+    stayMode,
+  ];
+  return useTsx
+    ? ["npx", "tsx", devScript, ...tail]
+    : ["node", prodScript, ...tail];
+}
+
 function spawnJoiner(meetUrl: string, durationSec: number): void {
   // Prefer compiled dist in prod; fall back to tsx in dev
   const useTsx = process.env.NODE_ENV !== "production";
-  const command = useTsx ? "npx" : "node";
-  const stayModeArgs = ["--stay-mode", "stay-until-end"];
-  const args = useTsx
-    ? [
-        "tsx",
-        JOINER_SCRIPT_DEV,
-        meetUrl,
-        "--duration",
-        String(durationSec),
-        ...stayModeArgs,
-      ]
-    : [
-        JOINER_SCRIPT,
-        meetUrl,
-        "--duration",
-        String(durationSec),
-        ...stayModeArgs,
-      ];
+  const [command, ...args] = buildJoinerArgs({
+    meetUrl,
+    durationSec,
+    useTsx,
+    devScript: JOINER_SCRIPT_DEV,
+    prodScript: JOINER_SCRIPT,
+    // PR #17: the watcher always hardcodes stay-until-end.
+    stayMode: "stay-until-end",
+  });
 
   // Pipe joiner's stdout/stderr to a per-spawn log file so failures are debuggable
   mkdirSync(JOINER_LOG_DIR, { recursive: true });
@@ -180,8 +243,12 @@ function spawnJoiner(meetUrl: string, durationSec: number): void {
   log.info({ meetUrl, pid: child.pid, logPath }, "Joiner spawned");
 }
 
-function purgeOldJoinedIds(): void {
-  const cutoff = Date.now() - JOINED_TTL_MS;
+/**
+ * Removes join-dedup entries older than the 4h TTL. Exported (with an optional
+ * `nowMs` for deterministic testing) so the purge can be driven without real time.
+ */
+export function purgeOldJoinedIds(nowMs: number = Date.now()): void {
+  const cutoff = nowMs - JOINED_TTL_MS;
   for (const [id, ts] of joinedAt.entries()) {
     if (ts < cutoff) joinedAt.delete(id);
   }
