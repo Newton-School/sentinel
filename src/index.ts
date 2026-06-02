@@ -1,7 +1,7 @@
 import { config } from "./config.js";
 import { createLogger } from "./logging/logger.js";
 import { getDb, closeDb } from "./state/db.js";
-import { getMcpConfigPath, getUnavailableSources } from "./claude/mcpConfig.js";
+import { getMcpConfigPath, getUnavailableSources, cleanupMcpConfig } from "./claude/mcpConfig.js";
 import { createSlackApp } from "./slack/socketClient.js";
 import { fetchThreadContext } from "./slack/threadContext.js";
 import { getOrCreatePersona, getTraits } from "./persona/store.js";
@@ -222,11 +222,13 @@ main().catch((err) => {
 process.on("SIGINT", () => {
   log.info("Received SIGINT, shutting down");
   closeDb();
+  cleanupMcpConfig();
   process.exit(0);
 });
 
 process.on("SIGTERM", () => {
   log.info("Received SIGTERM, shutting down");
   closeDb();
+  cleanupMcpConfig();
   process.exit(0);
 });
