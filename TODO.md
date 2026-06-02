@@ -292,8 +292,8 @@ Priority key: **P0** correctness/security/deploy-blocker · **P1** important gap
 
 ## Repo hygiene (not code — do when convenient)
 
-- [ ] Pull `origin/main` into local `main` (1 commit behind).
-- [ ] Delete the 10 fully-merged local branches: `docs/tdd-workflow`,
+- [x] Pull `origin/main` into local `main`.
+- [x] Delete the 10 fully-merged local branches: `docs/tdd-workflow`,
   `feat/{codebuild-ci,optional-api-key,optional-data-sources,prd-v1-implementation,production-readiness,sentinel-poc}`,
   `fix/{italic-conversion-removal,meeting-transcript-routing,slack-mrkdwn-formatting}`.
-- [ ] Decide on open PR #18 (memory monitor) — mergeable, +372/-1, open since 2026-04-21.
+- [x] Decide on open PR #18 (memory monitor) — ✅ DECIDED: merged (rebased onto main, 556 tests green; orthogonal to the #54 `/metrics` endpoint).
