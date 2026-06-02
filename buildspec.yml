@@ -14,8 +14,8 @@ phases:
 
   pre_build:
     commands:
-      - echo "Running type check..."
-      - npx tsc --noEmit
+      - echo "Building (emits dist/ — MCP servers run from dist/mcp/*.js and npm start runs dist/index.js)..."
+      - npm run build
       - echo "Running tests..."
       - npm test
       - echo "Logging in to ECR..."
