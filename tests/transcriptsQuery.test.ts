@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildSearchQuery,
   buildRecentQuery,
+  escapeDriveQueryValue,
   extractDocText,
   truncateDocText,
   mapSearchFiles,
@@ -41,6 +42,20 @@ describe("buildSearchQuery", () => {
     expect(q).toContain("fullText contains 'O\\'Brien sync'");
   });
 
+  it("escapes backslashes in the query so the value cannot break the q string", () => {
+    // Raw input: a\b  -> the backslash must be doubled per the q grammar.
+    const q = buildSearchQuery(7, now, "a\\b");
+    expect(q).toContain("name contains 'a\\\\b'");
+    expect(q).toContain("fullText contains 'a\\\\b'");
+  });
+
+  it("escapes both backslash and quote (backslash first) for a combined input", () => {
+    // Raw input: a\'b  -> backslash doubled then quote escaped => a\\\'b
+    const q = buildSearchQuery(7, now, "a\\'b");
+    expect(q).toContain("name contains 'a\\\\\\'b'");
+    expect(q).toContain("fullText contains 'a\\\\\\'b'");
+  });
+
   it("computes the date boundary deterministically from injected now", () => {
     const q = buildSearchQuery(1, new Date("2026-01-01T12:00:00.000Z"));
     expect(q).toContain("modifiedTime > '2025-12-31T12:00:00.000Z'");
@@ -54,6 +69,25 @@ describe("buildRecentQuery", () => {
     expect(q).toContain("trashed = false");
     expect(q).toContain("name contains 'transcript'");
     expect(q).toContain("modifiedTime > '2026-06-08T00:00:00.000Z'");
+  });
+});
+
+describe("escapeDriveQueryValue", () => {
+  it("escapes a single quote to \\'", () => {
+    expect(escapeDriveQueryValue("O'Brien")).toBe("O\\'Brien");
+  });
+
+  it("escapes a backslash to \\\\", () => {
+    expect(escapeDriveQueryValue("a\\b")).toBe("a\\\\b");
+  });
+
+  it("escapes backslash FIRST then quote for a combined input", () => {
+    // Raw: a\'b -> backslash doubled (a\\) then quote escaped (\') => a\\\'b
+    expect(escapeDriveQueryValue("a\\'b")).toBe("a\\\\\\'b");
+  });
+
+  it("leaves a value with no special characters unchanged", () => {
+    expect(escapeDriveQueryValue("leadership standup")).toBe("leadership standup");
   });
 });
 

@@ -7,12 +7,26 @@
  */
 
 /**
+ * Escape a user-supplied value for safe interpolation inside a single-quoted
+ * string in a Google Drive `q` query.
+ *
+ * Per the Drive `q` grammar, a value inside a single-quoted string must escape
+ * BOTH the backslash and the single-quote — and the backslash MUST be escaped
+ * FIRST, otherwise the backslash introduced by the quote-escape would itself be
+ * doubled, corrupting the value. A naive quote-only escape leaves raw
+ * backslashes in the value, enabling query injection / malformed queries.
+ */
+export function escapeDriveQueryValue(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+}
+
+/**
  * Build the Drive `q` filter for `transcript_search`.
  *
  * Always restricts to non-trashed Google Docs modified after `now - days_back`.
- * When `query` is given, ORs a name/fullText contains-match (single quotes in
- * the query are backslash-escaped); otherwise it falls back to titles
- * containing the word "transcript".
+ * When `query` is given, ORs a name/fullText contains-match (backslashes and
+ * single quotes in the query are escaped per the `q` grammar); otherwise it
+ * falls back to titles containing the word "transcript".
  *
  * `now` is injected so the `modifiedTime` boundary is deterministic.
  */
@@ -28,7 +42,7 @@ export function buildSearchQuery(
   let driveQuery = `mimeType='application/vnd.google-apps.document' and modifiedTime > '${afterStr}' and trashed = false`;
 
   if (query) {
-    const escaped = query.replace(/'/g, "\\'");
+    const escaped = escapeDriveQueryValue(query);
     driveQuery += ` and (name contains '${escaped}' or fullText contains '${escaped}')`;
   } else {
     driveQuery += ` and name contains 'transcript'`;
