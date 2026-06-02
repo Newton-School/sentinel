@@ -1,10 +1,31 @@
-import { writeFileSync, mkdirSync } from "node:fs";
+import {
+  writeFileSync,
+  mkdirSync,
+  chmodSync,
+  rmSync,
+  existsSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { config } from "../config.js";
 import { createLogger } from "../logging/logger.js";
 
 const log = createLogger("mcp-config");
+
+/**
+ * Resolves the on-disk path of the MCP config file. This file contains every
+ * MCP server's plaintext credentials (Metabase password, GitHub token, Notion
+ * bearer header, Slack user token, Google client secret + refresh token), so it
+ * is written with owner-only (0600) perms and cleaned up on shutdown.
+ *
+ * Namespaced by SENTINEL_MCP_TMPDIR (set in tests) so test runs can't clobber a
+ * production mcp-config.json in the shared tmpdir.
+ */
+function resolveConfigPath(): string {
+  const dir =
+    process.env.SENTINEL_MCP_TMPDIR ?? join(tmpdir(), "sentinel-mcp");
+  return join(dir, "mcp-config.json");
+}
 
 interface McpServerConfig {
   command: string;
@@ -19,12 +40,8 @@ interface McpConfig {
 export function getMcpConfigPath(): string {
   // No cache: always regenerate from current config so env var changes
   // propagate to MCP servers on restart without manual file cleanup.
-  // Namespaced by SENTINEL_MCP_TMPDIR (set in tests) so test runs can't
-  // clobber a production mcp-config.json in the shared tmpdir.
-  const dir =
-    process.env.SENTINEL_MCP_TMPDIR ?? join(tmpdir(), "sentinel-mcp");
-  mkdirSync(dir, { recursive: true });
-  const configPath = join(dir, "mcp-config.json");
+  const configPath = resolveConfigPath();
+  mkdirSync(join(configPath, ".."), { recursive: true });
 
   const mcpConfig: McpConfig = {
     mcpServers: {},
@@ -138,10 +155,28 @@ export function getMcpConfigPath(): string {
     log.warn("Google credentials not set — Gmail, Calendar, and Transcripts disabled");
   }
 
-  writeFileSync(configPath, JSON.stringify(mcpConfig, null, 2));
+  // This file holds plaintext credentials for every MCP server, so write it
+  // owner-only. writeFileSync's `mode` only applies when the file is created;
+  // since we regenerate on every run, chmod explicitly to enforce 0600 even
+  // when overwriting an existing (possibly world-readable) file.
+  writeFileSync(configPath, JSON.stringify(mcpConfig, null, 2), { mode: 0o600 });
+  chmodSync(configPath, 0o600);
   log.info({ path: configPath, servers: Object.keys(mcpConfig.mcpServers) }, "Wrote MCP config");
 
   return configPath;
+}
+
+/**
+ * Removes the MCP config file (which contains plaintext credentials) if it
+ * exists. Safe to call when the file is absent — does not throw. Wired into
+ * graceful shutdown so secrets don't linger in the tmpdir.
+ */
+export function cleanupMcpConfig(): void {
+  const configPath = resolveConfigPath();
+  if (existsSync(configPath)) {
+    rmSync(configPath, { force: true });
+    log.info({ path: configPath }, "Removed MCP config");
+  }
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
-import { readFileSync, mkdtempSync, rmSync } from "node:fs";
+import { readFileSync, mkdtempSync, rmSync, statSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -431,5 +431,72 @@ describe("getMcpConfigPath", () => {
     expect(config.mcpServers).not.toHaveProperty("metabase");
     expect(config.mcpServers).not.toHaveProperty("github");
     expect(config.mcpServers).not.toHaveProperty("notion");
+  });
+});
+
+describe("mcp-config secret file permissions and cleanup", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  const mockConfigWithCreds = () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: "https://metabase.test",
+        METABASE_USERNAME: "admin",
+        METABASE_PASSWORD: "super-secret-pass",
+        GITHUB_TOKEN: "ghp_test",
+        NOTION_API_KEY: "ntn_test",
+        SLACK_USER_TOKEN: undefined,
+        GOOGLE_CLIENT_ID: undefined,
+        GOOGLE_CLIENT_SECRET: undefined,
+        GOOGLE_REFRESH_TOKEN: undefined,
+      },
+    }));
+  };
+
+  it("writes the mcp config file with owner-only (0600) permissions", async () => {
+    mockConfigWithCreds();
+
+    const { getMcpConfigPath } = await import("../src/claude/mcpConfig.js");
+    const configPath = getMcpConfigPath();
+
+    const mode = statSync(configPath).mode & 0o777;
+    expect(mode).toBe(0o600);
+  });
+
+  it("keeps 0600 permissions when the config file is regenerated (overwrite)", async () => {
+    mockConfigWithCreds();
+
+    const { getMcpConfigPath } = await import("../src/claude/mcpConfig.js");
+
+    // First write creates the file.
+    const firstPath = getMcpConfigPath();
+    expect(statSync(firstPath).mode & 0o777).toBe(0o600);
+
+    // Second write overwrites an existing file. writeFileSync's `mode`
+    // option is ignored when the file already exists, so this guards the
+    // "mode only applies on create" footgun.
+    const secondPath = getMcpConfigPath();
+    expect(secondPath).toBe(firstPath);
+    expect(statSync(secondPath).mode & 0o777).toBe(0o600);
+  });
+
+  it("cleanupMcpConfig removes the config file, and is a no-op when absent", async () => {
+    mockConfigWithCreds();
+
+    const { getMcpConfigPath, cleanupMcpConfig } = await import(
+      "../src/claude/mcpConfig.js"
+    );
+
+    const configPath = getMcpConfigPath();
+    expect(existsSync(configPath)).toBe(true);
+
+    cleanupMcpConfig();
+    expect(existsSync(configPath)).toBe(false);
+
+    // Calling again when the file is already gone must not throw.
+    expect(() => cleanupMcpConfig()).not.toThrow();
+    expect(existsSync(configPath)).toBe(false);
   });
 });
