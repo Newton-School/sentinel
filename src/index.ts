@@ -10,6 +10,7 @@ import { runClaude } from "./claude/runner.js";
 import { trackQuery } from "./persona/tracker.js";
 import { markdownToSlackMrkdwn } from "./slack/formatters.js";
 import { startHealthServer, type HealthStatus } from "./health/server.js";
+import { record, renderPrometheus } from "./metrics/registry.js";
 import { startMeetWatcher } from "./meet-bot/watcher.js";
 import { createGracefulShutdown } from "./shutdown.js";
 import type { SlackEventEnvelope } from "./types/contracts.js";
@@ -35,6 +36,9 @@ async function handleEvent(
   }
 
   activeRequests++;
+  // Wall-clock start for the error-path metric (the success path uses the
+  // CLI-measured response.durationMs instead).
+  const requestStart = Date.now();
   try {
     // Add :eyes: reaction
     try {
@@ -126,12 +130,29 @@ async function handleEvent(
       responseDurationMs: response.durationMs,
     });
 
+    // Record ops metrics for /metrics (token/cost only present when the CLI
+    // JSON telemetry was parsed).
+    record({
+      type: envelope.type,
+      durationMs: response.durationMs,
+      inputTokens: response.inputTokens,
+      outputTokens: response.outputTokens,
+      costUsd: response.costUsd,
+    });
+
     log.info(
       { userId: envelope.userId, durationMs: response.durationMs },
       "Request completed"
     );
   } catch (err) {
     log.error({ err, userId: envelope.userId }, "Failed to handle event");
+
+    // Record the failed request (wall-clock duration; no token/cost telemetry).
+    record({
+      type: envelope.type,
+      durationMs: Date.now() - requestStart,
+      isError: true,
+    });
 
     const errorMessage =
       err instanceof Error && err.message.includes("timed out")
@@ -218,7 +239,9 @@ async function main(): Promise<void> {
       };
     },
     // Liveness uptime: cheap, no Slack/DB dependency.
-    uptimeSeconds
+    uptimeSeconds,
+    // /metrics: Prometheus exposition of in-process request/token/cost counters.
+    renderPrometheus
   );
 
   // Start Meet watcher (auto-joins upcoming meetings via Playwright bot)

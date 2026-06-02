@@ -29,9 +29,19 @@ export interface LivenessStatus {
 
 export function createHealthServer(
   getReadiness: () => HealthStatus,
-  getUptime: () => number = () => 0
+  getUptime: () => number = () => 0,
+  getMetricsText?: () => string
 ): http.Server {
   const server = http.createServer((req, res) => {
+    // Ops metrics: Prometheus text exposition. Served only when a provider is
+    // wired in. Independent of Slack/DB readiness so scraping never flaps.
+    if (req.url === "/metrics" && getMetricsText) {
+      res.setHeader("Content-Type", "text/plain; version=0.0.4");
+      res.writeHead(200);
+      res.end(getMetricsText());
+      return;
+    }
+
     res.setHeader("Content-Type", "application/json");
 
     // Liveness: the process is up. Deliberately decoupled from Slack/DB state
@@ -64,9 +74,10 @@ export function createHealthServer(
 export function startHealthServer(
   port: number,
   getReadiness: () => HealthStatus,
-  getUptime?: () => number
+  getUptime?: () => number,
+  getMetricsText?: () => string
 ): http.Server {
-  const server = createHealthServer(getReadiness, getUptime);
+  const server = createHealthServer(getReadiness, getUptime, getMetricsText);
   server.listen(port, () => {
     log.info({ port }, "Health check server listening");
   });
