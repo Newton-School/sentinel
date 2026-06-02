@@ -5,6 +5,10 @@ import { createLogger } from "../logging/logger.js";
 const log = createLogger("db");
 
 let _db: Database.Database | null = null;
+let _prunedThisProcess = false;
+
+/** Default retention window for query_log rows, in days. */
+export const QUERY_LOG_RETENTION_DAYS = 90;
 
 export function getDb(): Database.Database {
   if (_db) return _db;
@@ -15,6 +19,21 @@ export function getDb(): Database.Database {
   _db.pragma("foreign_keys = ON");
 
   runMigrations(_db);
+
+  // Enforce query_log retention once per process. Must never break getDb():
+  // a prune failure is logged and swallowed.
+  if (!_prunedThisProcess) {
+    _prunedThisProcess = true;
+    try {
+      const deleted = pruneQueryLog();
+      if (deleted > 0) {
+        log.info({ deleted }, "Pruned stale query_log rows");
+      }
+    } catch (err) {
+      log.error({ err }, "query_log retention prune failed (non-fatal)");
+    }
+  }
+
   return _db;
 }
 
@@ -80,7 +99,41 @@ function runMigrations(db: Database.Database): void {
     log.info("Added sources_used column to query_log");
   }
 
+  // Migration: indexes on query_log (idempotent).
+  // user_id supports per-user lookups; created_at supports time-based retention pruning.
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_query_log_user_id ON query_log(user_id);
+    CREATE INDEX IF NOT EXISTS idx_query_log_created_at ON query_log(created_at);
+  `);
+
   log.info("Migrations complete");
+}
+
+/**
+ * Deletes query_log rows older than the retention window.
+ *
+ * query_log.created_at is stored as an ISO 8601 string (see persona tracker),
+ * so the cutoff is computed as an ISO string and compared lexicographically —
+ * which is a valid chronological comparison for fixed-format UTC ISO timestamps.
+ *
+ * Rows with created_at strictly older than the cutoff are removed; a row
+ * exactly at the boundary is kept.
+ *
+ * @param retentionDays how many days of history to keep (default 90)
+ * @param nowMs reference "now" in epoch ms (defaults to Date.now()); injectable for tests
+ * @returns the number of rows deleted
+ */
+export function pruneQueryLog(
+  retentionDays = QUERY_LOG_RETENTION_DAYS,
+  nowMs?: number
+): number {
+  const db = getDb();
+  const now = nowMs ?? Date.now();
+  const cutoffIso = new Date(now - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+  const result = db
+    .prepare(`DELETE FROM query_log WHERE created_at < ?`)
+    .run(cutoffIso);
+  return result.changes;
 }
 
 export function closeDb(): void {

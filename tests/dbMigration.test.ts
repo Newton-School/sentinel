@@ -96,6 +96,44 @@ describe("database migrations", () => {
     closeDb();
   });
 
+  it("creates a user_id index on query_log", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: { SQLITE_DB_PATH: ":memory:", LOG_LEVEL: "silent" },
+    }));
+
+    const { getDb, closeDb } = await import("../src/state/db.js");
+    const testDb = getDb();
+
+    // Check via sqlite_master
+    const indexes = testDb
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='query_log'")
+      .all() as Array<{ name: string }>;
+    const indexNames = indexes.map((i) => i.name);
+    expect(indexNames).toContain("idx_query_log_user_id");
+
+    // Also verify via PRAGMA index_list
+    const pragmaIndexes = testDb.pragma("index_list('query_log')") as Array<{ name: string }>;
+    expect(pragmaIndexes.map((i) => i.name)).toContain("idx_query_log_user_id");
+
+    closeDb();
+  });
+
+  it("creates a created_at index on query_log", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: { SQLITE_DB_PATH: ":memory:", LOG_LEVEL: "silent" },
+    }));
+
+    const { getDb, closeDb } = await import("../src/state/db.js");
+    const testDb = getDb();
+
+    const indexes = testDb
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='query_log'")
+      .all() as Array<{ name: string }>;
+    expect(indexes.map((i) => i.name)).toContain("idx_query_log_created_at");
+
+    closeDb();
+  });
+
   it("creates the joined_meetings table with the expected columns", async () => {
     vi.doMock("../src/config.js", () => ({
       config: { SQLITE_DB_PATH: ":memory:", LOG_LEVEL: "silent" },
