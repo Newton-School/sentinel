@@ -59,6 +59,7 @@ const {
   mapCalendarEvents,
   purgeOldJoinedIds,
   resetJoinedAt,
+  resetActiveJoinerCount,
 } = await import("../src/meet-bot/watcher.js");
 
 // The watcher's join dedup is now persisted in SQLite via joinStore. Import
@@ -158,6 +159,10 @@ describe("runOnce poll loop", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetJoinedAt();
+    // Reset the module-level active-joiner counter; without freeing slots the
+    // default cap of 1 would block spawns in later tests of this suite.
+    resetActiveJoinerCount();
+    delete process.env.MAX_CONCURRENT_JOINERS;
   });
 
   it("queries the calendar with timeMin/timeMax/singleEvents/orderBy", async () => {
@@ -177,6 +182,9 @@ describe("runOnce poll loop", () => {
   });
 
   it("spawns a joiner for each eligible event", async () => {
+    // Lift the concurrency cap so both eligible events spawn in one poll; the
+    // backpressure cap behavior itself is covered in meetWatcherConcurrency.
+    process.env.MAX_CONCURRENT_JOINERS = "2";
     const { client } = makeCalendar([
       eligibleRawEvent("evt-1", "aaa-bbbb-ccc"),
       eligibleRawEvent("evt-2", "ddd-eeee-fff"),

@@ -26,6 +26,56 @@ const JOINER_SCRIPT = join(process.cwd(), "dist", "meet-bot", "joiner.js");
 const JOINER_SCRIPT_DEV = join(process.cwd(), "src", "meet-bot", "joiner.ts");
 const JOINER_LOG_DIR = join(process.cwd(), "data", "meet-bot-logs");
 
+// Concurrency cap for detached joiner subprocesses.
+//
+// Default is 1 because all joiners share ONE signed-in persistent Chrome
+// profile (data/sentinel-chrome-profile) and the joiner's cleanProfileLocks()
+// deletes LOCK/Singleton* files on launch — two simultaneous Chrome instances
+// on that profile would corrupt each other. Overridable via the
+// MAX_CONCURRENT_JOINERS env var only if the profile constraint is lifted.
+const DEFAULT_MAX_CONCURRENT_JOINERS = 1;
+
+/**
+ * Reads the concurrency cap from `MAX_CONCURRENT_JOINERS`, falling back to 1.
+ * Read on every `runOnce` so the env var can be tuned without a rebuild; an
+ * unset/blank/non-positive/NaN value falls back to the safe default.
+ */
+function maxConcurrentJoiners(): number {
+  const raw = process.env.MAX_CONCURRENT_JOINERS;
+  if (raw === undefined || raw.trim() === "") {
+    return DEFAULT_MAX_CONCURRENT_JOINERS;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_MAX_CONCURRENT_JOINERS;
+}
+
+// Number of joiner subprocesses currently alive. Incremented in spawnJoiner
+// right before spawn() and decremented on the child's "exit" event. The child
+// is detached/unref()'d, but unref only stops it from keeping the event loop
+// alive — we can still observe "exit" while this process is running.
+let activeJoiners = 0;
+
+/**
+ * Pure predicate: may we spawn another joiner given the current active count
+ * and the cap? Exported so the backpressure rule can be unit-tested without
+ * touching the calendar/spawn machinery.
+ */
+export function canSpawnJoiner(activeCount: number, cap: number): boolean {
+  return activeCount < cap;
+}
+
+/** Current number of active (spawned, not-yet-exited) joiner subprocesses. */
+export function activeJoinerCount(): number {
+  return activeJoiners;
+}
+
+/** Test helper: resets the active-joiner counter. */
+export function resetActiveJoinerCount(): void {
+  activeJoiners = 0;
+}
+
 // Joined event IDs are persisted in SQLite (joined_meetings table via
 // joinStore) so dedup survives process restarts — previously this was an
 // in-memory Map that was lost on restart, causing the watcher to re-join
@@ -158,7 +208,28 @@ export async function runOnce(
 
     if (toJoin.length === 0) return;
 
+    const cap = maxConcurrentJoiners();
+
     for (const item of toJoin) {
+      // Backpressure: never exceed the cap. The check is BEFORE markJoined so a
+      // deferred event stays un-marked and is retried on the next poll once a
+      // joiner slot frees (a child "exit" decrements activeJoiners). Joiners
+      // share one signed-in Chrome profile, so the default cap of 1 prevents
+      // two concurrent Chrome instances from corrupting each other's profile.
+      if (!canSpawnJoiner(activeJoiners, cap)) {
+        log.info(
+          {
+            eventId: item.event.id,
+            summary: item.event.summary,
+            meetUrl: item.meetUrl,
+            activeJoiners,
+            cap,
+          },
+          `joiner cap reached, deferring meeting ${item.event.id}`
+        );
+        continue;
+      }
+
       log.info(
         {
           eventId: item.event.id,
@@ -234,6 +305,10 @@ function spawnJoiner(meetUrl: string, durationSec: number): void {
   );
   const logFd = openSync(logPath, "a");
 
+  // Count this joiner as active right before spawning so an overlapping
+  // runOnce sees the slot taken. Decremented when the child exits below.
+  activeJoiners++;
+
   const child = spawn(command, args, {
     detached: true,
     stdio: ["ignore", logFd, logFd],
@@ -243,6 +318,14 @@ function spawnJoiner(meetUrl: string, durationSec: number): void {
     env: buildJoinerEnv(),
   });
 
+  // Free the concurrency slot when the joiner exits. The listener is attached
+  // before unref() — unref only stops the child from keeping the event loop
+  // alive, it does not detach our "exit" handler while this process runs.
+  child.on("exit", () => {
+    activeJoiners = Math.max(0, activeJoiners - 1);
+    log.info({ meetUrl, activeJoiners }, "Joiner exited, slot freed");
+  });
+
   child.on("error", (err) => {
     log.error({ err, meetUrl, logPath }, "Failed to spawn joiner");
   });
@@ -250,7 +333,10 @@ function spawnJoiner(meetUrl: string, durationSec: number): void {
   // Detach so bot continues even if Sentinel restarts
   child.unref();
 
-  log.info({ meetUrl, pid: child.pid, logPath }, "Joiner spawned");
+  log.info(
+    { meetUrl, pid: child.pid, logPath, activeJoiners },
+    "Joiner spawned"
+  );
 }
 
 /**
