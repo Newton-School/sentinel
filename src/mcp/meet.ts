@@ -11,6 +11,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { participantDisplayName, type MeetParticipant } from "./participantName.js";
 
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
@@ -61,6 +62,39 @@ async function meetFetch(path: string): Promise<unknown> {
     throw new Error(`Google Meet API error: ${res.status} ${await res.text()}`);
   }
   return res.json();
+}
+
+// In-memory cache of participant resource name -> resolved human display name.
+// Scoped to the lifetime of this MCP server process. We cache even on a
+// failure-fallback (the raw resource name) to avoid refetch storms when one
+// participant repeatedly can't be resolved.
+const participantNameCache = new Map<string, string>();
+
+/**
+ * Resolve a Meet participant RESOURCE NAME
+ * (`conferenceRecords/{conf}/participants/{p}`) to a human display name.
+ *
+ * Checks the in-memory cache first; on a miss it fetches the Participant
+ * resource via the authenticated meetFetch helper and extracts the best
+ * display name. On any error (or empty name) it falls back to the raw resource
+ * name so a single unresolvable speaker never fails the whole tool call.
+ */
+async function resolveParticipantName(resourceName: string): Promise<string> {
+  const cached = participantNameCache.get(resourceName);
+  if (cached !== undefined) return cached;
+
+  let resolved = resourceName;
+  try {
+    const participant = (await meetFetch(`/${resourceName}`)) as MeetParticipant;
+    const name = participantDisplayName(participant);
+    if (name) resolved = name;
+  } catch (err) {
+    // Swallow: keep the raw resource name as the fallback speaker.
+    console.error(`Failed to resolve participant "${resourceName}":`, err);
+  }
+
+  participantNameCache.set(resourceName, resolved);
+  return resolved;
 }
 
 const server = new McpServer({
@@ -188,13 +222,20 @@ server.tool(
       }>;
     };
 
-    const entries = (data.transcriptEntries ?? []).map((e) => ({
-      speaker: e.participant,
-      text: e.text,
-      startTime: e.startTime,
-      endTime: e.endTime,
-      language: e.languageCode,
-    }));
+    const entries = await Promise.all(
+      (data.transcriptEntries ?? []).map(async (e) => ({
+        // Human-readable display name, resolved from the participant resource
+        // (cached). Falls back to the raw resource name if it can't be resolved.
+        speaker: e.participant ? await resolveParticipantName(e.participant) : undefined,
+        // Raw participant resource name retained so nothing is lost.
+        participant: e.participant,
+        speakerId: e.participant,
+        text: e.text,
+        startTime: e.startTime,
+        endTime: e.endTime,
+        language: e.languageCode,
+      }))
+    );
 
     return {
       content: [
