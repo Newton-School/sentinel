@@ -33,6 +33,32 @@ const server = new McpServer({
   version: "0.1.0",
 });
 
+/**
+ * Default timezone used for "this week" math when the primary calendar's
+ * timezone cannot be fetched. The bot presents IST time context, so IST is the
+ * sensible fallback.
+ */
+const DEFAULT_TIME_ZONE = "Asia/Kolkata";
+
+/** In-process cache of the primary calendar's IANA timezone. */
+let cachedTimeZone: string | undefined;
+
+/**
+ * Resolve the primary calendar's IANA timezone, caching it for the life of the
+ * process. Falls back to {@link DEFAULT_TIME_ZONE} if the fetch fails or the
+ * calendar reports no timezone.
+ */
+async function getCalendarTimeZone(): Promise<string> {
+  if (cachedTimeZone) return cachedTimeZone;
+  try {
+    const res = await calendar.calendars.get({ calendarId: "primary" });
+    cachedTimeZone = res.data.timeZone || DEFAULT_TIME_ZONE;
+  } catch {
+    cachedTimeZone = DEFAULT_TIME_ZONE;
+  }
+  return cachedTimeZone;
+}
+
 // Tool: List events in a date range
 server.tool(
   "calendar_list_events",
@@ -44,10 +70,12 @@ server.tool(
     calendar_id: z.string().default("primary").describe("Calendar ID (default: 'primary')"),
   },
   async ({ start_date, end_date, max_results, calendar_id }) => {
-    // Default to this week (Monday to Friday). Explicit dates override either end.
-    const week = weekWindow(new Date());
-    const timeMin = start_date ? startBoundary(start_date) : week.timeMin;
-    const timeMax = end_date ? endBoundary(end_date) : week.timeMax;
+    // Default to this week (Monday to Friday) in the calendar's timezone.
+    // Explicit dates override either end (also interpreted in that timezone).
+    const timeZone = await getCalendarTimeZone();
+    const week = weekWindow(new Date(), timeZone);
+    const timeMin = start_date ? startBoundary(start_date, timeZone) : week.timeMin;
+    const timeMax = end_date ? endBoundary(end_date, timeZone) : week.timeMax;
 
     const res = await calendar.events.list({
       calendarId: calendar_id,
