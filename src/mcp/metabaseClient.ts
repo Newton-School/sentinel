@@ -9,6 +9,8 @@
  * session and re-authenticates on a 401.
  */
 
+import { redactedHttpError } from "./httpError.js";
+
 export interface MetabaseClientOptions {
   url: string;
   username: string;
@@ -35,7 +37,9 @@ export function createMetabaseClient(opts: MetabaseClientOptions): MetabaseClien
     });
 
     if (!res.ok) {
-      throw new Error(`Metabase auth failed: ${res.status} ${await res.text()}`);
+      // Redacted: keep status/statusText, never embed the raw response body
+      // (it can carry credentials / identifiers that leak into logs + Slack).
+      throw redactedHttpError("Metabase auth failed", res);
     }
 
     const data = (await res.json()) as { id: string };
@@ -74,16 +78,14 @@ export function createMetabaseClient(opts: MetabaseClientOptions): MetabaseClien
       // instead of returning the error body as if it were data — otherwise
       // downstream code crashes opaquely on e.g. `result.data.cols`.
       if (!retry.ok) {
-        throw new Error(
-          `Metabase API error after re-auth: ${retry.status} ${await retry.text()}`
-        );
+        throw redactedHttpError("Metabase API error after re-auth", retry);
       }
 
       return retry.json();
     }
 
     if (!res.ok) {
-      throw new Error(`Metabase API error: ${res.status} ${await res.text()}`);
+      throw redactedHttpError("Metabase API error", res);
     }
 
     return res.json();

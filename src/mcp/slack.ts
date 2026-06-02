@@ -19,6 +19,7 @@ import {
   type SlackHistoryMessage,
   type SlackReplyMessage,
 } from "./slackShape.js";
+import { redactedHttpError } from "./httpError.js";
 
 const SLACK_USER_TOKEN = process.env.SLACK_USER_TOKEN!;
 
@@ -33,7 +34,8 @@ async function slackApi(method: string, params: Record<string, string>): Promise
   });
 
   if (!res.ok) {
-    throw new Error(`Slack API error: ${res.status} ${await res.text()}`);
+    // Redacted: keep status/statusText, never embed the raw response body.
+    throw redactedHttpError("Slack API error", res);
   }
 
   const data = (await res.json()) as { ok: boolean; error?: string; [key: string]: unknown };

@@ -20,6 +20,7 @@ import {
   type TranscriptRecord,
   type RawTranscriptEntry,
 } from "./meetShape.js";
+import { redactedHttpError } from "./httpError.js";
 
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
@@ -46,8 +47,8 @@ async function getAccessToken(): Promise<string> {
   });
 
   if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Token refresh failed: ${res.status} ${errText}`);
+    // Redacted: an OAuth token error body can carry secrets — keep status only.
+    throw redactedHttpError("Token refresh failed", res);
   }
 
   const data = (await res.json()) as { access_token: string; expires_in: number };
@@ -67,7 +68,8 @@ async function meetFetch(path: string): Promise<unknown> {
     },
   });
   if (!res.ok) {
-    throw new Error(`Google Meet API error: ${res.status} ${await res.text()}`);
+    // Redacted: keep status/statusText, never embed the raw response body.
+    throw redactedHttpError("Google Meet API error", res);
   }
   return res.json();
 }
