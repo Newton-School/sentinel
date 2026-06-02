@@ -4,6 +4,49 @@ import type { PersonaProfile, PersonaTrait } from "./types.js";
 
 const log = createLogger("persona-store");
 
+// Raw row shapes as returned by SQLite (snake_case columns).
+interface PersonaRow {
+  user_id: string;
+  display_name: string;
+  role: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface PersonaTraitRow {
+  id: number;
+  user_id: string;
+  label: string;
+  value: string;
+  confidence: number;
+  evidence_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+function mapPersonaRow(row: PersonaRow): PersonaProfile {
+  return {
+    userId: row.user_id,
+    displayName: row.display_name,
+    role: row.role,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapTraitRow(row: PersonaTraitRow): PersonaTrait {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    label: row.label,
+    value: row.value,
+    confidence: row.confidence,
+    evidenceCount: row.evidence_count,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 export function getOrCreatePersona(
   userId: string,
   displayName: string
@@ -13,9 +56,9 @@ export function getOrCreatePersona(
 
   const existing = db
     .prepare("SELECT * FROM personas WHERE user_id = ?")
-    .get(userId) as PersonaProfile | undefined;
+    .get(userId) as PersonaRow | undefined;
 
-  if (existing) return existing;
+  if (existing) return mapPersonaRow(existing);
 
   log.info({ userId, displayName }, "Creating new persona");
   db.prepare(
@@ -34,11 +77,12 @@ export function getOrCreatePersona(
 
 export function getTraits(userId: string): PersonaTrait[] {
   const db = getDb();
-  return db
+  const rows = db
     .prepare(
       "SELECT * FROM persona_traits WHERE user_id = ? ORDER BY confidence DESC"
     )
-    .all(userId) as PersonaTrait[];
+    .all(userId) as PersonaTraitRow[];
+  return rows.map(mapTraitRow);
 }
 
 export function upsertTrait(
@@ -49,11 +93,12 @@ export function upsertTrait(
   const db = getDb();
   const now = new Date().toISOString();
 
-  const existing = db
+  const existingRow = db
     .prepare(
       "SELECT * FROM persona_traits WHERE user_id = ? AND label = ? AND value = ?"
     )
-    .get(userId, label, value) as PersonaTrait | undefined;
+    .get(userId, label, value) as PersonaTraitRow | undefined;
+  const existing = existingRow ? mapTraitRow(existingRow) : undefined;
 
   if (existing) {
     const newConfidence = Math.min(
