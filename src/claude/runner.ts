@@ -61,6 +61,7 @@ export async function runClaude(
     });
 
     proc.on("close", (code) => {
+      clearTimeout(timer);
       const durationMs = Date.now() - start;
 
       if (code === 0) {
@@ -73,13 +74,16 @@ export async function runClaude(
     });
 
     proc.on("error", (err) => {
+      clearTimeout(timer);
       const durationMs = Date.now() - start;
       log.error({ err, durationMs }, "Failed to spawn Claude CLI");
       reject(err);
     });
 
-    // Timeout safety net
-    setTimeout(() => {
+    // Timeout safety net. Cleared on close/error so it never fires after the
+    // process has already settled (which would kill an exited PID and leave a
+    // dangling timer holding the event loop open).
+    const timer = setTimeout(() => {
       if (!proc.killed) {
         proc.kill("SIGTERM");
         reject(new Error(`Claude CLI timed out after ${TIMEOUT_MS}ms`));
