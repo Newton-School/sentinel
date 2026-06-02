@@ -19,11 +19,20 @@ import {
   shapeListResult,
 } from "./gmailList.js";
 import { paginate } from "./paginate.js";
+import { assertEnv } from "./requireEnv.js";
 
 /** Minimal shape of a Gmail message-list stub (id + threadId). */
 interface GmailMessageStub {
   id?: string | null;
 }
+
+// Validate required env up front so a misconfigured server fails with a clear
+// named message instead of constructing an OAuth client with undefined creds.
+assertEnv(
+  ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REFRESH_TOKEN"],
+  process.env,
+  { serverName: "gmail MCP server" }
+);
 
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;

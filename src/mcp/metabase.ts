@@ -16,6 +16,13 @@ import {
   mapDatabases,
   type MetabaseDataset,
 } from "./metabaseShape.js";
+import { assertEnv } from "./requireEnv.js";
+
+// Validate required env up front so a misconfigured server fails with a clear
+// named message instead of e.g. fetch('undefined/api/session') later.
+assertEnv(["METABASE_URL", "METABASE_USERNAME", "METABASE_PASSWORD"], process.env, {
+  serverName: "metabase MCP server",
+});
 
 // Build a single client from the environment. Auth + fetch (incl. the 401
 // re-auth retry guard) live in the side-effect-free metabaseClient module.

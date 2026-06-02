@@ -22,6 +22,13 @@ import {
 import { redactedHttpError } from "./httpError.js";
 import { fetchWithRetry } from "./httpRetry.js";
 import { paginate } from "./paginate.js";
+import { assertEnv } from "./requireEnv.js";
+
+// Validate required env up front so a misconfigured server fails with a clear
+// named message instead of sending `Bearer undefined` later.
+assertEnv(["SLACK_USER_TOKEN"], process.env, {
+  serverName: "slack-search MCP server",
+});
 
 const SLACK_USER_TOKEN = process.env.SLACK_USER_TOKEN!;
 
