@@ -12,6 +12,14 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { participantDisplayName, type MeetParticipant } from "./participantName.js";
+import {
+  mapConferences,
+  mapTranscripts,
+  shapeTranscriptEntry,
+  type ConferenceRecord,
+  type TranscriptRecord,
+  type RawTranscriptEntry,
+} from "./meetShape.js";
 
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
@@ -116,21 +124,10 @@ server.tool(
     if (filter) params.set("filter", filter);
 
     const data = (await meetFetch(`/conferenceRecords?${params.toString()}`)) as {
-      conferenceRecords?: Array<{
-        name: string;
-        startTime?: string;
-        endTime?: string;
-        space?: string;
-      }>;
+      conferenceRecords?: ConferenceRecord[];
     };
 
-    const conferences = (data.conferenceRecords ?? []).map((c) => ({
-      id: c.name?.split("/").pop(),
-      resourceName: c.name,
-      startTime: c.startTime,
-      endTime: c.endTime,
-      spaceName: c.space,
-    }));
+    const conferences = mapConferences(data.conferenceRecords ?? []);
 
     return {
       content: [
@@ -167,24 +164,10 @@ server.tool(
   },
   async ({ conference_id }) => {
     const data = (await meetFetch(`/conferenceRecords/${conference_id}/transcripts`)) as {
-      transcripts?: Array<{
-        name: string;
-        state?: string;
-        startTime?: string;
-        endTime?: string;
-        docsDestination?: { document?: string; exportUri?: string };
-      }>;
+      transcripts?: TranscriptRecord[];
     };
 
-    const transcripts = (data.transcripts ?? []).map((t) => ({
-      id: t.name?.split("/").pop(),
-      resourceName: t.name,
-      state: t.state,
-      startTime: t.startTime,
-      endTime: t.endTime,
-      driveDocumentId: t.docsDestination?.document,
-      driveDocumentUrl: t.docsDestination?.exportUri,
-    }));
+    const transcripts = mapTranscripts(data.transcripts ?? []);
 
     return {
       content: [
@@ -213,28 +196,18 @@ server.tool(
     const data = (await meetFetch(
       `/conferenceRecords/${conference_id}/transcripts/${transcript_id}/entries?${params.toString()}`
     )) as {
-      transcriptEntries?: Array<{
-        participant?: string;
-        text?: string;
-        languageCode?: string;
-        startTime?: string;
-        endTime?: string;
-      }>;
+      transcriptEntries?: RawTranscriptEntry[];
     };
 
     const entries = await Promise.all(
-      (data.transcriptEntries ?? []).map(async (e) => ({
+      (data.transcriptEntries ?? []).map(async (e) => {
         // Human-readable display name, resolved from the participant resource
         // (cached). Falls back to the raw resource name if it can't be resolved.
-        speaker: e.participant ? await resolveParticipantName(e.participant) : undefined,
-        // Raw participant resource name retained so nothing is lost.
-        participant: e.participant,
-        speakerId: e.participant,
-        text: e.text,
-        startTime: e.startTime,
-        endTime: e.endTime,
-        language: e.languageCode,
-      }))
+        const speaker = e.participant
+          ? await resolveParticipantName(e.participant)
+          : undefined;
+        return shapeTranscriptEntry(e, speaker);
+      })
     );
 
     return {
