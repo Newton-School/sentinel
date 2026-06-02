@@ -8,6 +8,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { assertReadOnlySql } from "./sqlReadOnly.js";
 
 const METABASE_URL = process.env.METABASE_URL!;
 const METABASE_USERNAME = process.env.METABASE_USERNAME!;
@@ -90,6 +91,24 @@ server.tool(
       .describe("Metabase database ID (default: 1)"),
   },
   async ({ sql, database_id }) => {
+    // Enforce read-only access at the tool boundary. The Claude CLI runs with
+    // --dangerously-skip-permissions, so a prompt-injected or hallucinated
+    // mutating statement must be rejected before it reaches the warehouse.
+    try {
+      assertReadOnlySql(sql);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: reason.startsWith("Rejected:") ? reason : `Rejected: ${reason}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
     const result = (await metabaseFetch("/api/dataset", {
       method: "POST",
       body: JSON.stringify({
