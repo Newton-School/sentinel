@@ -16,7 +16,8 @@
 
 import { chromium, type BrowserContext, type Page } from "playwright";
 import { join } from "node:path";
-import { existsSync, readdirSync, unlinkSync, statSync } from "node:fs";
+import { existsSync, readdirSync, unlinkSync, statSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { isValidMeetUrl, extractMeetingCode } from "./meetUrl.js";
 import { decideAction, parseStayMode, type StayMode } from "./modeDispatch.js";
 
@@ -30,7 +31,7 @@ interface JoinOptions {
   stayMode: StayMode;
 }
 
-function parseArgs(argv: string[]): JoinOptions {
+export function parseArgs(argv: string[]): JoinOptions {
   const meetUrl = argv[0];
   if (!meetUrl) {
     console.error(
@@ -427,8 +428,26 @@ async function waitForMeetingEnd(page: Page, maxDurationSec: number): Promise<vo
   console.log("[meet-bot] Max duration reached");
 }
 
-const opts = parseArgs(process.argv.slice(2));
-joinMeeting(opts).catch((err) => {
-  console.error("[meet-bot] Fatal:", err);
-  process.exit(1);
-});
+/**
+ * True when this module is being run directly as the entry script
+ * (`node dist/meet-bot/joiner.js` or `npx tsx src/meet-bot/joiner.ts`), as
+ * opposed to being imported (e.g. by a test). Guards the top-level run so
+ * importing the module to test `parseArgs` doesn't launch Chromium.
+ */
+function isMainModule(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
+  const opts = parseArgs(process.argv.slice(2));
+  joinMeeting(opts).catch((err) => {
+    console.error("[meet-bot] Fatal:", err);
+    process.exit(1);
+  });
+}
