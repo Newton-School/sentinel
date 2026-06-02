@@ -29,4 +29,12 @@ describe("Dockerfile runtime image", () => {
   it("keeps the builder stage on node:20-alpine", () => {
     expect(dockerfile).toMatch(/FROM node:20-alpine AS builder/);
   });
+
+  it("runs the runtime container as a non-root user", () => {
+    expect(dockerfile).toMatch(/^USER\s+(?!root)\S+/m);
+  });
+
+  it("chowns /app (or /app/data) so the non-root user can write the volume", () => {
+    expect(dockerfile).toMatch(/chown\s+(-R\s+)?\S+\s+\/app(\/data)?\b/);
+  });
 });

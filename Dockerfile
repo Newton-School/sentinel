@@ -20,6 +20,16 @@ RUN npm ci --omit=dev
 # Install Google Chrome stable for Playwright (joiner.ts uses channel: "chrome").
 RUN npx playwright install --with-deps chrome
 COPY --from=builder /app/dist ./dist
+# Run as the non-root user that ships with the Playwright base image (pwuser,
+# UID 1000). All root-requiring steps above (apt, global npm installs,
+# npm ci, playwright/Chrome install, COPY) stay as root; only the runtime
+# process drops privileges. Chrome is installed system-wide under
+# /opt/google/chrome (world-readable/executable), so pwuser can launch it.
+# Make /app — and especially the /app/data volume mount point where the
+# SQLite DB, persistent Chrome profile, and meet-bot logs are written —
+# owned by and writable for pwuser.
+RUN mkdir -p /app/data && chown -R pwuser:pwuser /app
+USER pwuser
 VOLUME ["/app/data"]
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
