@@ -2,6 +2,7 @@ import bolt from "@slack/bolt";
 const { App } = bolt;
 import { config } from "../config.js";
 import { createLogger } from "../logging/logger.js";
+import { createMessageDeduper } from "./dedupe.js";
 import type { SlackEventEnvelope } from "../types/contracts.js";
 
 const log = createLogger("slack");
@@ -92,6 +93,11 @@ export function normalizeSlashCommand(
   };
 }
 
+/** Stable per-event de-dupe key. Keyed on channel+ts to avoid cross-channel ts collisions. */
+function dedupeKey(envelope: SlackEventEnvelope): string {
+  return `${envelope.channelId}:${envelope.messageTs}`;
+}
+
 export function createSlackApp(handler: EventHandler) {
   const app = new App({
     token: config.SLACK_BOT_TOKEN,
@@ -99,6 +105,11 @@ export function createSlackApp(handler: EventHandler) {
     socketMode: true,
     logLevel: bolt.LogLevel.WARN,
   });
+
+  // Slack re-delivers events when a handler is slow (Claude can take up to
+  // 120s), so the same message can arrive multiple times. One deduper per app
+  // instance suppresses repeat processing of the same channel+ts.
+  const deduper = createMessageDeduper();
 
   // Handle @mentions
   app.event("app_mention", async ({ event, client }) => {
@@ -115,6 +126,14 @@ export function createSlackApp(handler: EventHandler) {
       ts: event.ts,
       thread_ts: event.thread_ts,
     });
+
+    if (!deduper.shouldProcess(dedupeKey(envelope))) {
+      log.warn(
+        { channelId: envelope.channelId, messageTs: envelope.messageTs },
+        "Duplicate mention delivery, ignoring"
+      );
+      return;
+    }
 
     await handler(envelope, client);
   });
@@ -134,6 +153,14 @@ export function createSlackApp(handler: EventHandler) {
     }
 
     const envelope = normalizeDmMessage(msg);
+
+    if (!deduper.shouldProcess(dedupeKey(envelope))) {
+      log.warn(
+        { channelId: envelope.channelId, messageTs: envelope.messageTs },
+        "Duplicate DM delivery, ignoring"
+      );
+      return;
+    }
 
     await handler(envelope, client);
   });
@@ -157,6 +184,14 @@ export function createSlackApp(handler: EventHandler) {
     });
 
     const envelope = normalizeSlashCommand(command, result.ts!);
+
+    if (!deduper.shouldProcess(dedupeKey(envelope))) {
+      log.warn(
+        { channelId: envelope.channelId, messageTs: envelope.messageTs },
+        "Duplicate slash command delivery, ignoring"
+      );
+      return;
+    }
 
     await handler(envelope, client);
   });
