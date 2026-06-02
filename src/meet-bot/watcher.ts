@@ -9,6 +9,12 @@ import {
   filterEventsToJoin,
   type CalendarEventLite,
 } from "./eventFilter.js";
+import {
+  markJoined,
+  getJoinedIds,
+  purgeJoined,
+  clearJoined,
+} from "./joinStore.js";
 
 const log = createLogger("meet-watcher");
 
@@ -20,13 +26,14 @@ const JOINER_SCRIPT = join(process.cwd(), "dist", "meet-bot", "joiner.js");
 const JOINER_SCRIPT_DEV = join(process.cwd(), "src", "meet-bot", "joiner.ts");
 const JOINER_LOG_DIR = join(process.cwd(), "data", "meet-bot-logs");
 
-// Track joined event IDs with a timestamp for TTL purging.
-// Exported so tests can inspect/seed dedup + TTL behavior.
-export const joinedAt = new Map<string, number>();
+// Joined event IDs are persisted in SQLite (joined_meetings table via
+// joinStore) so dedup survives process restarts — previously this was an
+// in-memory Map that was lost on restart, causing the watcher to re-join
+// in-progress meetings and spawn a second Chromium.
 
-/** Test helper: clears the in-memory join-dedup map. */
+/** Test helper: clears all persisted join-dedup rows. */
 export function resetJoinedAt(): void {
-  joinedAt.clear();
+  clearJoined();
 }
 
 /**
@@ -126,11 +133,12 @@ export async function runOnce(
   calendar: ReturnType<typeof google.calendar>
 ): Promise<void> {
   try {
-    purgeOldJoinedIds();
+    const nowMs = Date.now();
+    purgeOldJoinedIds(nowMs);
 
-    const now = new Date();
+    const now = new Date(nowMs);
     const timeMin = now.toISOString();
-    const timeMax = new Date(now.getTime() + LOOK_AHEAD_MS).toISOString();
+    const timeMax = new Date(nowMs + LOOK_AHEAD_MS).toISOString();
 
     const res = await calendar.events.list({
       calendarId: "primary",
@@ -143,8 +151,10 @@ export async function runOnce(
 
     const events: CalendarEventLite[] = mapCalendarEvents(res.data.items ?? []);
 
-    const joinedIds = new Set(joinedAt.keys());
-    const toJoin = filterEventsToJoin(events, now.getTime(), joinedIds);
+    // Read the persisted joined set within the TTL window so dedup survives
+    // restarts (rows older than the TTL were just purged above).
+    const joinedIds = getJoinedIds(nowMs - JOINED_TTL_MS);
+    const toJoin = filterEventsToJoin(events, nowMs, joinedIds);
 
     if (toJoin.length === 0) return;
 
@@ -159,7 +169,7 @@ export async function runOnce(
         "Launching bot for upcoming meeting"
       );
 
-      joinedAt.set(item.event.id, Date.now());
+      markJoined(item.event.id, nowMs);
       spawnJoiner(item.meetUrl, item.durationSec);
     }
   } catch (err) {
@@ -244,12 +254,10 @@ function spawnJoiner(meetUrl: string, durationSec: number): void {
 }
 
 /**
- * Removes join-dedup entries older than the 4h TTL. Exported (with an optional
- * `nowMs` for deterministic testing) so the purge can be driven without real time.
+ * Removes persisted join-dedup rows older than the 4h TTL. Exported (with an
+ * optional `nowMs` for deterministic testing) so the purge can be driven
+ * without real time.
  */
 export function purgeOldJoinedIds(nowMs: number = Date.now()): void {
-  const cutoff = nowMs - JOINED_TTL_MS;
-  for (const [id, ts] of joinedAt.entries()) {
-    if (ts < cutoff) joinedAt.delete(id);
-  }
+  purgeJoined(nowMs - JOINED_TTL_MS);
 }

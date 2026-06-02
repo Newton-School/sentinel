@@ -95,4 +95,27 @@ describe("database migrations", () => {
 
     closeDb();
   });
+
+  it("creates the joined_meetings table with the expected columns", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: { SQLITE_DB_PATH: ":memory:", LOG_LEVEL: "silent" },
+    }));
+
+    const { getDb, closeDb } = await import("../src/state/db.js");
+    const testDb = getDb();
+
+    const tables = testDb
+      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+      .all() as Array<{ name: string }>;
+    expect(tables.map((t) => t.name)).toContain("joined_meetings");
+
+    const columns = testDb.pragma(
+      "table_info(joined_meetings)"
+    ) as Array<{ name: string }>;
+    const columnNames = columns.map((c) => c.name);
+    expect(columnNames).toContain("event_id");
+    expect(columnNames).toContain("joined_at");
+
+    closeDb();
+  });
 });
