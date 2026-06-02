@@ -1,20 +1,36 @@
 # Sentinel
 
-Leadership data bot POC — Slack bot powered by Claude CLI with MCP tools for Metabase, GitHub, and Notion.
+Leadership data bot for Newton School — a Slack bot powered by the Claude CLI with
+MCP tools, plus a Playwright Google Meet auto-join + transcription pipeline.
+
+> **Full current-state map: see [`ARCHITECTURE.md`](ARCHITECTURE.md). Prioritized
+> backlog (incl. known P0 bugs): see [`TODO.md`](TODO.md).** The older `README.md`,
+> `PLAN.md`, and `SENTINEL_PRD_V1.md` describe the earlier 3-source POC and are stale.
 
 ## Build & Run
 
 - `npm run dev` — run in dev mode with tsx
-- `npm run build` — compile TypeScript
+- `npm run build` — compile TypeScript (required before `npm start`: MCP servers run from `dist/mcp/*.js`)
 - `npm start` — run compiled JS
 - `npm test` — run tests with vitest
+- `npm run meet-bot:setup` — one-time interactive Google sign-in for the Meet bot profile
+- `npm run meet-bot:join` — manually run the per-meeting Playwright joiner
 
 ## Architecture
 
 - **Slack Socket Mode** via @slack/bolt — handles mentions, DMs, slash commands
 - **Claude CLI** spawned as subprocess with `--mcp-config` for tool access
-- **MCP servers**: Metabase (custom), GitHub (@modelcontextprotocol/server-github), Notion (@modelcontextprotocol/server-notion)
+- **MCP servers** (up to 8, all gated on config presence): Metabase, Slack-search,
+  Gmail, Google Calendar, Meeting-transcripts, and Google Meet (all custom, in
+  `src/mcp/`), plus GitHub (`@modelcontextprotocol/server-github`) and Notion
+  (`@notionhq/notion-mcp-server`) via npx. There is **no** `src/mcp/github.ts` or
+  `src/mcp/notion.ts`.
+- **Meet bot** (`src/meet-bot/`): a calendar watcher polls every 60s and spawns a
+  detached Playwright Chrome joiner that joins meetings and enables Google's
+  server-side transcription; transcripts are later read back via the Meet/Transcripts
+  MCP servers.
 - **Persona system**: SQLite-backed per-user persona that evolves based on query patterns
+- **Health/deploy**: `/health` + `/ready` HTTP endpoints; Docker → AWS CodeBuild → ECR → K8s
 - **Module system**: ESM with NodeNext resolution — all imports use `.js` extensions
 
 ## Development Workflow (TDD)

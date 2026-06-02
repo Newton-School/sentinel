@@ -2,6 +2,16 @@
 ## Sentinel
 **Founder Intelligence Slackbot for Newton School**
 
+> **Reconciliation note (kept in sync with the shipped code):** Two framings in this
+> PRD have diverged from reality. (1) **Jira is NOT in v1** — it is aspirational; no Jira
+> connector or MCP server exists anywhere in `src/`. The implemented sources are Slack,
+> Gmail (email), Google Calendar, meeting transcripts (Google Meet API v2 + Drive/Docs),
+> Metabase, and GitHub. (2) The "no scheduled jobs / no proactive behavior" stance is no
+> longer strictly true: a background **calendar watcher** (`src/meet-bot/watcher.ts`) now
+> polls Google Calendar every 60s and auto-launches the Meet bot. The founder-facing Q&A
+> surface is still read-only and request-driven; this background watcher is the lone
+> proactive job. See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the current-state map.
+
 **Status:** Draft v1.0  
 **Owner:** TBD  
 **Users:** Founders only  
@@ -92,7 +102,10 @@ Sentinel v1 will not:
 - support company-wide access
 - automate decisions
 - take actions in external systems
-- send scheduled digests or proactive alerts
+- send scheduled digests or proactive alerts *(still true for the founder-facing Q&A
+  surface; note, however, that a background **calendar watcher** now runs as a scheduled
+  job — it polls every 60s and auto-launches the Meet bot. It is infrastructure for
+  transcript capture, not a founder-facing proactive alert.)*
 - replace dashboards as a primary analytics tool
 - guarantee complete coverage of every company system
 - serve as a compliance or audit tool
@@ -148,7 +161,7 @@ The initial product should be optimized around these six categories:
    - roadmap slippage
    - engineering blockers
    - launch risks
-   - unresolved Jira themes
+   - unresolved Jira themes *(aspirational — Jira is not connected in v1)*
    - execution drift between discussions and delivery
 
 5. **Finance**
@@ -168,14 +181,17 @@ The initial product should be optimized around these six categories:
 
 ## 8. v1 data sources
 
-The following systems are confirmed for v1:
-- Slack
-- email
-- meeting transcripts
-- calendar
-- Jira
-- Metabase
-- GitHub
+The following systems were originally listed as confirmed for v1. **Implementation
+status added inline** to match the shipped code:
+- Slack — **implemented** (custom `slack` MCP server, xoxp user token)
+- email — **implemented** (custom `gmail` MCP server, OAuth2)
+- meeting transcripts — **implemented** (custom `meeting-transcripts` + `google-meet`
+  MCP servers, plus the Playwright Meet bot that makes transcripts exist)
+- calendar — **implemented** (custom `google-calendar` MCP server)
+- ~~Jira~~ — **NOT in v1 (aspirational).** No Jira connector or MCP server exists in
+  `src/`. The Jira-specific routing examples below are forward-looking, not shipped.
+- Metabase — **implemented** (custom `metabase` MCP server)
+- GitHub — **implemented** (external `@modelcontextprotocol/server-github` via npx)
 
 ### Expected usage by source
 
@@ -203,7 +219,7 @@ The following systems are confirmed for v1:
 - meeting grouping and timeline context
 - mapping decisions to events
 
-**Jira**
+**Jira** *(aspirational — not implemented in v1; no connector exists in `src/`)*
 - initiative status
 - blockers
 - execution drift
@@ -330,11 +346,11 @@ Sentinel must classify incoming questions into one or more intent types such as:
 ## 11.3 Source routing
 Sentinel must decide which systems to query based on intent and topic.
 
-Examples:
+Examples *(Jira references are aspirational — not wired in v1)*:
 - placements question → Slack + email + transcripts + Metabase
-- product execution question → Jira + Slack + GitHub + meeting transcripts
+- product execution question → ~~Jira~~ + Slack + GitHub + meeting transcripts
 - finance question → Metabase + email + relevant Slack discussions
-- NST question → Slack + calendar + transcripts + Metabase + Jira where applicable
+- NST question → Slack + calendar + transcripts + Metabase ~~+ Jira where applicable~~
 
 ## 11.4 Evidence grounding
 - Important claims must be grounded in retrieved evidence
@@ -364,16 +380,20 @@ Examples:
 
 ### In scope
 - founders-only Slack Q&A
-- retrieval from Slack, email, meeting transcripts, calendar, Jira, Metabase, GitHub
+- retrieval from Slack, email, meeting transcripts, calendar, ~~Jira~~ (not implemented),
+  Metabase, GitHub
 - synthesized answers
 - raw evidence links where possible
 - read-only behavior
-- query logging and audit history
+- query logging and audit history *(implemented: `query_log` with `response_text`,
+  `response_duration_ms`, `sources_used`)*
 - basic conversational follow-up support
 
 ### Out of scope
-- proactive alerts
-- scheduled summaries
+- proactive alerts (founder-facing)
+- ~~scheduled summaries~~ / scheduled jobs *(a background **calendar watcher** scheduled
+  job now exists — polls every 60s to auto-launch the Meet bot for transcript capture;
+  it produces no founder-facing summaries)*
 - task generation
 - action-taking in source systems
 - broad employee rollout
@@ -497,12 +517,12 @@ This separation is critical to trust.
    - answer generation
    - audit logging
 
-3. **Connector layer**
+3. **Connector layer** (shipped as Claude-CLI MCP servers — see `src/mcp/`)
    - Slack
-   - email
-   - meeting transcript system
-   - calendar
-   - Jira
+   - email (Gmail)
+   - meeting transcript system (Google Meet API v2 + Drive/Docs)
+   - calendar (Google Calendar)
+   - ~~Jira~~ — *not implemented in v1*
    - Metabase
    - GitHub
 
@@ -536,7 +556,7 @@ This separation is critical to trust.
 - Slack DM experience
 - founders-only access control
 - support the six priority categories
-- integrate Slack, email, meeting transcripts, calendar, Jira, Metabase, GitHub
+- integrate Slack, email, meeting transcripts, calendar, ~~Jira~~ (deferred), Metabase, GitHub
 - deliver grounded Q&A answers with evidence links where possible
 - implement query and audit logging
 

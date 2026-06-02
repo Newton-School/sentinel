@@ -188,6 +188,17 @@ This blocks the PRD v1 requirement that Sentinel answer leadership questions usi
 
 **End-to-end verified April 21, 2026:** Bot joined as authenticated Sentinel, user spoke the phrase "yellow tennis ball" into the meeting, Meet API returned the transcript containing that exact phrase.
 
+> **Stay-mode note (current behavior):** the diagram above shows the original
+> *stay-until-end* flow (steps 7–8: stay in the call, poll the Leave button, exit when the
+> meeting ends). The joiner later gained a `--stay-mode` flag with three modes —
+> `leave-after-join` (join → enable transcription → leave immediately; the memory-saving
+> joiner-CLI default), `stay-until-end` (the legacy flow shown here), and `hybrid`. **In
+> production the watcher hardcodes `--stay-mode stay-until-end`** (the PR #17 revert —
+> intentional), so the live bot stays for the full call; `leave-after-join` is available
+> only when invoking `npm run meet-bot:join` by hand. Because transcription is server-side,
+> either mode yields the same transcript via the Meet API. See `src/meet-bot/modeDispatch.ts`
+> and `src/meet-bot/watcher.ts`.
+
 ---
 
 ## Key learnings
@@ -210,7 +221,16 @@ This blocks the PRD v1 requirement that Sentinel answer leadership questions usi
 
 ## What's still missing for production
 
-1. **Calendar watcher.** A background job that polls Google Calendar every 5 min and auto-launches the bot for upcoming meetings where Sentinel is invited. Currently the bot is invoked manually with a Meet URL.
+> **Update:** item 1 below (the calendar watcher) has since been **built** —
+> `src/meet-bot/watcher.ts` polls the calendar every **60s** (not 5 min) and spawns a
+> detached joiner per eligible meeting. It is started automatically by `npm start`. The
+> remaining items (2–6) are still open. See [`ARCHITECTURE.md`](../ARCHITECTURE.md) and
+> [`TODO.md`](../TODO.md).
+
+1. **Calendar watcher.** ~~Currently the bot is invoked manually with a Meet URL.~~
+   **DONE** — `src/meet-bot/watcher.ts` polls Google Calendar every 60s, filters eligible
+   events (via `eventFilter.ts`/`meetUrl.ts`), and auto-launches a detached joiner. The
+   manual `npm run meet-bot:join <url>` path still exists for one-off joins.
 
 2. **K8s deployment.** Running real Chrome in a container requires additional setup:
    - Install Chrome in the Docker image (or use a Chrome base image)
@@ -235,7 +255,7 @@ This blocks the PRD v1 requirement that Sentinel answer leadership questions usi
 | `src/mcp/meet.ts` | Google Meet API v2 MCP server (4 tools) |
 | `src/meet-bot/meetUrl.ts` | URL parsing utilities |
 | `src/meet-bot/setup.ts` | One-time manual-login setup script |
-| `src/meet-bot/joiner.ts` | Main Puppeteer-style bot that joins calls |
+| `src/meet-bot/joiner.ts` | Main **Playwright** (real Chrome via `channel: 'chrome'`) bot that joins calls |
 | `scripts/google-auth.js` | OAuth flow to obtain refresh token with all scopes |
 | `scripts/test-oauth.js` | Diagnostic script for verifying OAuth credentials |
 | `src/claude/mcpConfig.ts` | Registers `google-meet` MCP server |

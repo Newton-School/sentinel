@@ -293,7 +293,10 @@ function spawnJoiner(meetUrl: string, durationSec: number): void {
     useTsx,
     devScript: JOINER_SCRIPT_DEV,
     prodScript: JOINER_SCRIPT,
-    // PR #17: the watcher always hardcodes stay-until-end.
+    // PR #17 (revert e53eb54): production always hardcodes stay-until-end. This
+    // intentionally overrides the joiner CLI's leave-after-join default (see
+    // modeDispatch.ts) so the live bot stays for the full call. Docs-only change
+    // would never touch this line; the value is load-bearing production behavior.
     stayMode: "stay-until-end",
   });
 

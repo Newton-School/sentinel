@@ -1,5 +1,12 @@
 # Sentinel — Leadership Data Bot POC
 
+> **This is the ORIGINAL POC plan and is partly stale.** It captures the initial
+> three-source design (Metabase + GitHub + Notion). The shipped system has grown
+> well beyond it: up to **8 MCP servers**, a Playwright Google Meet bot driven by a
+> calendar watcher, a health server, and an audit log. For the current architecture
+> see [`ARCHITECTURE.md`](ARCHITECTURE.md) (source of truth) and the backlog in
+> [`TODO.md`](TODO.md). Sections below are annotated where they diverge from reality.
+
 ## Context
 
 miniOG serves developers via Slack with code workflows. Founders and leaders need a similar AI assistant but focused on **business data, org health, and strategic insights** — pulling from Metabase (SQL analytics), GitHub (engineering activity), and Notion (docs/projects). The bot maintains an evolving persona per user so responses adapt to what each leader cares about.
@@ -8,12 +15,20 @@ miniOG serves developers via Slack with code workflows. Founders and leaders nee
 - **Name**: Sentinel
 - **Location**: Separate repo at `~/code/sentinel/`
 - **AI**: Claude Code CLI (subprocess spawn, same pattern as miniOG)
-- **Data sources**: Metabase + GitHub + Notion (all three in POC)
-- **Deployment**: Docker on EC2
+- **Data sources (POC)**: Metabase + GitHub + Notion. **Now shipped:** up to 8 MCP
+  servers — custom (in `src/mcp/`): Metabase, Slack-search, Gmail, Google Calendar,
+  Meeting-transcripts, Google Meet (API v2); plus GitHub (`@modelcontextprotocol/server-github`)
+  and Notion (`@notionhq/notion-mcp-server`) via npx. All are optional and gated on config.
+- **Deployment**: ~~Docker on EC2~~ → **Docker → AWS CodeBuild → ECR → Kubernetes** (current).
 
 ---
 
 ## Directory Structure
+
+> **Updated to reflect the shipped tree.** The original POC plan listed
+> `src/mcp/github.ts` and `src/mcp/notion.ts` — these were never written; GitHub and
+> Notion run as external npx packages, not custom MCP servers. Six custom MCP servers
+> live in `src/mcp/`, plus a whole `src/meet-bot/` pipeline and `src/health/`.
 
 ```
 sentinel/
@@ -21,36 +36,52 @@ sentinel/
 ├── .gitignore
 ├── Dockerfile
 ├── docker-compose.yml
+├── buildspec.yml                   # AWS CodeBuild CI pipeline
 ├── package.json
 ├── tsconfig.json
-├── CLAUDE.md
+├── vitest.config.ts
+├── CLAUDE.md / ARCHITECTURE.md / TODO.md
+├── scripts/
+│   ├── google-auth.js              # Mint GOOGLE_REFRESH_TOKEN (OAuth helper, 5 scopes)
+│   └── test-oauth.js               # Validate Google OAuth credentials/scopes
 ├── src/
-│   ├── index.ts                    # Entry: bootstrap, start Slack client, wire handlers
+│   ├── index.ts                    # Entry: bootstrap DB + MCP config + health server + Meet watcher + Slack app
 │   ├── config.ts                   # .env loader with Zod validation
 │   ├── slack/
 │   │   ├── socketClient.ts         # @slack/bolt Socket Mode (adapted from sidecar)
-│   │   └── threadContext.ts        # Fetch thread replies for conversation context
+│   │   ├── threadContext.ts        # Fetch thread replies for conversation context
+│   │   └── formatters.ts           # Markdown → Slack mrkdwn
 │   ├── claude/
 │   │   ├── runner.ts               # Spawn `claude` CLI subprocess with prompt + tools
 │   │   ├── systemPrompt.ts         # System prompt builder with persona injection
-│   │   └── mcpConfig.ts            # Generate MCP server config for Claude CLI
-│   ├── mcp/
+│   │   └── mcpConfig.ts            # Generate MCP server config for Claude CLI (up to 8 servers)
+│   ├── mcp/                        # Custom stdio MCP servers (GitHub/Notion are npx, NOT here):
 │   │   ├── metabase.ts             # Metabase API client (session auth, SQL queries, dashboards)
-│   │   ├── github.ts               # GitHub API client (PRs, issues, repo activity)
-│   │   └── notion.ts               # Notion API client (search pages, read content)
+│   │   ├── slack.ts                # Slack-search server (xoxp user token)
+│   │   ├── gmail.ts                # Gmail read (OAuth2)
+│   │   ├── calendar.ts             # Google Calendar read (OAuth2)
+│   │   ├── transcripts.ts          # Meeting transcripts via Drive + Docs (OAuth2)
+│   │   └── meet.ts                 # Google Meet REST API v2 (OAuth2)
+│   ├── meet-bot/                   # Playwright Google Meet auto-join pipeline:
+│   │   ├── watcher.ts              # Calendar poll loop (every 60s) → spawns joiners
+│   │   ├── joiner.ts               # Per-meeting Playwright Chrome joiner (CLI)
+│   │   ├── eventFilter.ts          # Decide which calendar events to join
+│   │   ├── modeDispatch.ts         # leave-after-join / stay-until-end / hybrid
+│   │   ├── meetUrl.ts              # Meet URL parsing
+│   │   └── setup.ts                # One-time interactive Google sign-in
 │   ├── persona/
 │   │   ├── store.ts                # SQLite CRUD for personas + traits
 │   │   ├── tracker.ts              # Analyze queries, evolve persona traits
 │   │   └── types.ts                # Persona type definitions
 │   ├── state/
 │   │   └── db.ts                   # SQLite setup, WAL mode, migrations
+│   ├── health/
+│   │   └── server.ts               # /health (liveness) + /ready (readiness) HTTP endpoints
 │   ├── logging/
 │   │   └── logger.ts               # Pino structured logger
 │   └── types/
 │       └── contracts.ts            # Shared types (SlackEventEnvelope, etc.)
-└── tests/
-    ├── persona.test.ts
-    └── config.test.ts
+└── tests/                          # vitest suite (45 files, 526 tests)
 ```
 
 ---
@@ -69,11 +100,13 @@ sentinel/
 - `.env.example` with all required env vars
 - `.gitignore` (node_modules, dist, .env, *.db)
 
-**Key env vars:**
+**Key env vars** (POC set shown; the shipped `.env.example` adds Slack-user, Google
+Workspace, and health-port vars — see that file for the authoritative list):
 ```
 SLACK_BOT_TOKEN=
 SLACK_APP_TOKEN=
 BOT_USER_ID=
+SLACK_USER_TOKEN=              # xoxp user token for cross-channel Slack search MCP
 CLAUDE_BIN=claude              # Path to claude CLI binary
 ANTHROPIC_API_KEY=             # Passed to claude CLI env
 METABASE_URL=
@@ -81,6 +114,10 @@ METABASE_USERNAME=
 METABASE_PASSWORD=
 GITHUB_TOKEN=
 NOTION_API_KEY=
+GOOGLE_CLIENT_ID=             # OAuth2 for Gmail/Calendar/Transcripts/Meet MCP servers
+GOOGLE_CLIENT_SECRET=
+GOOGLE_REFRESH_TOKEN=         # Must include the 5 scopes google-auth.js requests
+HEALTH_CHECK_PORT=8080
 SQLITE_DB_PATH=./sentinel.db
 ALLOWED_USER_IDS=              # Comma-separated Slack user IDs
 LOG_LEVEL=info
@@ -119,7 +156,7 @@ CREATE TABLE persona_traits (
   UNIQUE(user_id, label, value)
 );
 
--- Query log for persona evolution
+-- Query log for persona evolution + audit trail
 CREATE TABLE query_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT NOT NULL,
@@ -127,9 +164,18 @@ CREATE TABLE query_log (
   thread_ts TEXT NOT NULL,
   query_text TEXT NOT NULL,
   category TEXT,                     -- 'revenue', 'engineering', 'product', 'team', 'general'
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  -- Audit columns added via guarded ALTERs in src/state/db.ts:
+  response_text TEXT,                -- the answer Sentinel returned
+  response_duration_ms INTEGER,      -- end-to-end latency of the Claude run
+  sources_used TEXT                  -- JSON list of data sources touched (written, not yet read back)
 );
+-- A joined_meetings table also exists (Meet-watcher join dedup; survives restarts).
 ```
+
+> **Note:** the shipped migrations also add the three audit columns above and a
+> `joined_meetings` dedup table, plus indexes on `query_log(user_id, created_at)` and a
+> 90-day retention prune. See `src/state/db.ts`.
 
 ### Step 4: Slack Socket Mode client
 - **`src/slack/socketClient.ts`**: Adapted from `sidecar/src/slack/socketClient.ts`
@@ -166,19 +212,25 @@ Since we're using Claude CLI with `--mcp-config`, the MCP servers need to be eit
 
 **For POC, we'll use a hybrid approach:**
 
+> **What actually shipped:** Metabase and all Google/Slack servers are **custom**
+> stdio servers in `src/mcp/` (run from `dist/mcp/*.js`). GitHub and Notion are
+> **external npx packages** — there is **no** `src/mcp/github.ts` or `src/mcp/notion.ts`.
+> Notion uses `@notionhq/notion-mcp-server` (NOT `@modelcontextprotocol/server-notion`),
+> wired via an `OPENAPI_MCP_HEADERS` env var carrying a `Bearer` token, not `NOTION_API_KEY`.
+
 - **`src/mcp/metabase.ts`**: Lightweight MCP server (stdio-based) that wraps Metabase REST API
-  - Tools: `metabase_query` (run SQL), `metabase_get_question` (saved question), `metabase_list_dashboards`
+  - Tools: `metabase_query` (run SQL), `metabase_get_question` (saved question), `metabase_list_dashboards`, `metabase_list_databases`
   - Auth: Session-based (POST `/api/session`)
 
-- **`src/mcp/github.ts`**: Use the existing `@modelcontextprotocol/server-github` package if available, or write a thin wrapper
-  - Tools: `list_prs`, `repo_activity`, `get_issues`, `search_repos`
-  - Auth: `GITHUB_TOKEN`
+- **GitHub**: external `@modelcontextprotocol/server-github` via `npx -y`
+  - Auth: `GITHUB_PERSONAL_ACCESS_TOKEN` (from `GITHUB_TOKEN`)
 
-- **`src/mcp/notion.ts`**: Use `@modelcontextprotocol/server-notion` if available, or write a thin wrapper
-  - Tools: `search_pages`, `read_page`, `query_database`
-  - Auth: `NOTION_API_KEY`
+- **Notion**: external `@notionhq/notion-mcp-server` via `npx -y`
+  - Auth: `OPENAPI_MCP_HEADERS` = JSON with `Authorization: Bearer <NOTION_API_KEY>` + `Notion-Version`
 
-**MCP config structure** (passed to `claude --mcp-config`):
+**MCP config structure as actually generated** (passed to `claude --mcp-config`; see
+`src/claude/mcpConfig.ts` for the full set of up to 8 servers — metabase, github, notion,
+slack-search, gmail, google-calendar, meeting-transcripts, google-meet):
 ```json
 {
   "mcpServers": {
@@ -194,8 +246,8 @@ Since we're using Claude CLI with `--mcp-config`, the MCP servers need to be eit
     },
     "notion": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-notion"],
-      "env": { "NOTION_API_KEY": "..." }
+      "args": ["-y", "@notionhq/notion-mcp-server"],
+      "env": { "OPENAPI_MCP_HEADERS": "{\"Authorization\":\"Bearer ...\",\"Notion-Version\":\"2022-06-28\"}" }
     }
   }
 }
@@ -228,7 +280,7 @@ Since we're using Claude CLI with `--mcp-config`, the MCP servers need to be eit
    i. Track query for persona evolution
 ```
 
-No job queue needed — queries take 10-30s, simple async handler with concurrency limit (semaphore of 3).
+No job queue needed for the Q&A path — queries take 10-30s, simple async handler with concurrency limit (semaphore of 3). *(The Meet bot is a separate concern: a calendar watcher started by `index.ts` polls every 60s and spawns detached joiner subprocesses — see `src/meet-bot/`.)*
 
 ### Step 9: Docker + EC2 deployment
 - **`Dockerfile`**: Multi-stage build (builder + runtime)
@@ -288,15 +340,36 @@ CMD ["node", "dist/index.js"]
 - Access control (allowed user IDs)
 - Eyes/checkmark reaction UX
 
-**Deferred to v2:**
-- Proactive insights (daily digests, anomaly alerts)
+**Deferred to v2 (original plan):**
+- Proactive insights (daily digests, anomaly alerts) — *partly superseded:* there is now a
+  background **calendar watcher** (`src/meet-bot/watcher.ts`) that polls every 60s and
+  auto-launches the Meet bot, so the "no scheduled jobs" framing no longer holds.
 - Rich Slack Block Kit messages (charts, tables)
 - Persona decay logic
 - Slash command subcommands (`/sentinel persona`, `/sentinel status`)
 - Rate limiting / cost tracking
-- Health check endpoint
-- Comprehensive test suite
+- ~~Health check endpoint~~ — **DONE.** `src/health/server.ts` serves `/health` (liveness)
+  and `/ready` (readiness, gated on Slack + a SQLite `SELECT 1`); the Docker HEALTHCHECK
+  hits `/health`.
+- Comprehensive test suite — partially done (45 test files; helpers covered, several
+  modules still untested)
 - Cross-thread conversation memory
+
+**Shipped beyond the original POC plan:**
+- **Five more MCP servers** beyond Metabase/GitHub/Notion: Slack-search, Gmail, Google
+  Calendar, Meeting-transcripts, and Google Meet (API v2) — all custom, in `src/mcp/`.
+- **Playwright Google Meet bot** (`src/meet-bot/`): the calendar watcher polls every 60s,
+  filters eligible events, and spawns a **detached** Playwright Chrome joiner per meeting.
+  The joiner joins muted, enables Google's server-side transcription, then leaves or stays
+  (see stay-mode note below). Transcripts are read back later via the Meet/Transcripts MCP
+  servers. One-time sign-in via `npm run meet-bot:setup`; manual join via `npm run meet-bot:join`.
+  > **Stay-mode (production):** the watcher hardcodes `--stay-mode stay-until-end` (the PR #17
+  > revert — intentional for production), so the live bot stays for the full call. The
+  > memory-saving `leave-after-join` mode is the default *of the joiner CLI* and remains
+  > available when running `meet-bot:join` by hand; `hybrid` is also available.
+- **Audit log**: `query_log` now records `response_text`, `response_duration_ms`, and
+  `sources_used` for every interaction (90-day retention).
+- **Health server** as above.
 
 ---
 
