@@ -30,9 +30,13 @@ vi.mock("../src/config.js", () => ({
 
 // Avoid touching the filesystem in mcpConfig.getMcpConfigPath(); return a
 // deterministic path so we can assert it shows up in the spawn args.
+// removeMcpConfig is stubbed too — runner.ts calls it in the close/error
+// handlers to clean up that spawn's per-request config file.
 const MCP_CONFIG_PATH = "/tmp/test-mcp-config.json";
+const removeMcpConfigMock = vi.fn();
 vi.mock("../src/claude/mcpConfig.js", () => ({
   getMcpConfigPath: vi.fn(() => MCP_CONFIG_PATH),
+  removeMcpConfig: removeMcpConfigMock,
 }));
 
 // A controllable fake child process. It is an EventEmitter (so it can emit
@@ -218,6 +222,41 @@ describe("runClaude", () => {
       child.emit("error", spawnError);
 
       await expect(promise).rejects.toThrow("ENOENT: claude not found");
+    });
+  });
+
+  describe("per-spawn mcp-config cleanup", () => {
+    it("removes this spawn's mcp-config file on a successful close", async () => {
+      const { runClaude } = await import("../src/claude/runner.js");
+
+      const promise = runClaude("sys", "msg");
+      // Not removed before the CLI has finished reading it.
+      expect(removeMcpConfigMock).not.toHaveBeenCalled();
+
+      child.emit("close", 0);
+      await promise;
+
+      expect(removeMcpConfigMock).toHaveBeenCalledWith(MCP_CONFIG_PATH);
+    });
+
+    it("removes this spawn's mcp-config file on a non-zero close", async () => {
+      const { runClaude } = await import("../src/claude/runner.js");
+
+      const promise = runClaude("sys", "msg");
+      child.emit("close", 1);
+
+      await expect(promise).rejects.toThrow();
+      expect(removeMcpConfigMock).toHaveBeenCalledWith(MCP_CONFIG_PATH);
+    });
+
+    it("removes this spawn's mcp-config file when spawn errors", async () => {
+      const { runClaude } = await import("../src/claude/runner.js");
+
+      const promise = runClaude("sys", "msg");
+      child.emit("error", new Error("spawn failed"));
+
+      await expect(promise).rejects.toThrow();
+      expect(removeMcpConfigMock).toHaveBeenCalledWith(MCP_CONFIG_PATH);
     });
   });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
-import { readFileSync, mkdtempSync, rmSync, statSync, existsSync } from "node:fs";
+import { readFileSync, mkdtempSync, rmSync, statSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -465,38 +465,73 @@ describe("mcp-config secret file permissions and cleanup", () => {
     expect(mode).toBe(0o600);
   });
 
-  it("keeps 0600 permissions when the config file is regenerated (overwrite)", async () => {
+  it("returns a UNIQUE path per call, each existing with 0600 permissions", async () => {
     mockConfigWithCreds();
 
     const { getMcpConfigPath } = await import("../src/claude/mcpConfig.js");
 
-    // First write creates the file.
+    // Each call must yield a distinct file so that a write racing the Claude
+    // CLI's read of a previous spawn's file can't produce a torn/partial JSON.
     const firstPath = getMcpConfigPath();
-    expect(statSync(firstPath).mode & 0o777).toBe(0o600);
-
-    // Second write overwrites an existing file. writeFileSync's `mode`
-    // option is ignored when the file already exists, so this guards the
-    // "mode only applies on create" footgun.
     const secondPath = getMcpConfigPath();
-    expect(secondPath).toBe(firstPath);
+
+    expect(secondPath).not.toBe(firstPath);
+
+    // Both files exist with owner-only (0600) perms.
+    expect(existsSync(firstPath)).toBe(true);
+    expect(existsSync(secondPath)).toBe(true);
+    expect(statSync(firstPath).mode & 0o777).toBe(0o600);
     expect(statSync(secondPath).mode & 0o777).toBe(0o600);
   });
 
-  it("cleanupMcpConfig removes the config file, and is a no-op when absent", async () => {
+  it("removeMcpConfig deletes a specific file, and is a no-op when absent", async () => {
+    mockConfigWithCreds();
+
+    const { getMcpConfigPath, removeMcpConfig } = await import(
+      "../src/claude/mcpConfig.js"
+    );
+
+    const pathA = getMcpConfigPath();
+    const pathB = getMcpConfigPath();
+    expect(existsSync(pathA)).toBe(true);
+    expect(existsSync(pathB)).toBe(true);
+
+    // Removing one path leaves the other untouched.
+    removeMcpConfig(pathA);
+    expect(existsSync(pathA)).toBe(false);
+    expect(existsSync(pathB)).toBe(true);
+
+    // Calling again on the already-removed path must not throw.
+    expect(() => removeMcpConfig(pathA)).not.toThrow();
+    expect(existsSync(pathA)).toBe(false);
+  });
+
+  it("cleanupMcpConfig removes ALL mcp-config*.json files in the tmpdir", async () => {
     mockConfigWithCreds();
 
     const { getMcpConfigPath, cleanupMcpConfig } = await import(
       "../src/claude/mcpConfig.js"
     );
 
-    const configPath = getMcpConfigPath();
-    expect(existsSync(configPath)).toBe(true);
+    // Generate several per-spawn config files.
+    const paths = [getMcpConfigPath(), getMcpConfigPath(), getMcpConfigPath()];
+    for (const p of paths) {
+      expect(existsSync(p)).toBe(true);
+    }
 
     cleanupMcpConfig();
-    expect(existsSync(configPath)).toBe(false);
 
-    // Calling again when the file is already gone must not throw.
+    // Every per-spawn file is gone...
+    for (const p of paths) {
+      expect(existsSync(p)).toBe(false);
+    }
+    // ...and no mcp-config*.json orphans remain in the tmpdir.
+    const remaining = readdirSync(TEST_MCP_DIR).filter(
+      (f) => f.startsWith("mcp-config") && f.endsWith(".json")
+    );
+    expect(remaining).toHaveLength(0);
+
+    // Calling again when nothing is left must not throw.
     expect(() => cleanupMcpConfig()).not.toThrow();
-    expect(existsSync(configPath)).toBe(false);
   });
 });
