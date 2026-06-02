@@ -4,7 +4,9 @@ import {
   chmodSync,
   rmSync,
   existsSync,
+  readdirSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { config } from "../config.js";
@@ -13,18 +15,17 @@ import { createLogger } from "../logging/logger.js";
 const log = createLogger("mcp-config");
 
 /**
- * Resolves the on-disk path of the MCP config file. This file contains every
- * MCP server's plaintext credentials (Metabase password, GitHub token, Notion
- * bearer header, Slack user token, Google client secret + refresh token), so it
- * is written with owner-only (0600) perms and cleaned up on shutdown.
+ * Resolves the tmpdir that holds per-spawn MCP config files. Each file contains
+ * every MCP server's plaintext credentials (Metabase password, GitHub token,
+ * Notion bearer header, Slack user token, Google client secret + refresh
+ * token), so each is written with owner-only (0600) perms, removed by the spawn
+ * that created it, and swept on shutdown.
  *
  * Namespaced by SENTINEL_MCP_TMPDIR (set in tests) so test runs can't clobber a
- * production mcp-config.json in the shared tmpdir.
+ * production tmpdir.
  */
-function resolveConfigPath(): string {
-  const dir =
-    process.env.SENTINEL_MCP_TMPDIR ?? join(tmpdir(), "sentinel-mcp");
-  return join(dir, "mcp-config.json");
+function resolveConfigDir(): string {
+  return process.env.SENTINEL_MCP_TMPDIR ?? join(tmpdir(), "sentinel-mcp");
 }
 
 interface McpServerConfig {
@@ -38,10 +39,13 @@ interface McpConfig {
 }
 
 export function getMcpConfigPath(): string {
-  // No cache: always regenerate from current config so env var changes
-  // propagate to MCP servers on restart without manual file cleanup.
-  const configPath = resolveConfigPath();
-  mkdirSync(join(configPath, ".."), { recursive: true });
+  // Unique path per call: with MAX_CONCURRENT spawns sharing one tmpdir, a
+  // write racing the Claude CLI's read of a fixed-path file could yield torn
+  // JSON. A fresh randomUUID-named file per spawn removes that race; the
+  // caller removes its own file once the CLI has finished reading it.
+  const dir = resolveConfigDir();
+  mkdirSync(dir, { recursive: true });
+  const configPath = join(dir, `mcp-config-${randomUUID()}.json`);
 
   const mcpConfig: McpConfig = {
     mcpServers: {},
@@ -156,9 +160,8 @@ export function getMcpConfigPath(): string {
   }
 
   // This file holds plaintext credentials for every MCP server, so write it
-  // owner-only. writeFileSync's `mode` only applies when the file is created;
-  // since we regenerate on every run, chmod explicitly to enforce 0600 even
-  // when overwriting an existing (possibly world-readable) file.
+  // owner-only. writeFileSync's `mode` applies on create (each path is fresh);
+  // chmod explicitly too, in case a name ever collides with an existing file.
   writeFileSync(configPath, JSON.stringify(mcpConfig, null, 2), { mode: 0o600 });
   chmodSync(configPath, 0o600);
   log.info({ path: configPath, servers: Object.keys(mcpConfig.mcpServers) }, "Wrote MCP config");
@@ -167,15 +170,35 @@ export function getMcpConfigPath(): string {
 }
 
 /**
- * Removes the MCP config file (which contains plaintext credentials) if it
- * exists. Safe to call when the file is absent — does not throw. Wired into
- * graceful shutdown so secrets don't linger in the tmpdir.
+ * Removes a single per-spawn MCP config file (which contains plaintext
+ * credentials). Safe to call when the file is already gone — does not throw.
+ * Each Claude spawn calls this for its own path once the CLI has finished
+ * reading it, so secrets don't linger in the tmpdir between requests.
+ */
+export function removeMcpConfig(path: string): void {
+  if (existsSync(path)) {
+    rmSync(path, { force: true });
+    log.info({ path }, "Removed MCP config");
+  }
+}
+
+/**
+ * Sweeps ALL mcp-config*.json files from the tmpdir. Wired into graceful
+ * shutdown so any orphaned per-spawn files (including the one generated at
+ * startup) are removed and secrets don't linger. Safe to call when the dir is
+ * absent or empty — does not throw.
  */
 export function cleanupMcpConfig(): void {
-  const configPath = resolveConfigPath();
-  if (existsSync(configPath)) {
-    rmSync(configPath, { force: true });
-    log.info({ path: configPath }, "Removed MCP config");
+  const dir = resolveConfigDir();
+  if (!existsSync(dir)) {
+    return;
+  }
+  for (const entry of readdirSync(dir)) {
+    if (entry.startsWith("mcp-config") && entry.endsWith(".json")) {
+      const path = join(dir, entry);
+      rmSync(path, { force: true });
+      log.info({ path }, "Removed MCP config");
+    }
   }
 }
 

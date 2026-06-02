@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { config } from "../config.js";
 import { createLogger } from "../logging/logger.js";
-import { getMcpConfigPath } from "./mcpConfig.js";
+import { getMcpConfigPath, removeMcpConfig } from "./mcpConfig.js";
 import type { ClaudeResponse } from "../types/contracts.js";
 
 const log = createLogger("claude-runner");
@@ -62,6 +62,9 @@ export async function runClaude(
 
     proc.on("close", (code) => {
       clearTimeout(timer);
+      // The CLI has exited, so it's done reading the config; remove this
+      // spawn's per-request file so its plaintext credentials don't linger.
+      removeMcpConfig(mcpConfigPath);
       const durationMs = Date.now() - start;
 
       if (code === 0) {
@@ -75,6 +78,8 @@ export async function runClaude(
 
     proc.on("error", (err) => {
       clearTimeout(timer);
+      // Spawn failed/errored; clean up this spawn's per-request config file.
+      removeMcpConfig(mcpConfigPath);
       const durationMs = Date.now() - start;
       log.error({ err, durationMs }, "Failed to spawn Claude CLI");
       reject(err);
