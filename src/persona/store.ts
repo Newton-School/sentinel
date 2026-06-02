@@ -54,25 +54,23 @@ export function getOrCreatePersona(
   const db = getDb();
   const now = new Date().toISOString();
 
-  const existing = db
-    .prepare("SELECT * FROM personas WHERE user_id = ?")
-    .get(userId) as PersonaRow | undefined;
-
-  if (existing) return mapPersonaRow(existing);
-
-  log.info({ userId, displayName }, "Creating new persona");
+  // Idempotent upsert: guarantees a row exists without ever throwing on a
+  // concurrent/duplicate first-time insert (personas.user_id is the PK).
+  // DO NOTHING preserves an existing row's display_name/role/timestamps.
   db.prepare(
     `INSERT INTO personas (user_id, display_name, role, created_at, updated_at)
-     VALUES (?, ?, NULL, ?, ?)`
+     VALUES (?, ?, NULL, ?, ?)
+     ON CONFLICT(user_id) DO NOTHING`
   ).run(userId, displayName, now, now);
 
-  return {
-    userId,
-    displayName,
-    role: null,
-    createdAt: now,
-    updatedAt: now,
-  };
+  // Always read back through the mapping layer so we return the canonical
+  // row (which, on conflict, is the pre-existing one — not our values).
+  const row = db
+    .prepare("SELECT * FROM personas WHERE user_id = ?")
+    .get(userId) as PersonaRow;
+
+  log.info({ userId, displayName }, "Fetched/created persona");
+  return mapPersonaRow(row);
 }
 
 export function getTraits(userId: string): PersonaTrait[] {
@@ -93,32 +91,21 @@ export function upsertTrait(
   const db = getDb();
   const now = new Date().toISOString();
 
-  const existingRow = db
-    .prepare(
-      "SELECT * FROM persona_traits WHERE user_id = ? AND label = ? AND value = ?"
-    )
-    .get(userId, label, value) as PersonaTraitRow | undefined;
-  const existing = existingRow ? mapTraitRow(existingRow) : undefined;
+  // Single-statement upsert keyed on UNIQUE(user_id, label, value).
+  // First insert seeds confidence 0.5 / evidence_count 1. On conflict the
+  // existing row is updated: confidence grows asymptotically toward the 0.95
+  // ceiling by + (1 - confidence) * 0.15, and evidence_count is incremented.
+  // Bare confidence/evidence_count in the DO UPDATE refer to the existing
+  // row's values; MIN is SQLite's scalar min. This never throws on a
+  // duplicate insert, making it race-safe.
+  db.prepare(
+    `INSERT INTO persona_traits (user_id, label, value, confidence, evidence_count, created_at, updated_at)
+     VALUES (?, ?, ?, 0.5, 1, ?, ?)
+     ON CONFLICT(user_id, label, value) DO UPDATE SET
+       confidence = MIN(confidence + (1 - confidence) * 0.15, 0.95),
+       evidence_count = evidence_count + 1,
+       updated_at = excluded.updated_at`
+  ).run(userId, label, value, now, now);
 
-  if (existing) {
-    const newConfidence = Math.min(
-      existing.confidence + (1 - existing.confidence) * 0.15,
-      0.95
-    );
-    db.prepare(
-      `UPDATE persona_traits
-       SET confidence = ?, evidence_count = evidence_count + 1, updated_at = ?
-       WHERE id = ?`
-    ).run(newConfidence, now, existing.id);
-    log.debug(
-      { userId, label, value, confidence: newConfidence },
-      "Updated trait"
-    );
-  } else {
-    db.prepare(
-      `INSERT INTO persona_traits (user_id, label, value, confidence, evidence_count, created_at, updated_at)
-       VALUES (?, ?, ?, 0.5, 1, ?, ?)`
-    ).run(userId, label, value, now, now);
-    log.debug({ userId, label, value }, "Created new trait");
-  }
+  log.debug({ userId, label, value }, "Upserted trait");
 }
