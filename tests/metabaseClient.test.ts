@@ -7,6 +7,7 @@ import { createMetabaseClient } from "../src/mcp/metabaseClient.js";
 function fakeResponse(opts: {
   ok?: boolean;
   status?: number;
+  statusText?: string;
   json?: unknown;
   text?: string;
 }): Response {
@@ -15,6 +16,7 @@ function fakeResponse(opts: {
   return {
     ok,
     status,
+    statusText: opts.statusText ?? "",
     json: async () => opts.json,
     text: async () => opts.text ?? "",
   } as unknown as Response;
@@ -100,16 +102,28 @@ describe("createMetabaseClient", () => {
       .mockResolvedValueOnce(fakeResponse({ ok: false, status: 401 }))
       // re-auth session POST
       .mockResolvedValueOnce(fakeResponse({ ok: true, status: 200, json: { id: "tok2" } }))
-      // retry data fetch -> still failing (500)
+      // retry data fetch -> still failing (500). The raw body must be redacted:
+      // it must NOT appear in the thrown error message.
       .mockResolvedValueOnce(
-        fakeResponse({ ok: false, status: 500, text: "still broken" })
+        fakeResponse({
+          ok: false,
+          status: 500,
+          statusText: "Internal Server Error",
+          text: "still broken: secret-row-data",
+        })
       );
 
     const client = createMetabaseClient(CLIENT_OPTS);
 
-    await expect(client.metabaseFetch("/api/dataset")).rejects.toThrow(
-      /after re-auth/i
+    const err = await client.metabaseFetch("/api/dataset").catch((e) => e as Error);
+    expect(err).toBeInstanceOf(Error);
+    // Redacted: status + statusText kept for debuggability.
+    expect(err.message).toBe(
+      "Metabase API error after re-auth: 500 Internal Server Error"
     );
+    // The raw upstream body must never leak into the thrown error.
+    expect(err.message).not.toContain("still broken");
+    expect(err.message).not.toContain("secret-row-data");
 
     // Re-auth was attempted before the failure surfaced.
     expect(fetchMock).toHaveBeenCalledTimes(4);
@@ -120,16 +134,49 @@ describe("createMetabaseClient", () => {
     fetchMock
       // session POST
       .mockResolvedValueOnce(fakeResponse({ ok: true, status: 200, json: { id: "tok" } }))
-      // data fetch -> 500
-      .mockResolvedValueOnce(fakeResponse({ ok: false, status: 500, text: "boom" }));
+      // data fetch -> 500. Body must be redacted out of the thrown message.
+      .mockResolvedValueOnce(
+        fakeResponse({
+          ok: false,
+          status: 500,
+          statusText: "Internal Server Error",
+          text: "boom: leaked-pii",
+        })
+      );
 
     const client = createMetabaseClient(CLIENT_OPTS);
 
-    await expect(client.metabaseFetch("/api/dataset")).rejects.toThrow(
-      /Metabase API error: 500/
-    );
+    const err = await client.metabaseFetch("/api/dataset").catch((e) => e as Error);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toBe("Metabase API error: 500 Internal Server Error");
+    // The raw upstream body must never leak into the thrown error.
+    expect(err.message).not.toContain("boom");
+    expect(err.message).not.toContain("leaked-pii");
 
     // No re-auth on a non-401 error.
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("auth failure: throws a redacted message without the response body", async () => {
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock
+      // session POST -> 401 with a sensitive body
+      .mockResolvedValueOnce(
+        fakeResponse({
+          ok: false,
+          status: 401,
+          statusText: "Unauthorized",
+          text: "bad password: hunter2",
+        })
+      );
+
+    const client = createMetabaseClient(CLIENT_OPTS);
+
+    const err = await client.getSession().catch((e) => e as Error);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toBe("Metabase auth failed: 401 Unauthorized");
+    // Credentials / body must never leak into the thrown error.
+    expect(err.message).not.toContain("hunter2");
+    expect(err.message).not.toContain("bad password");
   });
 });
