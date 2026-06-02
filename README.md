@@ -78,8 +78,9 @@ polls every 60s and spawns a detached Playwright joiner for upcoming meetings. T
 joiner enables Google's server-side transcription; transcripts are read back later via
 the Meet / Transcripts MCP servers. See [`docs/MEET_TRANSCRIPT_EXPERIMENT.md`](docs/MEET_TRANSCRIPT_EXPERIMENT.md).
 
-> ⚠️ The current `Dockerfile` does **not** install Chrome/Playwright, so the Meet bot
-> can't run inside the deployed container as built — see [`TODO.md`](TODO.md).
+> The deployed container can run the Meet bot: the `Dockerfile` runtime stage uses the
+> Playwright base image with Google Chrome installed (#25) and runs as the non-root
+> `pwuser` (#41).
 
 ## Deployment
 

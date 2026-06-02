@@ -30,7 +30,7 @@ MCP tools, plus a Playwright Google Meet auto-join + transcription pipeline.
   server-side transcription; transcripts are later read back via the Meet/Transcripts
   MCP servers.
 - **Persona system**: SQLite-backed per-user persona that evolves based on query patterns
-- **Health/deploy**: `/health` + `/ready` HTTP endpoints; Docker → AWS CodeBuild → ECR → K8s
+- **Health/deploy**: `/health` (liveness) + `/ready` (readiness) + `/metrics` (Prometheus) HTTP endpoints; Docker → AWS CodeBuild → ECR → K8s
 - **Module system**: ESM with NodeNext resolution — all imports use `.js` extensions
 
 ## Development Workflow (TDD)

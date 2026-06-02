@@ -99,7 +99,7 @@ Sentinel has two distinct ways to run:
 
 ### health-deploy — `src/health/server.ts`, `Dockerfile`, `docker-compose.yml`, `buildspec.yml`, `scripts/google-auth.js`, `scripts/test-oauth.js`
 **Purpose:** Operational health and deployment. `server.ts` exposes `/health` (pure liveness — always 200 `{status:"alive",uptime}`) and `/ready` (readiness, 200 only when Slack is connected AND a SQLite `SELECT 1` passes; 503 otherwise, with Slack/DB status, active MCP servers, and unavailable sources in the payload). The Dockerfile, compose file, and CodeBuild spec define the build/deploy pipeline. The OAuth helper scripts mint and validate `GOOGLE_REFRESH_TOKEN`.
-**State:** Solid (health server well tested). Liveness and readiness are now cleanly separated: all degradation lives in `/ready`, so a transient SQLite/Slack blip can no longer flip `/health` to 503 and trigger a restart loop (#38). The deployed container can now run the Meet bot — the runtime stage is the Playwright base image with Chrome installed (#25) and drops to the non-root `pwuser` (#41). SIGTERM/SIGINT graceful shutdown is wired in `index.ts` (#28). Remaining open item: no `/metrics` endpoint (a standalone memory monitor is in flight — PR #18, still open).
+**State:** Solid (health server well tested). Liveness and readiness are now cleanly separated: all degradation lives in `/ready`, so a transient SQLite/Slack blip can no longer flip `/health` to 503 and trigger a restart loop (#38). The deployed container can now run the Meet bot — the runtime stage is the Playwright base image with Chrome installed (#25) and drops to the non-root `pwuser` (#41). SIGTERM/SIGINT graceful shutdown is wired in `index.ts` (#28). A Prometheus `/metrics` endpoint now exposes per-request count/duration/token/cost — `runner.ts` parses the CLI's `--output-format json` telemetry (#54). (A separate memory-monitor script is still in flight as PR #18.)
 
 ### tests — `tests/*.test.ts`
 **Purpose:** The vitest suite — **526 tests across 45 files**. A `vitest.config.ts` + `tests/setup.ts` now isolate test runtime state (e.g. redirecting `SENTINEL_MCP_TMPDIR` to a throwaway dir) so tests no longer touch real on-disk config (#52), and CI builds `dist` before running tests (#52). Covered: `formatters`, `buildSystemPrompt`, `mcpConfig` generation/availability, the **real** config loader incl. the `process.exit` path (#32), DB migrations + `query_log` retention, `trackQuery` + `categorizeQuery`, the health server, the Claude `runner.ts` (arg construction, timeout, exit/spawn-error paths, #33), `socketClient.ts` + `threadContext.ts` (routing, authorization gate, dedup, #34), the persona store (CRUD + confidence math + decay against an in-memory DB, #30/#48), the six custom MCP servers via their extracted pure helpers (#36), and the Meet-bot logic (URL parsing, event filter, mode dispatch, joiner env/args, watcher poll loop/spawn/concurrency/TTL purge, #35).
@@ -115,7 +115,7 @@ Sentinel has two distinct ways to run:
 - **`data/` directory** (runtime artifacts, gitignored):
   - `sentinel-chrome-profile/` — persistent signed-in Chromium profile shared by all Meet-bot joins.
   - `meet-bot-logs/` — one stdout/stderr log file per spawned joiner; no rotation/cleanup.
-  - `metrics/` — present on disk; not surfaced by any health/metrics endpoint in the current code (a standalone memory monitor is in flight, PR #18).
+  - `metrics/` — present on disk; a separate memory-monitor script (PR #18, still open) would write RSS samples here. Live request token/cost metrics are exposed at `/metrics` on the health server (#54), held in-process (not on disk).
 - **`mcp-config-<uuid>.json`** — a fresh UUID-named file written per Claude spawn in a tmpdir (overridable via `SENTINEL_MCP_TMPDIR`), `0600` perms, removed by the spawn that created it and swept on shutdown (#22, #46). Contains live credentials in plaintext while it exists.
 
 ## Deployment
@@ -131,12 +131,10 @@ This section was an audit-time (2026-06-02) snapshot. Since then ~35 PRs (#20–
 
 ### Still open
 
-- **Older docs still describe the smaller POC.** `PLAN.md` and `SENTINEL_PRD_V1.md` remain stale — they predate the Meet bot and the Gmail/Calendar/Meet/Transcripts MCP servers (`PLAN.md` still lists the health check as "deferred to v2"; the PRD still lists Jira as a v1 source). README/CLAUDE.md have been reconciled to reality and flag these two as stale; `ARCHITECTURE.md` (this file) is the source of truth. (Reconciling PLAN.md/PRD themselves is the still-open docs items in `TODO.md`.)
-- **Jira is aspirational only.** Listed as a confirmed v1 source in the PRD and referenced in keyword maps, but no Jira MCP server or connector exists anywhere in `src/`. Still unbuilt.
-- **Stay-mode contradiction (by design).** `modeDispatch.ts` + the `joiner.ts` CLI default to `leave-after-join` ("~60x memory"), but `watcher.ts` intentionally hardcodes `--stay-mode stay-until-end` (the #17 / commit e53eb54 revert), so the production path is stay-until-end. This is a deliberate current choice, but it still contradicts the documented default — tracked in `TODO.md`. `docs/MEET_TRANSCRIPT_EXPERIMENT.md` also still references Puppeteer/stay-until-end and lists the now-built calendar watcher as "missing".
-- **`.env.example` OAuth scopes drift.** `.env.example` lists only gmail/calendar/drive readonly scopes, while `scripts/google-auth.js` also requests `documents.readonly` + `meetings.space.readonly` (the latter required by `meet.ts`); a token minted from the stale list lacks the Meet scope. Still open (docs item in `TODO.md`).
-- **No `/metrics` endpoint.** `runner.ts` discards the CLI's structured telemetry; there is still no metrics endpoint despite a `data/metrics` dir on disk. A standalone memory monitor is in flight as PR #18 (still open).
+- **Jira not built.** `SENTINEL_PRD_V1.md` has been reconciled to mark Jira as not-in-v1, but no Jira MCP server or connector exists anywhere in `src/` — it remains aspirational/unbuilt.
 - **Cross-restart joiner-cap residual.** The in-process joiner-concurrency counter resets on restart, so a pre-restart detached joiner isn't counted toward the cap; fully closing that window needs cross-process PID tracking (#47 follow-up).
+- **Stay-mode is stay-until-end by design.** `watcher.ts` intentionally hardcodes `--stay-mode stay-until-end` (the #17 / commit e53eb54 revert) while the `joiner.ts` CLI defaults to `leave-after-join` — a deliberate production choice, now documented consistently across the source comments and `docs/MEET_TRANSCRIPT_EXPERIMENT.md` (#53).
+- **PR #18 (memory monitor) still open.** A standalone memory-sampling script, orthogonal to the `/metrics` endpoint added in #54; awaiting a merge/close decision.
 
 ### Resolved since the audit
 
