@@ -11,6 +11,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { google } from "googleapis";
 import { z } from "zod";
+import { extractPlainTextBody } from "./gmailBody.js";
 
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
@@ -105,17 +106,8 @@ server.tool(
       const getHeader = (name: string) =>
         headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? "";
 
-      // Extract plain text body
-      let body = "";
-      const parts = msg.payload?.parts ?? [];
-      if (parts.length > 0) {
-        const textPart = parts.find((p) => p.mimeType === "text/plain");
-        if (textPart?.body?.data) {
-          body = Buffer.from(textPart.body.data, "base64").toString("utf-8");
-        }
-      } else if (msg.payload?.body?.data) {
-        body = Buffer.from(msg.payload.body.data, "base64").toString("utf-8");
-      }
+      // Extract plain text body, recursing the full MIME part tree.
+      let body = extractPlainTextBody(msg.payload);
 
       return {
         from: getHeader("From"),
