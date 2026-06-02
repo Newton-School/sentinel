@@ -21,6 +21,7 @@ import {
   type RawTranscriptEntry,
 } from "./meetShape.js";
 import { redactedHttpError } from "./httpError.js";
+import { paginate } from "./paginate.js";
 
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
@@ -121,15 +122,33 @@ server.tool(
     filter: z.string().optional().describe("Filter expression, e.g. 'start_time >= \"2026-04-01T00:00:00Z\"'"),
   },
   async ({ page_size, filter }) => {
-    const params = new URLSearchParams();
-    params.set("pageSize", String(Math.min(page_size, 50)));
-    if (filter) params.set("filter", filter);
+    const maxItems = Math.min(page_size, 50);
 
-    const data = (await meetFetch(`/conferenceRecords?${params.toString()}`)) as {
-      conferenceRecords?: ConferenceRecord[];
-    };
+    const { items: records, truncated } = await paginate<ConferenceRecord>({
+      maxItems,
+      fetchPage: async (cursor) => {
+        const params = new URLSearchParams();
+        // Request a full page (up to maxItems) on each call; the helper slices
+        // the accumulated result back to maxItems.
+        params.set("pageSize", String(maxItems));
+        if (filter) params.set("filter", filter);
+        if (cursor) params.set("pageToken", cursor);
 
-    const conferences = mapConferences(data.conferenceRecords ?? []);
+        const data = (await meetFetch(`/conferenceRecords?${params.toString()}`)) as {
+          conferenceRecords?: ConferenceRecord[];
+          nextPageToken?: string;
+        };
+        return { items: data.conferenceRecords ?? [], next: data.nextPageToken };
+      },
+    });
+
+    if (truncated) {
+      console.error(
+        `meet_list_conferences: truncated at max_results=${maxItems}; more conferences were available.`
+      );
+    }
+
+    const conferences = mapConferences(records);
 
     return {
       content: [
@@ -165,11 +184,32 @@ server.tool(
     conference_id: z.string().describe("Conference record ID"),
   },
   async ({ conference_id }) => {
-    const data = (await meetFetch(`/conferenceRecords/${conference_id}/transcripts`)) as {
-      transcripts?: TranscriptRecord[];
-    };
+    // A meeting rarely has more than a handful of transcripts, but follow the
+    // page token to be safe, bounded by a sane cap.
+    const MAX_TRANSCRIPTS = 50;
 
-    const transcripts = mapTranscripts(data.transcripts ?? []);
+    const { items: records, truncated } = await paginate<TranscriptRecord>({
+      maxItems: MAX_TRANSCRIPTS,
+      fetchPage: async (cursor) => {
+        const params = new URLSearchParams();
+        if (cursor) params.set("pageToken", cursor);
+        const qs = params.toString();
+        const path = `/conferenceRecords/${conference_id}/transcripts${qs ? `?${qs}` : ""}`;
+        const data = (await meetFetch(path)) as {
+          transcripts?: TranscriptRecord[];
+          nextPageToken?: string;
+        };
+        return { items: data.transcripts ?? [], next: data.nextPageToken };
+      },
+    });
+
+    if (truncated) {
+      console.error(
+        `meet_list_transcripts: truncated at ${MAX_TRANSCRIPTS} transcripts for conference ${conference_id}; more were available.`
+      );
+    }
+
+    const transcripts = mapTranscripts(records);
 
     return {
       content: [
@@ -192,17 +232,33 @@ server.tool(
     page_size: z.number().default(100).describe("Max entries per page (default: 100, max: 500)"),
   },
   async ({ conference_id, transcript_id, page_size }) => {
-    const params = new URLSearchParams();
-    params.set("pageSize", String(Math.min(page_size, 500)));
+    const maxItems = Math.min(page_size, 500);
 
-    const data = (await meetFetch(
-      `/conferenceRecords/${conference_id}/transcripts/${transcript_id}/entries?${params.toString()}`
-    )) as {
-      transcriptEntries?: RawTranscriptEntry[];
-    };
+    const { items: rawEntries, truncated } = await paginate<RawTranscriptEntry>({
+      maxItems,
+      fetchPage: async (cursor) => {
+        const params = new URLSearchParams();
+        params.set("pageSize", String(maxItems));
+        if (cursor) params.set("pageToken", cursor);
+
+        const data = (await meetFetch(
+          `/conferenceRecords/${conference_id}/transcripts/${transcript_id}/entries?${params.toString()}`
+        )) as {
+          transcriptEntries?: RawTranscriptEntry[];
+          nextPageToken?: string;
+        };
+        return { items: data.transcriptEntries ?? [], next: data.nextPageToken };
+      },
+    });
+
+    if (truncated) {
+      console.error(
+        `meet_get_transcript_entries: truncated at page_size=${maxItems} entries for transcript ${transcript_id}; more entries were available.`
+      );
+    }
 
     const entries = await Promise.all(
-      (data.transcriptEntries ?? []).map(async (e) => {
+      rawEntries.map(async (e) => {
         // Human-readable display name, resolved from the participant resource
         // (cached). Falls back to the raw resource name if it can't be resolved.
         const speaker = e.participant

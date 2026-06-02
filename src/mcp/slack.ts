@@ -20,6 +20,7 @@ import {
   type SlackReplyMessage,
 } from "./slackShape.js";
 import { redactedHttpError } from "./httpError.js";
+import { paginate } from "./paginate.js";
 
 const SLACK_USER_TOKEN = process.env.SLACK_USER_TOKEN!;
 
@@ -100,17 +101,36 @@ server.tool(
     oldest: z.string().optional().describe("Only messages after this Unix timestamp (e.g., '1712448000' for 2024-04-07)"),
   },
   async ({ channel_id, limit, oldest }) => {
-    const params: Record<string, string> = {
-      channel: channel_id,
-      limit: String(Math.min(limit, 100)),
-    };
-    if (oldest) params.oldest = oldest;
+    const maxItems = Math.min(limit, 100);
 
-    const data = (await slackApi("conversations.history", params)) as {
-      messages: SlackHistoryMessage[];
-    };
+    const { items: rawMessages, truncated } = await paginate<SlackHistoryMessage>({
+      maxItems,
+      fetchPage: async (cursor) => {
+        const params: Record<string, string> = {
+          channel: channel_id,
+          limit: String(maxItems),
+        };
+        if (oldest) params.oldest = oldest;
+        if (cursor) params.cursor = cursor;
 
-    const messages = shapeChannelHistory(data.messages);
+        const data = (await slackApi("conversations.history", params)) as {
+          messages: SlackHistoryMessage[];
+          response_metadata?: { next_cursor?: string };
+        };
+        return {
+          items: data.messages ?? [],
+          next: data.response_metadata?.next_cursor,
+        };
+      },
+    });
+
+    if (truncated) {
+      console.error(
+        `slack_read_channel_history: truncated at limit=${maxItems} for channel ${channel_id}; more messages were available.`
+      );
+    }
+
+    const messages = shapeChannelHistory(rawMessages);
 
     return {
       content: [
@@ -133,15 +153,43 @@ server.tool(
     limit: z.number().default(50).describe("Number of replies to fetch (default: 50, max: 200)"),
   },
   async ({ channel_id, thread_ts, limit }) => {
-    const data = (await slackApi("conversations.replies", {
-      channel: channel_id,
-      ts: thread_ts,
-      limit: String(Math.min(limit, 200)),
-    })) as {
-      messages: SlackReplyMessage[];
-    };
+    const maxItems = Math.min(limit, 200);
+    // Slack caps a single conversations.replies page at 1000; request up to 200.
+    const pageSize = Math.min(maxItems, 200);
 
-    const messages = shapeThreadReplies(data.messages);
+    const { items: rawMessages, truncated } = await paginate<SlackReplyMessage>({
+      maxItems,
+      fetchPage: async (cursor) => {
+        const params: Record<string, string> = {
+          channel: channel_id,
+          ts: thread_ts,
+          limit: String(pageSize),
+        };
+        if (cursor) params.cursor = cursor;
+
+        const data = (await slackApi("conversations.replies", params)) as {
+          messages: SlackReplyMessage[];
+          response_metadata?: { next_cursor?: string };
+        };
+        // Slack repeats the thread parent as the first message on every page;
+        // keep it on the first page only so it isn't duplicated across pages.
+        const messages = cursor
+          ? (data.messages ?? []).filter((m) => m.ts !== thread_ts)
+          : data.messages ?? [];
+        return {
+          items: messages,
+          next: data.response_metadata?.next_cursor,
+        };
+      },
+    });
+
+    if (truncated) {
+      console.error(
+        `slack_read_thread: truncated at limit=${maxItems} for thread ${thread_ts}; more replies were available.`
+      );
+    }
+
+    const messages = shapeThreadReplies(rawMessages);
 
     return {
       content: [
