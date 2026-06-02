@@ -28,6 +28,10 @@ auth.setCredentials({ refresh_token: REFRESH_TOKEN });
 
 const calendar = google.calendar({ version: "v3", auth });
 
+// Per-request timeout (ms) so a hung Google API call can't block a tool call
+// indefinitely. googleapis/gaxios provides its own transient-error retry.
+const REQUEST_TIMEOUT_MS = 15_000;
+
 const server = new McpServer({
   name: "google-calendar",
   version: "0.1.0",
@@ -51,7 +55,10 @@ let cachedTimeZone: string | undefined;
 async function getCalendarTimeZone(): Promise<string> {
   if (cachedTimeZone) return cachedTimeZone;
   try {
-    const res = await calendar.calendars.get({ calendarId: "primary" });
+    const res = await calendar.calendars.get(
+      { calendarId: "primary" },
+      { timeout: REQUEST_TIMEOUT_MS }
+    );
     cachedTimeZone = res.data.timeZone || DEFAULT_TIME_ZONE;
   } catch {
     cachedTimeZone = DEFAULT_TIME_ZONE;
@@ -77,14 +84,17 @@ server.tool(
     const timeMin = start_date ? startBoundary(start_date, timeZone) : week.timeMin;
     const timeMax = end_date ? endBoundary(end_date, timeZone) : week.timeMax;
 
-    const res = await calendar.events.list({
-      calendarId: calendar_id,
-      timeMin,
-      timeMax,
-      maxResults: Math.min(max_results, 50),
-      singleEvents: true,
-      orderBy: "startTime",
-    });
+    const res = await calendar.events.list(
+      {
+        calendarId: calendar_id,
+        timeMin,
+        timeMax,
+        maxResults: Math.min(max_results, 50),
+        singleEvents: true,
+        orderBy: "startTime",
+      },
+      { timeout: REQUEST_TIMEOUT_MS }
+    );
 
     const events = (res.data.items ?? []).map(mapEvent);
 
@@ -108,10 +118,13 @@ server.tool(
     calendar_id: z.string().default("primary").describe("Calendar ID (default: 'primary')"),
   },
   async ({ event_id, calendar_id }) => {
-    const event = await calendar.events.get({
-      calendarId: calendar_id,
-      eventId: event_id,
-    });
+    const event = await calendar.events.get(
+      {
+        calendarId: calendar_id,
+        eventId: event_id,
+      },
+      { timeout: REQUEST_TIMEOUT_MS }
+    );
 
     const result = {
       id: event.data.id,
@@ -162,15 +175,18 @@ server.tool(
     const timeMax = new Date(now);
     timeMax.setDate(now.getDate() + days_forward);
 
-    const res = await calendar.events.list({
-      calendarId: calendar_id,
-      timeMin: timeMin.toISOString(),
-      timeMax: timeMax.toISOString(),
-      q: query,
-      maxResults: Math.min(max_results, 50),
-      singleEvents: true,
-      orderBy: "startTime",
-    });
+    const res = await calendar.events.list(
+      {
+        calendarId: calendar_id,
+        timeMin: timeMin.toISOString(),
+        timeMax: timeMax.toISOString(),
+        q: query,
+        maxResults: Math.min(max_results, 50),
+        singleEvents: true,
+        orderBy: "startTime",
+      },
+      { timeout: REQUEST_TIMEOUT_MS }
+    );
 
     const events = (res.data.items ?? []).map(mapSearchEvent);
 

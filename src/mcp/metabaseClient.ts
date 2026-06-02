@@ -10,6 +10,7 @@
  */
 
 import { redactedHttpError } from "./httpError.js";
+import { fetchWithRetry } from "./httpRetry.js";
 
 export interface MetabaseClientOptions {
   url: string;
@@ -22,6 +23,14 @@ export interface MetabaseClient {
   metabaseFetch(path: string, options?: RequestInit): Promise<unknown>;
 }
 
+// Metabase keeps its own 401 re-auth retry loop below, and its unit suite
+// asserts exact upstream call counts per path. We therefore wrap fetch only for
+// the per-request TIMEOUT guard (a hung Metabase can't block a tool forever)
+// and disable fetchWithRetry's own 429/5xx retry here (retries: 0) to preserve
+// that single-attempt-per-path behavior. Slack and Meet use the full default
+// retry-with-backoff.
+const METABASE_FETCH_OPTS = { retries: 0 } as const;
+
 export function createMetabaseClient(opts: MetabaseClientOptions): MetabaseClient {
   const { url, username, password } = opts;
 
@@ -30,11 +39,15 @@ export function createMetabaseClient(opts: MetabaseClientOptions): MetabaseClien
   async function getSession(): Promise<string> {
     if (sessionToken) return sessionToken;
 
-    const res = await fetch(`${url}/api/session`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
-    });
+    const res = await fetchWithRetry(
+      `${url}/api/session`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      },
+      METABASE_FETCH_OPTS
+    );
 
     if (!res.ok) {
       // Redacted: keep status/statusText, never embed the raw response body
@@ -52,27 +65,35 @@ export function createMetabaseClient(opts: MetabaseClientOptions): MetabaseClien
     options: RequestInit = {}
   ): Promise<unknown> {
     const token = await getSession();
-    const res = await fetch(`${url}${path}`, {
-      ...options,
-      headers: {
-        "Content-Type": "application/json",
-        "X-Metabase-Session": token,
-        ...options.headers,
+    const res = await fetchWithRetry(
+      `${url}${path}`,
+      {
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          "X-Metabase-Session": token,
+          ...options.headers,
+        },
       },
-    });
+      METABASE_FETCH_OPTS
+    );
 
     if (res.status === 401) {
       // Token expired, retry with fresh session
       sessionToken = null;
       const newToken = await getSession();
-      const retry = await fetch(`${url}${path}`, {
-        ...options,
-        headers: {
-          "Content-Type": "application/json",
-          "X-Metabase-Session": newToken,
-          ...options.headers,
+      const retry = await fetchWithRetry(
+        `${url}${path}`,
+        {
+          ...options,
+          headers: {
+            "Content-Type": "application/json",
+            "X-Metabase-Session": newToken,
+            ...options.headers,
+          },
         },
-      });
+        METABASE_FETCH_OPTS
+      );
 
       // Guard: if the re-auth retry still failed, surface the auth failure
       // instead of returning the error body as if it were data — otherwise

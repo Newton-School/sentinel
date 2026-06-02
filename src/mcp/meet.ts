@@ -21,6 +21,7 @@ import {
   type RawTranscriptEntry,
 } from "./meetShape.js";
 import { redactedHttpError } from "./httpError.js";
+import { fetchWithRetry } from "./httpRetry.js";
 import { paginate } from "./paginate.js";
 
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
@@ -36,7 +37,7 @@ async function getAccessToken(): Promise<string> {
     return cachedToken.token;
   }
 
-  const res = await fetch("https://oauth2.googleapis.com/token", {
+  const res = await fetchWithRetry("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -62,7 +63,7 @@ async function getAccessToken(): Promise<string> {
 
 async function meetFetch(path: string): Promise<unknown> {
   const token = await getAccessToken();
-  const res = await fetch(`https://meet.googleapis.com/v2${path}`, {
+  const res = await fetchWithRetry(`https://meet.googleapis.com/v2${path}`, {
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",

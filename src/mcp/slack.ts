@@ -20,6 +20,7 @@ import {
   type SlackReplyMessage,
 } from "./slackShape.js";
 import { redactedHttpError } from "./httpError.js";
+import { fetchWithRetry } from "./httpRetry.js";
 import { paginate } from "./paginate.js";
 
 const SLACK_USER_TOKEN = process.env.SLACK_USER_TOKEN!;
@@ -30,7 +31,7 @@ async function slackApi(method: string, params: Record<string, string>): Promise
     url.searchParams.set(key, value);
   }
 
-  const res = await fetch(url.toString(), {
+  const res = await fetchWithRetry(url.toString(), {
     headers: { Authorization: `Bearer ${SLACK_USER_TOKEN}` },
   });
 
