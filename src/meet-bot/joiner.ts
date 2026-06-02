@@ -9,9 +9,16 @@
  *   npx tsx src/meet-bot/joiner.ts <meet-url>
  *   npx tsx src/meet-bot/joiner.ts <meet-url> --duration 1800   # stay for 30 min
  *   npx tsx src/meet-bot/joiner.ts <meet-url> --headed          # show browser
+ *   npx tsx src/meet-bot/joiner.ts <meet-url> --stay-mode leave-after-join
  *
- * The bot joins muted with camera off and stays in the call until either
- * (a) the meeting ends, (b) the duration limit is reached, or (c) it's kicked.
+ * The bot joins muted with camera off and enables transcription. What happens next
+ * depends on --stay-mode (see modeDispatch.ts):
+ *   - leave-after-join (this CLI's default): leave immediately once transcription is on.
+ *   - stay-until-end: stay until (a) the meeting ends, (b) the duration limit is reached,
+ *     or (c) it's kicked. This is what the production calendar watcher hardcodes (PR #17).
+ *   - hybrid: leave if transcription was enabled, otherwise stay.
+ * Either way the transcript is generated server-side by Google and read back later via
+ * the Meet/Transcripts MCP servers.
  */
 
 import { chromium, type BrowserContext, type Page } from "playwright";

@@ -1,14 +1,22 @@
-# Sentinel — Leadership Data Bot POC
+# Sentinel — Leadership Data Bot
+
+> **This README documents the original 3-source POC and is partly stale.**
+> For the current architecture see [`ARCHITECTURE.md`](ARCHITECTURE.md); for the
+> prioritized backlog (including known P0 bugs) see [`TODO.md`](TODO.md).
 
 ## Context
 
-miniOG serves developers via Slack with code workflows. Founders and leaders need a similar AI assistant but focused on **business data, org health, and strategic insights** — pulling from Metabase (SQL analytics), GitHub (engineering activity), and Notion (docs/projects). The bot maintains an evolving persona per user so responses adapt to what each leader cares about.
+miniOG serves developers via Slack with code workflows. Founders and leaders need a similar AI assistant but focused on **business data, org health, and strategic insights**. The bot maintains an evolving persona per user so responses adapt to what each leader cares about.
+
+The project began as a Metabase + GitHub + Notion POC and has since grown to integrate
+**Slack search, Gmail, Google Calendar, Google Meet (API v2), and Meeting Transcripts**,
+plus a **Playwright Google Meet auto-join + transcription bot** driven by a calendar watcher.
 
 **Key decisions:**
 - **Name**: Sentinel
 - **AI**: Claude Code CLI (subprocess spawn, same pattern as miniOG)
-- **Data sources**: Metabase + GitHub + Notion (all three in POC)
-- **Deployment**: Docker on EC2
+- **Data sources**: Metabase, GitHub, Notion, Slack-search, Gmail, Google Calendar, Google Meet, Meeting Transcripts (all optional — gated on config)
+- **Deployment**: Docker → AWS CodeBuild → ECR → Kubernetes
 
 ---
 
@@ -17,39 +25,27 @@ miniOG serves developers via Slack with code workflows. Founders and leaders nee
 ```
 sentinel/
 ├── .env.example
-├── .gitignore
-├── Dockerfile
-├── docker-compose.yml
-├── package.json
-├── tsconfig.json
-├── CLAUDE.md
+├── Dockerfile / docker-compose.yml / buildspec.yml   # Docker + AWS CodeBuild CI
+├── package.json / tsconfig.json
+├── CLAUDE.md / ARCHITECTURE.md / TODO.md
+├── scripts/
+│   ├── google-auth.js              # Mint GOOGLE_REFRESH_TOKEN (OAuth helper)
+│   └── test-oauth.js               # Validate Google OAuth scopes
 ├── src/
-│   ├── index.ts                    # Entry: bootstrap, start Slack client, wire handlers
+│   ├── index.ts                    # Entry: bootstrap DB, MCP config, health server, Meet watcher, Slack app
 │   ├── config.ts                   # .env loader with Zod validation
-│   ├── slack/
-│   │   ├── socketClient.ts         # @slack/bolt Socket Mode (adapted from sidecar)
-│   │   └── threadContext.ts        # Fetch thread replies for conversation context
-│   ├── claude/
-│   │   ├── runner.ts               # Spawn `claude` CLI subprocess with prompt + tools
-│   │   ├── systemPrompt.ts         # System prompt builder with persona injection
-│   │   └── mcpConfig.ts            # Generate MCP server config for Claude CLI
-│   ├── mcp/
-│   │   ├── metabase.ts             # Metabase MCP server (session auth, SQL queries, dashboards)
-│   │   ├── github.ts               # GitHub MCP (uses @modelcontextprotocol/server-github)
-│   │   └── notion.ts               # Notion MCP (uses @modelcontextprotocol/server-notion)
-│   ├── persona/
-│   │   ├── store.ts                # SQLite CRUD for personas + traits
-│   │   ├── tracker.ts              # Analyze queries, evolve persona traits
-│   │   └── types.ts                # Persona type definitions
-│   ├── state/
-│   │   └── db.ts                   # SQLite setup, WAL mode, migrations
-│   ├── logging/
-│   │   └── logger.ts               # Pino structured logger
-│   └── types/
-│       └── contracts.ts            # Shared types (SlackEventEnvelope, etc.)
-└── tests/
-    ├── persona.test.ts
-    └── config.test.ts
+│   ├── slack/                      # socketClient.ts, threadContext.ts, formatters.ts (mrkdwn)
+│   ├── claude/                     # runner.ts (spawn CLI), systemPrompt.ts, mcpConfig.ts
+│   ├── mcp/                        # Custom MCP servers (stdio): metabase, slack, gmail,
+│   │                               #   calendar, meet, transcripts. GitHub/Notion are npx packages.
+│   ├── meet-bot/                   # Playwright Meet bot: watcher, joiner, eventFilter,
+│   │                               #   modeDispatch, meetUrl, setup
+│   ├── persona/                    # store.ts, tracker.ts, types.ts (SQLite-backed persona)
+│   ├── state/db.ts                 # SQLite setup, WAL mode, migrations (personas/traits/query_log)
+│   ├── health/server.ts            # /health + /ready HTTP endpoints
+│   ├── logging/logger.ts           # Pino structured logger
+│   └── types/contracts.ts          # Shared types (SlackEventEnvelope, etc.)
+└── tests/                          # vitest suite (45 files, 526 tests)
 ```
 
 ---
@@ -73,18 +69,35 @@ npm run build
 npm start
 ```
 
-## Docker Deployment (EC2)
+## Google Meet Bot
+
+A separate pipeline auto-records meetings. After a one-time `npm run meet-bot:setup`
+(interactive Google sign-in that persists a Chrome profile under `data/`), the
+calendar watcher — started automatically by `npm start` when Google creds are set —
+polls every 60s and spawns a detached Playwright joiner for upcoming meetings. The
+joiner enables Google's server-side transcription; transcripts are read back later via
+the Meet / Transcripts MCP servers. See [`docs/MEET_TRANSCRIPT_EXPERIMENT.md`](docs/MEET_TRANSCRIPT_EXPERIMENT.md).
+
+> The deployed container can run the Meet bot: the `Dockerfile` runtime stage uses the
+> Playwright base image with Google Chrome installed (#25) and runs as the non-root
+> `pwuser` (#41).
+
+## Deployment
 
 ```bash
-# Build and run
+# Local / single-host
 docker-compose up -d
-
-# View logs
 docker-compose logs -f sentinel
 ```
 
+CI/CD is AWS CodeBuild (`buildspec.yml`): type-check → test → `docker build` → push to
+ECR → deploy to Kubernetes.
+
 ---
 
-## Implementation Plan
+## Further Docs
 
-See [PLAN.md](PLAN.md) for the full implementation plan with step-by-step details.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — current-state architecture (source of truth)
+- [`TODO.md`](TODO.md) — prioritized backlog
+- [`PLAN.md`](PLAN.md) — original implementation plan (**stale**; predates the Meet bot and the Gmail/Calendar/Meet/Transcripts MCP servers)
+- [`SENTINEL_PRD_V1.md`](SENTINEL_PRD_V1.md) — product requirements (**partly stale**; lists Jira as a v1 source that isn't implemented)
