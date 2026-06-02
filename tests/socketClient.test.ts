@@ -472,4 +472,81 @@ describe("createSlackApp handler routing", () => {
     expect(postMessage).not.toHaveBeenCalled();
     expect(handler).not.toHaveBeenCalled();
   });
+
+  // ------------------------------------------------------------------------
+  // De-duplication: Slack re-delivers an event when a handler is slow (Claude
+  // can take up to 120s). The same channel+ts must not be processed twice.
+  // ------------------------------------------------------------------------
+
+  it("a duplicate app_mention (same channel+ts) does not invoke the handler twice", async () => {
+    const { registered, createSlackApp } = await loadWithFakeBolt();
+    const handler = vi.fn().mockResolvedValue(undefined);
+    createSlackApp(handler);
+
+    const client = {} as any;
+    const event = { user: "U1", text: "<@UBOT> hi", channel: "C1", ts: "10.1" };
+
+    await registered.event!({ event, client });
+    await registered.event!({ event, client });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("a duplicate DM (same channel+ts) does not invoke the handler twice", async () => {
+    const { registered, createSlackApp } = await loadWithFakeBolt();
+    const handler = vi.fn().mockResolvedValue(undefined);
+    createSlackApp(handler);
+
+    const message = {
+      channel_type: "im",
+      user: "U2",
+      channel: "D1",
+      text: "hello",
+      ts: "20.1",
+    };
+
+    await registered.message!({ message, client: {} as any });
+    await registered.message!({ message, client: {} as any });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("a duplicate /sentinel (same channel+ts) ACKs both times but invokes the handler once", async () => {
+    const { registered, createSlackApp } = await loadWithFakeBolt();
+    const handler = vi.fn().mockResolvedValue(undefined);
+    createSlackApp(handler);
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    // Slack re-delivers the same command; the posted message ts is stable, so
+    // both deliveries derive the same dedupe key.
+    const postMessage = vi.fn().mockResolvedValue({ ts: "30.1" });
+    const client = { chat: { postMessage } } as any;
+    const command = { user_id: "U1", channel_id: "C9", text: "revenue?" };
+
+    await registered.command!({ command, ack, client });
+    await registered.command!({ command, ack, client });
+
+    // Slack must always be ACKed, even for a retry.
+    expect(ack).toHaveBeenCalledTimes(2);
+    // But the expensive work runs only once.
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("the same ts in a different channel is NOT treated as a duplicate", async () => {
+    const { registered, createSlackApp } = await loadWithFakeBolt();
+    const handler = vi.fn().mockResolvedValue(undefined);
+    createSlackApp(handler);
+
+    const client = {} as any;
+    await registered.event!({
+      event: { user: "U1", text: "<@UBOT> hi", channel: "C1", ts: "10.1" },
+      client,
+    });
+    await registered.event!({
+      event: { user: "U1", text: "<@UBOT> hi", channel: "C2", ts: "10.1" },
+      client,
+    });
+
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
 });
