@@ -4,6 +4,7 @@ import { openSync, mkdirSync } from "node:fs";
 import { google } from "googleapis";
 import { config } from "../config.js";
 import { createLogger } from "../logging/logger.js";
+import { buildJoinerEnv } from "./joinerEnv.js";
 import {
   filterEventsToJoin,
   type CalendarEventLite,
@@ -150,7 +151,10 @@ function spawnJoiner(meetUrl: string, durationSec: number): void {
   const child = spawn(command, args, {
     detached: true,
     stdio: ["ignore", logFd, logFd],
-    env: { ...process.env },
+    // The joiner authenticates via the persistent Chrome profile, not env vars.
+    // Pass only a minimal non-secret runtime env so we don't leak app secrets
+    // (Slack/Anthropic/Metabase/GitHub/Notion/Google) into a detached process.
+    env: buildJoinerEnv(),
   });
 
   child.on("error", (err) => {
