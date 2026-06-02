@@ -34,6 +34,10 @@ auth.setCredentials({ refresh_token: REFRESH_TOKEN });
 
 const gmail = google.gmail({ version: "v1", auth });
 
+// Per-request timeout (ms) so a hung Google API call can't block a tool call
+// indefinitely. googleapis/gaxios provides its own transient-error retry.
+const REQUEST_TIMEOUT_MS = 15_000;
+
 const server = new McpServer({
   name: "gmail",
   version: "0.1.0",
@@ -54,12 +58,15 @@ server.tool(
     const { items: messages, truncated } = await paginate<GmailMessageStub>({
       maxItems,
       fetchPage: async (cursor) => {
-        const listRes = await gmail.users.messages.list({
-          userId: "me",
-          q: query,
-          maxResults: maxItems,
-          pageToken: cursor,
-        });
+        const listRes = await gmail.users.messages.list(
+          {
+            userId: "me",
+            q: query,
+            maxResults: maxItems,
+            pageToken: cursor,
+          },
+          { timeout: REQUEST_TIMEOUT_MS }
+        );
         // Preserve the first page's estimate for the output's `total` field.
         if (resultSizeEstimate === undefined) {
           resultSizeEstimate = listRes.data.resultSizeEstimate;
@@ -85,12 +92,15 @@ server.tool(
 
     const results = await Promise.all(
       messages.map(async (msg) => {
-        const detail = await gmail.users.messages.get({
-          userId: "me",
-          id: msg.id!,
-          format: "metadata",
-          metadataHeaders: ["From", "To", "Subject", "Date", "Cc"],
-        });
+        const detail = await gmail.users.messages.get(
+          {
+            userId: "me",
+            id: msg.id!,
+            format: "metadata",
+            metadataHeaders: ["From", "To", "Subject", "Date", "Cc"],
+          },
+          { timeout: REQUEST_TIMEOUT_MS }
+        );
 
         return shapeSearchResult(msg.id, detail.data);
       })
@@ -115,11 +125,14 @@ server.tool(
     thread_id: z.string().describe("The Gmail thread ID (from gmail_search results)"),
   },
   async ({ thread_id }) => {
-    const thread = await gmail.users.threads.get({
-      userId: "me",
-      id: thread_id,
-      format: "full",
-    });
+    const thread = await gmail.users.threads.get(
+      {
+        userId: "me",
+        id: thread_id,
+        format: "full",
+      },
+      { timeout: REQUEST_TIMEOUT_MS }
+    );
 
     const messages = (thread.data.messages ?? []).map((msg) => {
       const headers = msg.payload?.headers ?? [];
@@ -164,12 +177,15 @@ server.tool(
     const { items: messages, truncated } = await paginate<GmailMessageStub>({
       maxItems,
       fetchPage: async (cursor) => {
-        const listRes = await gmail.users.messages.list({
-          userId: "me",
-          q: query,
-          maxResults: maxItems,
-          pageToken: cursor,
-        });
+        const listRes = await gmail.users.messages.list(
+          {
+            userId: "me",
+            q: query,
+            maxResults: maxItems,
+            pageToken: cursor,
+          },
+          { timeout: REQUEST_TIMEOUT_MS }
+        );
         if (resultSizeEstimate === undefined) {
           resultSizeEstimate = listRes.data.resultSizeEstimate;
         }
@@ -194,12 +210,15 @@ server.tool(
 
     const results = await Promise.all(
       messages.map(async (msg) => {
-        const detail = await gmail.users.messages.get({
-          userId: "me",
-          id: msg.id!,
-          format: "metadata",
-          metadataHeaders: ["From", "To", "Subject", "Date"],
-        });
+        const detail = await gmail.users.messages.get(
+          {
+            userId: "me",
+            id: msg.id!,
+            format: "metadata",
+            metadataHeaders: ["From", "To", "Subject", "Date"],
+          },
+          { timeout: REQUEST_TIMEOUT_MS }
+        );
 
         return shapeListResult(msg.id, detail.data);
       })

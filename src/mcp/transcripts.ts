@@ -33,6 +33,10 @@ auth.setCredentials({ refresh_token: REFRESH_TOKEN });
 const drive = google.drive({ version: "v3", auth });
 const docs = google.docs({ version: "v1", auth });
 
+// Per-request timeout (ms) so a hung Google API call can't block a tool call
+// indefinitely. googleapis/gaxios provides its own transient-error retry.
+const REQUEST_TIMEOUT_MS = 15_000;
+
 const server = new McpServer({
   name: "meeting-transcripts",
   version: "0.1.0",
@@ -57,14 +61,17 @@ server.tool(
     const { items: rawFiles, truncated } = await paginate<DriveFile>({
       maxItems,
       fetchPage: async (cursor) => {
-        const res = await drive.files.list({
-          q: driveQuery,
-          fields:
-            "nextPageToken, files(id, name, createdTime, modifiedTime, webViewLink, owners)",
-          orderBy: "modifiedTime desc",
-          pageSize: maxItems,
-          pageToken: cursor,
-        });
+        const res = await drive.files.list(
+          {
+            q: driveQuery,
+            fields:
+              "nextPageToken, files(id, name, createdTime, modifiedTime, webViewLink, owners)",
+            orderBy: "modifiedTime desc",
+            pageSize: maxItems,
+            pageToken: cursor,
+          },
+          { timeout: REQUEST_TIMEOUT_MS }
+        );
         return {
           items: res.data.files ?? [],
           next: res.data.nextPageToken ?? undefined,
@@ -100,7 +107,10 @@ server.tool(
     max_length: z.number().default(5000).describe("Maximum characters to return (default: 5000). Transcripts can be long."),
   },
   async ({ document_id, max_length }) => {
-    const doc = await docs.documents.get({ documentId: document_id });
+    const doc = await docs.documents.get(
+      { documentId: document_id },
+      { timeout: REQUEST_TIMEOUT_MS }
+    );
 
     // Extract text from the Google Doc structure, then apply the length cap.
     const fullText = extractDocText(doc.data);
@@ -145,14 +155,17 @@ server.tool(
     const { items: rawFiles, truncated } = await paginate<DriveFile>({
       maxItems,
       fetchPage: async (cursor) => {
-        const res = await drive.files.list({
-          q: driveQuery,
-          fields:
-            "nextPageToken, files(id, name, createdTime, modifiedTime, webViewLink)",
-          orderBy: "modifiedTime desc",
-          pageSize: maxItems,
-          pageToken: cursor,
-        });
+        const res = await drive.files.list(
+          {
+            q: driveQuery,
+            fields:
+              "nextPageToken, files(id, name, createdTime, modifiedTime, webViewLink)",
+            orderBy: "modifiedTime desc",
+            pageSize: maxItems,
+            pageToken: cursor,
+          },
+          { timeout: REQUEST_TIMEOUT_MS }
+        );
         return {
           items: res.data.files ?? [],
           next: res.data.nextPageToken ?? undefined,
