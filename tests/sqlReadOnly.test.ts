@@ -100,6 +100,53 @@ describe("assertReadOnlySql", () => {
         assertReadOnlySql("SELECT id AS merge FROM users")
       ).not.toThrow();
     });
+
+    // --- Cases the regex-only guard false-rejected, now allowed via the AST.
+    // The AST ignores string-literal contents and parenthesized leading SELECTs,
+    // so forbidden keywords that appear ONLY inside a string or as part of a
+    // legitimate read no longer trip the guard.
+    it("allows a forbidden keyword inside a string literal predicate (action = 'delete')", () => {
+      expect(() =>
+        assertReadOnlySql("SELECT id FROM events WHERE action = 'delete'")
+      ).not.toThrow();
+    });
+
+    it("allows a multi-word forbidden phrase inside a string literal ('drop table x')", () => {
+      expect(() =>
+        assertReadOnlySql("SELECT * FROM t WHERE note = 'drop table x'")
+      ).not.toThrow();
+    });
+
+    it("allows a parenthesized leading SELECT", () => {
+      expect(() => assertReadOnlySql("(SELECT 1)")).not.toThrow();
+    });
+
+    it("allows a parenthesized UNION of two SELECTs", () => {
+      expect(() =>
+        assertReadOnlySql("(SELECT a FROM t) UNION (SELECT b FROM u)")
+      ).not.toThrow();
+    });
+  });
+
+  describe("parser-first / regex-fallback behavior", () => {
+    // node-sql-parser (MySQL dialect) throws on some valid warehouse syntax —
+    // e.g. a data-modifying CTE with RETURNING. When parsing throws we MUST fall
+    // back to the regex verdict and never be more lenient than before. This
+    // proves the fallback path runs AND still rejects an obvious write that the
+    // parser couldn't model.
+    it("falls back to the regex verdict and still rejects an unparseable write (WITH ... DELETE ... RETURNING)", () => {
+      expect(() =>
+        assertReadOnlySql(
+          "WITH x AS (DELETE FROM users RETURNING *) SELECT * FROM x"
+        )
+      ).toThrow();
+    });
+
+    it("falls back to the regex verdict for MERGE INTO which the parser rejects", () => {
+      expect(() =>
+        assertReadOnlySql("MERGE INTO t USING s ON t.id = s.id")
+      ).toThrow();
+    });
   });
 
   describe("rejected non-read-only queries", () => {
