@@ -9,69 +9,17 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { assertReadOnlySql } from "./sqlReadOnly.js";
+import { createMetabaseClient } from "./metabaseClient.js";
 
-const METABASE_URL = process.env.METABASE_URL!;
-const METABASE_USERNAME = process.env.METABASE_USERNAME!;
-const METABASE_PASSWORD = process.env.METABASE_PASSWORD!;
+// Build a single client from the environment. Auth + fetch (incl. the 401
+// re-auth retry guard) live in the side-effect-free metabaseClient module.
+const client = createMetabaseClient({
+  url: process.env.METABASE_URL!,
+  username: process.env.METABASE_USERNAME!,
+  password: process.env.METABASE_PASSWORD!,
+});
 
-let sessionToken: string | null = null;
-
-async function getSession(): Promise<string> {
-  if (sessionToken) return sessionToken;
-
-  const res = await fetch(`${METABASE_URL}/api/session`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      username: METABASE_USERNAME,
-      password: METABASE_PASSWORD,
-    }),
-  });
-
-  if (!res.ok) {
-    throw new Error(`Metabase auth failed: ${res.status} ${await res.text()}`);
-  }
-
-  const data = (await res.json()) as { id: string };
-  sessionToken = data.id;
-  return sessionToken;
-}
-
-async function metabaseFetch(
-  path: string,
-  options: RequestInit = {}
-): Promise<unknown> {
-  const token = await getSession();
-  const res = await fetch(`${METABASE_URL}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      "X-Metabase-Session": token,
-      ...options.headers,
-    },
-  });
-
-  if (res.status === 401) {
-    // Token expired, retry with fresh session
-    sessionToken = null;
-    const newToken = await getSession();
-    const retry = await fetch(`${METABASE_URL}${path}`, {
-      ...options,
-      headers: {
-        "Content-Type": "application/json",
-        "X-Metabase-Session": newToken,
-        ...options.headers,
-      },
-    });
-    return retry.json();
-  }
-
-  if (!res.ok) {
-    throw new Error(`Metabase API error: ${res.status} ${await res.text()}`);
-  }
-
-  return res.json();
-}
+const metabaseFetch = client.metabaseFetch;
 
 // Create MCP server
 const server = new McpServer({
