@@ -190,24 +190,36 @@ async function main(): Promise<void> {
   const unavailableSources = getUnavailableSources();
   const allSources = ["Metabase", "GitHub", "Notion", "Slack search", "Gmail", "Google Calendar", "Meeting Transcripts", "Google Meet"];
   const activeSources = allSources.filter((s) => !unavailableSources.includes(s));
-  healthServer = startHealthServer(config.HEALTH_CHECK_PORT, (): HealthStatus => {
-    let dbStatus: "connected" | "error" = "connected";
-    try {
-      getDb().prepare("SELECT 1").get();
-    } catch {
-      dbStatus = "error";
-    }
+  const uptimeSeconds = (): number =>
+    Math.floor((Date.now() - startTime) / 1000);
 
-    const isOk = slackConnected && dbStatus === "connected";
-    return {
-      status: isOk ? "ok" : "degraded",
-      uptime: Math.floor((Date.now() - startTime) / 1000),
-      slack: slackConnected ? "connected" : "disconnected",
-      database: dbStatus,
-      mcpServers: activeSources,
-      unavailableSources,
-    };
-  });
+  // Readiness (/ready): probes Slack connectivity + a DB SELECT 1. All
+  // degradation lives here. Liveness (/health) deliberately does NOT call this
+  // — see the uptime provider below — so a slow Socket Mode connect or a
+  // transient SQLite blip cannot flip /health to 503 and trigger a restart loop.
+  healthServer = startHealthServer(
+    config.HEALTH_CHECK_PORT,
+    (): HealthStatus => {
+      let dbStatus: "connected" | "error" = "connected";
+      try {
+        getDb().prepare("SELECT 1").get();
+      } catch {
+        dbStatus = "error";
+      }
+
+      const isOk = slackConnected && dbStatus === "connected";
+      return {
+        status: isOk ? "ok" : "degraded",
+        uptime: uptimeSeconds(),
+        slack: slackConnected ? "connected" : "disconnected",
+        database: dbStatus,
+        mcpServers: activeSources,
+        unavailableSources,
+      };
+    },
+    // Liveness uptime: cheap, no Slack/DB dependency.
+    uptimeSeconds
+  );
 
   // Start Meet watcher (auto-joins upcoming meetings via Playwright bot)
   stopWatcher = startMeetWatcher();
