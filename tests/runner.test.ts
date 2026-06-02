@@ -240,15 +240,11 @@ describe("runClaude", () => {
       await assertion;
     });
 
-    it("resolves before the timeout when the child closes early; the timer is not cleared (documents latent behavior)", async () => {
-      // NOTE: runner.ts never clears the timeout timer on close. Once the
-      // promise resolves on a successful "close", the resolve is permanent,
-      // but the still-pending timer later fires and (because proc.killed is
-      // false for a naturally-exited process) calls proc.kill("SIGTERM") on
-      // the already-dead process and invokes reject() — a no-op on the
-      // already-settled promise. This test documents that current behavior:
-      // the resolved value wins, but kill() is still spuriously invoked.
-      // A clearTimeout(timer) in the close/error handlers would fix this.
+    it("clears the timeout timer on early close so kill is never fired on the exited process", async () => {
+      // runner.ts clears the timeout timer in the close/error handlers, so once
+      // the process exits normally the still-pending 120s timer must NOT fire
+      // (firing it would kill an already-dead PID and keep a dangling timer
+      // holding the event loop open).
       vi.useFakeTimers();
       const { runClaude } = await import("../src/claude/runner.js");
 
@@ -258,18 +254,26 @@ describe("runClaude", () => {
 
       const result = await promise;
       expect(result.text).toBe("done");
-
-      // Before the timeout fires, kill has not been called.
       expect(child.kill).not.toHaveBeenCalled();
 
-      // The timer is never cleared, so advancing past the timeout still
-      // triggers a (spurious) kill on the already-exited process.
+      // Advancing past the timeout must remain a no-op: the timer was cleared.
       vi.advanceTimersByTime(120_000);
       await flush();
-      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(child.kill).not.toHaveBeenCalled();
+    });
 
-      // The promise already resolved; the late reject() is a no-op.
-      await expect(promise).resolves.toEqual(result);
+    it("clears the timeout timer on a spawn error so the timer never fires afterward", async () => {
+      vi.useFakeTimers();
+      const { runClaude } = await import("../src/claude/runner.js");
+
+      const promise = runClaude("sys", "msg");
+      const assertion = expect(promise).rejects.toThrow(/spawn boom/);
+      child.emit("error", new Error("spawn boom"));
+      await assertion;
+
+      vi.advanceTimersByTime(120_000);
+      await flush();
+      expect(child.kill).not.toHaveBeenCalled();
     });
   });
 });
