@@ -1,4 +1,15 @@
 import type { PersonaProfile, PersonaTrait } from "../persona/types.js";
+import { decayedConfidence } from "../persona/personaDecay.js";
+
+/** Minimum (decayed) confidence for a trait to appear in the prompt. */
+const TRAIT_CONFIDENCE_THRESHOLD = 0.6;
+
+/**
+ * Hard cap on how many learned traits are injected into the system prompt.
+ * Bounds prompt growth as the persona accumulates traits over time; only the
+ * top N by decayed confidence are kept.
+ */
+const MAX_PROMPT_TRAITS = 8;
 
 function getCurrentTimeContext(): string {
   const now = new Date();
@@ -140,13 +151,27 @@ export function buildSystemPrompt(
     parts.push(`Their role is: ${persona.role}.`);
   }
 
-  // Trait-based personalization
-  const strongTraits = traits.filter((t) => t.confidence >= 0.6);
+  // Trait-based personalization.
+  //
+  // Confidence is decayed at read time based on how long ago each trait was
+  // last reinforced (see `decayedConfidence`), so stale interests fade without
+  // mutating stored rows. After decay we keep only traits above the threshold,
+  // sort by decayed confidence, and cap to the top N to bound prompt growth.
+  const now = new Date();
+  const strongTraits = traits
+    .map((t) => ({
+      trait: t,
+      confidence: decayedConfidence(t.confidence, t.updatedAt, now),
+    }))
+    .filter((t) => t.confidence >= TRAIT_CONFIDENCE_THRESHOLD)
+    .sort((a, b) => b.confidence - a.confidence)
+    .slice(0, MAX_PROMPT_TRAITS);
+
   if (strongTraits.length > 0) {
     parts.push(`\n## User Preferences (learned from past interactions)`);
-    for (const trait of strongTraits) {
+    for (const { trait, confidence } of strongTraits) {
       parts.push(
-        `- **${trait.label}**: ${trait.value} (confidence: ${(trait.confidence * 100).toFixed(0)}%, based on ${trait.evidenceCount} queries)`
+        `- **${trait.label}**: ${trait.value} (confidence: ${(confidence * 100).toFixed(0)}%, based on ${trait.evidenceCount} queries)`
       );
     }
     parts.push(

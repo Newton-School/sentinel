@@ -2,6 +2,14 @@ import { describe, it, expect } from "vitest";
 import { buildSystemPrompt } from "../src/claude/systemPrompt.js";
 import type { PersonaProfile, PersonaTrait } from "../src/persona/types.js";
 
+// A recent timestamp so traits are not faded out by the read-time decay
+// applied inside buildSystemPrompt (decay is keyed off `updatedAt`).
+const NOW_ISO = new Date().toISOString();
+// A deliberately stale timestamp (~6 months old) used to exercise decay.
+const STALE_ISO = new Date(
+  Date.now() - 180 * 24 * 60 * 60 * 1000
+).toISOString();
+
 const basePersona: PersonaProfile = {
   userId: "U123",
   displayName: "Dipesh",
@@ -23,7 +31,7 @@ const highConfidenceTrait: PersonaTrait = {
   confidence: 0.8,
   evidenceCount: 5,
   createdAt: "2026-01-01T00:00:00Z",
-  updatedAt: "2026-01-01T00:00:00Z",
+  updatedAt: NOW_ISO,
 };
 
 const lowConfidenceTrait: PersonaTrait = {
@@ -34,7 +42,7 @@ const lowConfidenceTrait: PersonaTrait = {
   confidence: 0.3,
   evidenceCount: 1,
   createdAt: "2026-01-01T00:00:00Z",
-  updatedAt: "2026-01-01T00:00:00Z",
+  updatedAt: NOW_ISO,
 };
 
 describe("buildSystemPrompt", () => {
@@ -198,6 +206,78 @@ describe("buildSystemPrompt", () => {
     it("includes instruction to weight open-ended queries", () => {
       const prompt = buildSystemPrompt(basePersona, [highConfidenceTrait]);
       expect(prompt).toContain("Weight your responses toward these areas");
+    });
+  });
+
+  describe("trait cap + read-time decay", () => {
+    function makeTrait(
+      id: number,
+      value: string,
+      confidence: number,
+      updatedAt: string
+    ): PersonaTrait {
+      return {
+        id,
+        userId: "U123",
+        label: "focus_area",
+        value,
+        confidence,
+        evidenceCount: id,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt,
+      };
+    }
+
+    it("caps the rendered preferences at the top 8 by confidence", () => {
+      // 12 fresh qualifying traits with distinct, descending confidences.
+      const traits: PersonaTrait[] = [];
+      for (let i = 0; i < 12; i++) {
+        // confidences 0.94, 0.91, ... all >= 0.6
+        traits.push(makeTrait(i + 1, `area_${i}`, 0.94 - i * 0.03, NOW_ISO));
+      }
+
+      const prompt = buildSystemPrompt(basePersona, traits);
+      const lines = prompt
+        .split("\n")
+        .filter((l) => l.startsWith("- **focus_area**"));
+
+      // Only the top 8 are rendered.
+      expect(lines).toHaveLength(8);
+      // The 8 highest-confidence areas (area_0..area_7) are present.
+      for (let i = 0; i < 8; i++) {
+        expect(prompt).toContain(`area_${i}`);
+      }
+      // The 4 lowest-confidence areas are dropped.
+      for (let i = 8; i < 12; i++) {
+        expect(prompt).not.toContain(`area_${i}`);
+      }
+    });
+
+    it("renders capped traits in descending confidence order", () => {
+      const traits: PersonaTrait[] = [
+        makeTrait(1, "low_keep", 0.62, NOW_ISO),
+        makeTrait(2, "high", 0.9, NOW_ISO),
+        makeTrait(3, "mid", 0.75, NOW_ISO),
+      ];
+      const prompt = buildSystemPrompt(basePersona, traits);
+      expect(prompt.indexOf("high")).toBeLessThan(prompt.indexOf("mid"));
+      expect(prompt.indexOf("mid")).toBeLessThan(prompt.indexOf("low_keep"));
+    });
+
+    it("excludes a trait that decays below 0.6 even though its stored value is >= 0.6", () => {
+      // Stored 0.8 but very stale -> decays well under 0.6.
+      const stale = makeTrait(1, "placements", 0.8, STALE_ISO);
+      const prompt = buildSystemPrompt(basePersona, [stale]);
+      expect(prompt).not.toContain("## User Preferences");
+      expect(prompt).not.toContain("placements");
+    });
+
+    it("keeps a fresh trait while dropping a stale one of equal stored confidence", () => {
+      const fresh = makeTrait(1, "fresh_area", 0.8, NOW_ISO);
+      const stale = makeTrait(2, "stale_area", 0.8, STALE_ISO);
+      const prompt = buildSystemPrompt(basePersona, [fresh, stale]);
+      expect(prompt).toContain("fresh_area");
+      expect(prompt).not.toContain("stale_area");
     });
   });
 
