@@ -1,6 +1,7 @@
 import { getDb } from "../state/db.js";
 import { createLogger } from "../logging/logger.js";
 import type { PersonaProfile, PersonaTrait } from "./types.js";
+import { decayedConfidence } from "./personaDecay.js";
 
 const log = createLogger("persona-store");
 
@@ -81,6 +82,26 @@ export function getTraits(userId: string): PersonaTrait[] {
     )
     .all(userId) as PersonaTraitRow[];
   return rows.map(mapTraitRow);
+}
+
+/**
+ * Returns traits with a READ-TIME confidence decay applied (see
+ * `decayedConfidence`). Stored rows are never mutated; the returned objects
+ * carry the faded confidence so stale interests down-weight without a write.
+ * Results are re-sorted by the decayed confidence (descending).
+ *
+ * `now` is injectable for deterministic tests; defaults to the current time.
+ */
+export function getTraitsForPrompt(
+  userId: string,
+  now: Date = new Date()
+): PersonaTrait[] {
+  return getTraits(userId)
+    .map((trait) => ({
+      ...trait,
+      confidence: decayedConfidence(trait.confidence, trait.updatedAt, now),
+    }))
+    .sort((a, b) => b.confidence - a.confidence);
 }
 
 export function upsertTrait(
