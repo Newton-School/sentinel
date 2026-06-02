@@ -1,7 +1,8 @@
 import "dotenv/config";
 import { z } from "zod";
 
-const envSchema = z.object({
+export const envSchema = z
+  .object({
   SLACK_BOT_TOKEN: z.string().startsWith("xoxb-"),
   SLACK_APP_TOKEN: z.string().startsWith("xapp-"),
   BOT_USER_ID: z.string().min(1),
@@ -34,12 +35,31 @@ const envSchema = z.object({
 
   ALLOWED_USER_IDS: z
     .string()
-    .transform((s) => s.split(",").map((id) => id.trim()).filter(Boolean)),
+    .transform((s) => s.split(",").map((id) => id.trim()).filter(Boolean))
+    .refine(
+      (arr) => arr.length > 0,
+      "ALLOWED_USER_IDS must list at least one Slack user ID",
+    ),
 
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace"])
     .default("info"),
-});
+  })
+  .refine(
+    (env) => {
+      const googleVars = [
+        env.GOOGLE_CLIENT_ID,
+        env.GOOGLE_CLIENT_SECRET,
+        env.GOOGLE_REFRESH_TOKEN,
+      ];
+      const count = googleVars.filter(Boolean).length;
+      return count === 0 || count === 3;
+    },
+    {
+      message:
+        "GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REFRESH_TOKEN must all be set together or all be unset",
+    },
+  );
 
 export type Config = z.infer<typeof envSchema>;
 
