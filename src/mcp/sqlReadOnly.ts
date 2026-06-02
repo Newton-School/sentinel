@@ -22,10 +22,25 @@ const ALLOWED_LEADING_KEYWORDS = [
 ];
 
 /**
- * Forbidden DML/DDL/admin keywords. Matched as whole words (\b) so column
- * names like `updated_at`, `created_at`, `deleted_at` are NOT false-positives.
+ * Forbidden DML/DDL/admin keywords rejected if they appear as a whole word
+ * (\b, so `updated_at`/`created_at`/`deleted_at` are NOT false-positives)
+ * ANYWHERE in the statement — not just at the start.
+ *
+ * This anywhere-check is not mere paranoia: a query that starts with an allowed
+ * keyword can still mutate data inside a single statement via
+ *   - data-modifying CTEs, e.g. `WITH x AS (DELETE FROM t RETURNING *) SELECT ...`
+ *   - `SELECT ... INTO new_table ...` (creates a table)
+ * so INSERT/UPDATE/DELETE/INTO etc. must be blocked wherever they appear.
+ *
+ * NOTE: dual-use keywords that are also legitimate read-side functions or
+ * identifiers (e.g. `REPLACE()`, `MERGE`) are intentionally NOT in this list —
+ * blocking them anywhere false-rejects valid reads like
+ * `SELECT REPLACE(name,' ','_') FROM t`. They remain blocked as *statement
+ * starters* by the ALLOWED_LEADING_KEYWORDS allowlist (a query may only begin
+ * with SELECT/WITH/EXPLAIN/SHOW/DESCRIBE), and stacked statements are rejected
+ * separately, so `REPLACE INTO ...` / `MERGE INTO ...` are still refused.
  */
-const FORBIDDEN_KEYWORDS = [
+const FORBIDDEN_ANYWHERE_KEYWORDS = [
   "INSERT",
   "UPDATE",
   "DELETE",
@@ -35,8 +50,6 @@ const FORBIDDEN_KEYWORDS = [
   "TRUNCATE",
   "GRANT",
   "REVOKE",
-  "MERGE",
-  "REPLACE",
   "CALL",
   "EXEC",
   "EXECUTE",
@@ -101,8 +114,10 @@ export function assertReadOnlySql(sql: string): void {
   }
 
   // Defense-in-depth: reject if any forbidden DML/DDL keyword appears as a
-  // whole word anywhere in the (comment-stripped) statement.
-  for (const keyword of FORBIDDEN_KEYWORDS) {
+  // whole word anywhere in the (comment-stripped) statement. Guards against
+  // data-modifying CTEs and `SELECT ... INTO ...`. Dual-use function keywords
+  // (REPLACE, MERGE) are deliberately excluded — see FORBIDDEN_ANYWHERE_KEYWORDS.
+  for (const keyword of FORBIDDEN_ANYWHERE_KEYWORDS) {
     const re = new RegExp(`\\b${keyword}\\b`, "i");
     if (re.test(statement)) {
       throw new Error(

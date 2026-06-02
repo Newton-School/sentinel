@@ -88,6 +88,18 @@ describe("assertReadOnlySql", () => {
         assertReadOnlySql("SELECT * FROM users;  \n")
       ).not.toThrow();
     });
+
+    it("allows REPLACE() used as a read-side string function", () => {
+      expect(() =>
+        assertReadOnlySql("SELECT REPLACE(name, ' ', '_') AS slug FROM users")
+      ).not.toThrow();
+    });
+
+    it("allows an alias/identifier named like a dual-use keyword (merge)", () => {
+      expect(() =>
+        assertReadOnlySql("SELECT id AS merge FROM users")
+      ).not.toThrow();
+    });
   });
 
   describe("rejected non-read-only queries", () => {
@@ -188,6 +200,24 @@ describe("assertReadOnlySql", () => {
 
     it("throws an Error with a descriptive message", () => {
       expect(() => assertReadOnlySql("DELETE FROM users")).toThrow(/read-only|Rejected|forbidden|DELETE/i);
+    });
+
+    it("rejects REPLACE INTO as a statement starter (MySQL upsert)", () => {
+      expect(() =>
+        assertReadOnlySql("REPLACE INTO users (id) VALUES (1)")
+      ).toThrow();
+    });
+
+    it("rejects MERGE INTO as a statement starter", () => {
+      expect(() =>
+        assertReadOnlySql("MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET t.x = s.x")
+      ).toThrow();
+    });
+
+    it("rejects a data-modifying CTE (WITH ... DELETE ... RETURNING)", () => {
+      expect(() =>
+        assertReadOnlySql("WITH x AS (DELETE FROM users RETURNING *) SELECT * FROM x")
+      ).toThrow();
     });
   });
 });
