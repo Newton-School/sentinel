@@ -26,28 +26,49 @@ describe("health check server", () => {
   let port: number;
   let statusFn: () => HealthStatus;
 
-  beforeEach(async () => {
-    statusFn = () => ({
-      status: "ok",
-      uptime: 123,
-      slack: "connected",
-      database: "connected",
-      mcpServers: ["slack-search", "gmail"],
-      unavailableSources: ["Metabase", "GitHub"],
+  // Liveness uptime is sourced independently of the readiness status fn so the
+  // DB SELECT 1 can never flap /health. Tests pass the readiness uptime here so
+  // both endpoints report a consistent value.
+  function listen(
+    fn: () => HealthStatus,
+    getUptime: () => number = () => fn().uptime
+  ): Promise<void> {
+    statusFn = fn;
+    server = createHealthServer(statusFn, getUptime);
+    return new Promise<void>((resolve) => {
+      server.listen(0, () => {
+        const addr = server.address();
+        port = typeof addr === "object" && addr ? addr.port : 0;
+        resolve();
+      });
     });
+  }
 
-    server = createHealthServer(statusFn);
-    await new Promise<void>((resolve) => {
-      server.listen(0, () => resolve());
+  function close(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      if (!server) {
+        resolve();
+        return;
+      }
+      server.close(() => resolve());
     });
-    const addr = server.address();
-    port = typeof addr === "object" && addr ? addr.port : 0;
+  }
+
+  const healthyStatus = (): HealthStatus => ({
+    status: "ok",
+    uptime: 123,
+    slack: "connected",
+    database: "connected",
+    mcpServers: ["slack-search", "gmail"],
+    unavailableSources: ["Metabase", "GitHub"],
+  });
+
+  beforeEach(async () => {
+    await listen(healthyStatus);
   });
 
   afterEach(async () => {
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
+    await close();
   });
 
   function fetch(path: string): Promise<{ status: number; body: unknown }> {
@@ -65,11 +86,20 @@ describe("health check server", () => {
     });
   }
 
-  describe("/health", () => {
-    it("returns 200 with status ok", async () => {
+  // Reattach the server with a fresh status function for a single test.
+  async function reattach(
+    fn: () => HealthStatus,
+    getUptime?: () => number
+  ): Promise<void> {
+    await close();
+    await listen(fn, getUptime);
+  }
+
+  describe("/health (liveness)", () => {
+    it("returns 200 with status alive when fully healthy", async () => {
       const res = await fetch("/health");
       expect(res.status).toBe(200);
-      expect((res.body as Record<string, unknown>).status).toBe("ok");
+      expect((res.body as Record<string, unknown>).status).toBe("alive");
     });
 
     it("includes uptime", async () => {
@@ -77,73 +107,131 @@ describe("health check server", () => {
       expect((res.body as Record<string, unknown>).uptime).toBe(123);
     });
 
-    it("includes slack connection status", async () => {
+    it("returns 200 even when slack is disconnected (liveness must not flap)", async () => {
+      await reattach(() => ({
+        status: "degraded",
+        uptime: 5,
+        slack: "disconnected",
+        database: "connected",
+        mcpServers: [],
+        unavailableSources: [],
+      }));
+
       const res = await fetch("/health");
-      expect((res.body as Record<string, unknown>).slack).toBe("connected");
+      expect(res.status).toBe(200);
+      expect((res.body as Record<string, unknown>).status).toBe("alive");
     });
 
-    it("includes database status", async () => {
+    it("returns 200 even when the database check fails (liveness must not flap)", async () => {
+      await reattach(() => ({
+        status: "degraded",
+        uptime: 7,
+        slack: "connected",
+        database: "error",
+        mcpServers: [],
+        unavailableSources: [],
+      }));
+
       const res = await fetch("/health");
-      expect((res.body as Record<string, unknown>).database).toBe("connected");
+      expect(res.status).toBe(200);
+      expect((res.body as Record<string, unknown>).status).toBe("alive");
+      expect((res.body as Record<string, unknown>).uptime).toBe(7);
     });
 
-    it("includes MCP servers list", async () => {
+    it("returns 200 even when both slack and database are down", async () => {
+      await reattach(() => ({
+        status: "degraded",
+        uptime: 9,
+        slack: "disconnected",
+        database: "error",
+        mcpServers: [],
+        unavailableSources: [],
+      }));
+
       const res = await fetch("/health");
-      expect((res.body as Record<string, unknown>).mcpServers).toEqual(["slack-search", "gmail"]);
+      expect(res.status).toBe(200);
     });
 
-    it("includes unavailable sources", async () => {
+    it("does not invoke the readiness status function (decoupled from slack/db state)", async () => {
+      // The liveness path must not depend on the (potentially expensive /
+      // flaky) readiness check. uptime is sourced from a separate provider; if
+      // getReadiness is never called, the DB SELECT 1 can never flap liveness.
+      const spy = vi.fn(healthyStatus);
+      // Explicit uptime provider so the default helper doesn't call the spy.
+      await reattach(spy, () => 42);
+
       const res = await fetch("/health");
-      expect((res.body as Record<string, unknown>).unavailableSources).toEqual(["Metabase", "GitHub"]);
+      expect(res.status).toBe(200);
+      expect((res.body as Record<string, unknown>).uptime).toBe(42);
+      expect(spy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("/ready (readiness)", () => {
+    it("returns 200 with status ok when slack and db are healthy", async () => {
+      const res = await fetch("/ready");
+      expect(res.status).toBe(200);
+      expect((res.body as Record<string, unknown>).status).toBe("ok");
     });
 
-    it("returns 503 when status is degraded", async () => {
-      statusFn = () => ({
+    it("includes the full readiness fields", async () => {
+      const res = await fetch("/ready");
+      const body = res.body as Record<string, unknown>;
+      expect(body.uptime).toBe(123);
+      expect(body.slack).toBe("connected");
+      expect(body.database).toBe("connected");
+      expect(body.mcpServers).toEqual(["slack-search", "gmail"]);
+      expect(body.unavailableSources).toEqual(["Metabase", "GitHub"]);
+    });
+
+    it("returns 503 with status degraded when slack is disconnected", async () => {
+      await reattach(() => ({
         status: "degraded",
         uptime: 10,
         slack: "disconnected",
         database: "connected",
         mcpServers: [],
         unavailableSources: [],
-      });
-      // Need to recreate server with new status fn
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-      server = createHealthServer(statusFn);
-      await new Promise<void>((resolve) => server.listen(0, () => resolve()));
-      const addr = server.address();
-      port = typeof addr === "object" && addr ? addr.port : 0;
+      }));
 
-      const res = await fetch("/health");
-      expect(res.status).toBe(503);
-      expect((res.body as Record<string, unknown>).status).toBe("degraded");
-    });
-  });
-
-  describe("/ready", () => {
-    it("returns 200 when ready", async () => {
       const res = await fetch("/ready");
-      expect(res.status).toBe(200);
-      expect((res.body as Record<string, unknown>).ready).toBe(true);
+      expect(res.status).toBe(503);
+      const body = res.body as Record<string, unknown>;
+      expect(body.status).toBe("degraded");
+      expect(body.slack).toBe("disconnected");
+      expect(body.database).toBe("connected");
     });
 
-    it("returns 503 when not ready", async () => {
-      statusFn = () => ({
+    it("returns 503 when the database check throws / errors", async () => {
+      await reattach(() => ({
+        status: "degraded",
+        uptime: 0,
+        slack: "connected",
+        database: "error",
+        mcpServers: [],
+        unavailableSources: [],
+      }));
+
+      const res = await fetch("/ready");
+      expect(res.status).toBe(503);
+      const body = res.body as Record<string, unknown>;
+      expect(body.status).toBe("degraded");
+      expect(body.database).toBe("error");
+    });
+
+    it("returns 503 when both slack and db are down", async () => {
+      await reattach(() => ({
         status: "degraded",
         uptime: 0,
         slack: "disconnected",
         database: "error",
         mcpServers: [],
         unavailableSources: [],
-      });
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-      server = createHealthServer(statusFn);
-      await new Promise<void>((resolve) => server.listen(0, () => resolve()));
-      const addr = server.address();
-      port = typeof addr === "object" && addr ? addr.port : 0;
+      }));
 
       const res = await fetch("/ready");
       expect(res.status).toBe(503);
-      expect((res.body as Record<string, unknown>).ready).toBe(false);
+      expect((res.body as Record<string, unknown>).status).toBe("degraded");
     });
   });
 
