@@ -11,6 +11,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { google } from "googleapis";
 import { z } from "zod";
+import {
+  weekWindow,
+  startBoundary,
+  endBoundary,
+  mapEvent,
+  mapSearchEvent,
+} from "./calendarWeek.js";
 
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
@@ -37,31 +44,10 @@ server.tool(
     calendar_id: z.string().default("primary").describe("Calendar ID (default: 'primary')"),
   },
   async ({ start_date, end_date, max_results, calendar_id }) => {
-    const now = new Date();
-
-    // Default to this week (Monday to Friday)
-    let timeMin: string;
-    let timeMax: string;
-
-    if (start_date) {
-      timeMin = new Date(start_date).toISOString();
-    } else {
-      const monday = new Date(now);
-      monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
-      monday.setHours(0, 0, 0, 0);
-      timeMin = monday.toISOString();
-    }
-
-    if (end_date) {
-      const end = new Date(end_date);
-      end.setHours(23, 59, 59, 999);
-      timeMax = end.toISOString();
-    } else {
-      const friday = new Date(now);
-      friday.setDate(now.getDate() - ((now.getDay() + 6) % 7) + 4);
-      friday.setHours(23, 59, 59, 999);
-      timeMax = friday.toISOString();
-    }
+    // Default to this week (Monday to Friday). Explicit dates override either end.
+    const week = weekWindow(new Date());
+    const timeMin = start_date ? startBoundary(start_date) : week.timeMin;
+    const timeMax = end_date ? endBoundary(end_date) : week.timeMax;
 
     const res = await calendar.events.list({
       calendarId: calendar_id,
@@ -72,21 +58,7 @@ server.tool(
       orderBy: "startTime",
     });
 
-    const events = (res.data.items ?? []).map((event) => ({
-      id: event.id,
-      summary: event.summary ?? "(no title)",
-      start: event.start?.dateTime ?? event.start?.date,
-      end: event.end?.dateTime ?? event.end?.date,
-      description: event.description?.slice(0, 300),
-      location: event.location,
-      meetLink: event.hangoutLink,
-      attendees: (event.attendees ?? []).map((a) => ({
-        email: a.email,
-        displayName: a.displayName,
-        responseStatus: a.responseStatus,
-      })),
-      organizer: event.organizer?.email,
-    }));
+    const events = (res.data.items ?? []).map(mapEvent);
 
     return {
       content: [
@@ -172,14 +144,7 @@ server.tool(
       orderBy: "startTime",
     });
 
-    const events = (res.data.items ?? []).map((event) => ({
-      id: event.id,
-      summary: event.summary ?? "(no title)",
-      start: event.start?.dateTime ?? event.start?.date,
-      end: event.end?.dateTime ?? event.end?.date,
-      meetLink: event.hangoutLink,
-      attendeeCount: event.attendees?.length ?? 0,
-    }));
+    const events = (res.data.items ?? []).map(mapSearchEvent);
 
     return {
       content: [

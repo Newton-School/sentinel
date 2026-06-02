@@ -12,6 +12,12 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { google } from "googleapis";
 import { z } from "zod";
 import { extractPlainTextBody } from "./gmailBody.js";
+import {
+  getHeader,
+  buildRecentQuery,
+  shapeSearchResult,
+  shapeListResult,
+} from "./gmailList.js";
 
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
@@ -58,21 +64,7 @@ server.tool(
           metadataHeaders: ["From", "To", "Subject", "Date", "Cc"],
         });
 
-        const headers = detail.data.payload?.headers ?? [];
-        const getHeader = (name: string) =>
-          headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? "";
-
-        return {
-          id: msg.id,
-          threadId: detail.data.threadId,
-          snippet: detail.data.snippet ?? "",
-          from: getHeader("From"),
-          to: getHeader("To"),
-          cc: getHeader("Cc"),
-          subject: getHeader("Subject"),
-          date: getHeader("Date"),
-          labelIds: detail.data.labelIds,
-        };
+        return shapeSearchResult(msg.id, detail.data);
       })
     );
 
@@ -103,17 +95,15 @@ server.tool(
 
     const messages = (thread.data.messages ?? []).map((msg) => {
       const headers = msg.payload?.headers ?? [];
-      const getHeader = (name: string) =>
-        headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? "";
 
       // Extract plain text body, recursing the full MIME part tree.
       let body = extractPlainTextBody(msg.payload);
 
       return {
-        from: getHeader("From"),
-        to: getHeader("To"),
-        subject: getHeader("Subject"),
-        date: getHeader("Date"),
+        from: getHeader(headers, "From"),
+        to: getHeader(headers, "To"),
+        subject: getHeader(headers, "Subject"),
+        date: getHeader(headers, "Date"),
         body: body.slice(0, 2000),
       };
     });
@@ -139,12 +129,7 @@ server.tool(
     max_results: z.number().default(20).describe("Maximum results (default: 20, max: 50)"),
   },
   async ({ days, label, max_results }) => {
-    const afterDate = new Date();
-    afterDate.setDate(afterDate.getDate() - days);
-    const afterStr = `${afterDate.getFullYear()}/${String(afterDate.getMonth() + 1).padStart(2, "0")}/${String(afterDate.getDate()).padStart(2, "0")}`;
-
-    let query = `after:${afterStr}`;
-    if (label) query += ` label:${label}`;
+    const query = buildRecentQuery(days, new Date(), label);
 
     const listRes = await gmail.users.messages.list({
       userId: "me",
@@ -168,18 +153,7 @@ server.tool(
           metadataHeaders: ["From", "To", "Subject", "Date"],
         });
 
-        const headers = detail.data.payload?.headers ?? [];
-        const getHeader = (name: string) =>
-          headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? "";
-
-        return {
-          id: msg.id,
-          threadId: detail.data.threadId,
-          snippet: detail.data.snippet ?? "",
-          from: getHeader("From"),
-          subject: getHeader("Subject"),
-          date: getHeader("Date"),
-        };
+        return shapeListResult(msg.id, detail.data);
       })
     );
 

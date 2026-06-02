@@ -11,6 +11,14 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import {
+  shapeSearchMatches,
+  shapeChannelHistory,
+  shapeThreadReplies,
+  type SlackSearchMatch,
+  type SlackHistoryMessage,
+  type SlackReplyMessage,
+} from "./slackShape.js";
 
 const SLACK_USER_TOKEN = process.env.SLACK_USER_TOKEN!;
 
@@ -59,24 +67,11 @@ server.tool(
     })) as {
       messages: {
         total: number;
-        matches: Array<{
-          text: string;
-          username: string;
-          ts: string;
-          channel: { name: string; id: string };
-          permalink: string;
-        }>;
+        matches: SlackSearchMatch[];
       };
     };
 
-    const results = data.messages.matches.map((m) => ({
-      channel: m.channel.name,
-      channelId: m.channel.id,
-      user: m.username,
-      text: m.text.slice(0, 500),
-      timestamp: new Date(parseFloat(m.ts) * 1000).toISOString(),
-      permalink: m.permalink,
-    }));
+    const results = shapeSearchMatches(data.messages.matches);
 
     return {
       content: [
@@ -110,23 +105,10 @@ server.tool(
     if (oldest) params.oldest = oldest;
 
     const data = (await slackApi("conversations.history", params)) as {
-      messages: Array<{
-        user?: string;
-        text: string;
-        ts: string;
-        thread_ts?: string;
-        reply_count?: number;
-      }>;
+      messages: SlackHistoryMessage[];
     };
 
-    const messages = data.messages.map((m) => ({
-      user: m.user ?? "bot",
-      text: m.text.slice(0, 500),
-      timestamp: new Date(parseFloat(m.ts) * 1000).toISOString(),
-      ts: m.ts,
-      hasThread: !!m.thread_ts && m.reply_count !== undefined && m.reply_count > 0,
-      replyCount: m.reply_count ?? 0,
-    }));
+    const messages = shapeChannelHistory(data.messages);
 
     return {
       content: [
@@ -154,18 +136,10 @@ server.tool(
       ts: thread_ts,
       limit: String(Math.min(limit, 200)),
     })) as {
-      messages: Array<{
-        user?: string;
-        text: string;
-        ts: string;
-      }>;
+      messages: SlackReplyMessage[];
     };
 
-    const messages = data.messages.map((m) => ({
-      user: m.user ?? "bot",
-      text: m.text.slice(0, 500),
-      timestamp: new Date(parseFloat(m.ts) * 1000).toISOString(),
-    }));
+    const messages = shapeThreadReplies(data.messages);
 
     return {
       content: [

@@ -10,6 +10,12 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { assertReadOnlySql } from "./sqlReadOnly.js";
 import { createMetabaseClient } from "./metabaseClient.js";
+import {
+  shapeQueryResult,
+  mapDashboards,
+  mapDatabases,
+  type MetabaseDataset,
+} from "./metabaseShape.js";
 
 // Build a single client from the environment. Auth + fetch (incl. the 401
 // re-auth retry guard) live in the side-effect-free metabaseClient module.
@@ -64,27 +70,13 @@ server.tool(
         type: "native",
         native: { query: sql },
       }),
-    })) as {
-      data: {
-        rows: unknown[][];
-        cols: { name: string }[];
-      };
-    };
-
-    const cols = result.data.cols.map((c) => c.name);
-    const rows = result.data.rows.map((row) => {
-      const obj: Record<string, unknown> = {};
-      cols.forEach((col, i) => {
-        obj[col] = row[i];
-      });
-      return obj;
-    });
+    })) as { data: MetabaseDataset };
 
     return {
       content: [
         {
           type: "text" as const,
-          text: JSON.stringify({ columns: cols, rows, rowCount: rows.length }, null, 2),
+          text: JSON.stringify(shapeQueryResult(result.data), null, 2),
         },
       ],
     };
@@ -101,27 +93,13 @@ server.tool(
   async ({ question_id }) => {
     const result = (await metabaseFetch(
       `/api/card/${question_id}/query`
-    )) as {
-      data: {
-        rows: unknown[][];
-        cols: { name: string }[];
-      };
-    };
-
-    const cols = result.data.cols.map((c) => c.name);
-    const rows = result.data.rows.map((row) => {
-      const obj: Record<string, unknown> = {};
-      cols.forEach((col, i) => {
-        obj[col] = row[i];
-      });
-      return obj;
-    });
+    )) as { data: MetabaseDataset };
 
     return {
       content: [
         {
           type: "text" as const,
-          text: JSON.stringify({ columns: cols, rows, rowCount: rows.length }, null, 2),
+          text: JSON.stringify(shapeQueryResult(result.data), null, 2),
         },
       ],
     };
@@ -140,17 +118,11 @@ server.tool(
       description: string | null;
     }>;
 
-    const summary = dashboards.map((d) => ({
-      id: d.id,
-      name: d.name,
-      description: d.description,
-    }));
-
     return {
       content: [
         {
           type: "text" as const,
-          text: JSON.stringify(summary, null, 2),
+          text: JSON.stringify(mapDashboards(dashboards), null, 2),
         },
       ],
     };
@@ -171,15 +143,7 @@ server.tool(
       content: [
         {
           type: "text" as const,
-          text: JSON.stringify(
-            result.data.map((d) => ({
-              id: d.id,
-              name: d.name,
-              engine: d.engine,
-            })),
-            null,
-            2
-          ),
+          text: JSON.stringify(mapDatabases(result.data), null, 2),
         },
       ],
     };
