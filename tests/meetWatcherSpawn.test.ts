@@ -5,11 +5,15 @@ import { EventEmitter } from "node:events";
 // process.exit(1) on invalid env. Mock it so importing the module is safe and
 // deterministic. The Google credentials are only read by startMeetWatcher()
 // (not exercised here) — runOnce takes the calendar client directly.
+// SQLITE_DB_PATH points at an in-memory DB so the watcher's now-persistent
+// join dedup (joined_meetings table via joinStore) is exercised for real.
 vi.mock("../src/config.js", () => ({
   config: {
     GOOGLE_CLIENT_ID: "gid",
     GOOGLE_CLIENT_SECRET: "gsecret",
     GOOGLE_REFRESH_TOKEN: "grefresh",
+    SQLITE_DB_PATH: ":memory:",
+    LOG_LEVEL: "silent",
   },
 }));
 
@@ -54,9 +58,21 @@ const {
   buildJoinerArgs,
   mapCalendarEvents,
   purgeOldJoinedIds,
-  joinedAt,
   resetJoinedAt,
 } = await import("../src/meet-bot/watcher.js");
+
+// The watcher's join dedup is now persisted in SQLite via joinStore. Import
+// the store so tests can seed/inspect joined IDs the same way the watcher does.
+const { markJoined, getJoinedIds } = await import(
+  "../src/meet-bot/joinStore.js"
+);
+
+const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
+
+// Helper: is an event ID currently recorded as joined within the 4h TTL window?
+function isJoined(id: string): boolean {
+  return getJoinedIds(Date.now() - FOUR_HOURS_MS).has(id);
+}
 
 // Build a fake googleapis calendar client whose events.list returns a fixed set.
 function makeCalendar(items: unknown[]) {
@@ -180,11 +196,24 @@ describe("runOnce poll loop", () => {
 
     await runOnce(client);
     expect(spawnMock).toHaveBeenCalledTimes(1);
-    expect(joinedAt.has("evt-dedup")).toBe(true);
+    // The joined ID is persisted in SQLite (survives restarts).
+    expect(isJoined("evt-dedup")).toBe(true);
 
     // Same event returned again on the next poll — must NOT spawn again.
     await runOnce(client);
     expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips an event already recorded as joined in the persistent store", async () => {
+    // Simulate a prior process having joined this event (e.g. before a restart):
+    // seed the store directly, then poll. The watcher must NOT spawn again.
+    markJoined("evt-prejoined", Date.now());
+
+    const { client } = makeCalendar([
+      eligibleRawEvent("evt-prejoined", "aaa-bbbb-ccc"),
+    ]);
+    await runOnce(client);
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("does not spawn anything when there are no eligible events", async () => {
@@ -220,36 +249,40 @@ describe("runOnce poll loop", () => {
   });
 });
 
-describe("purgeOldJoinedIds (TTL purge)", () => {
+describe("purgeOldJoinedIds (TTL purge, now persisted in SQLite)", () => {
   beforeEach(() => {
     resetJoinedAt();
   });
 
+  // getJoinedIds uses the same cutoff as the watcher's purge; query at the
+  // exact `now` used in the purge so the TTL boundary is asserted precisely.
+  function joinedWithinTtl(id: string, now: number): boolean {
+    return getJoinedIds(now - FOUR_HOURS_MS).has(id);
+  }
+
   it("purges entries older than the 4h TTL but retains recent ones", () => {
     const now = Date.now();
-    const FOUR_HOURS = 4 * 60 * 60 * 1000;
-    joinedAt.set("old", now - FOUR_HOURS - 1);
-    joinedAt.set("recent", now - 1000);
+    markJoined("old", now - FOUR_HOURS_MS - 1);
+    markJoined("recent", now - 1000);
 
     purgeOldJoinedIds(now);
 
-    expect(joinedAt.has("old")).toBe(false);
-    expect(joinedAt.has("recent")).toBe(true);
+    expect(joinedWithinTtl("old", now)).toBe(false);
+    expect(joinedWithinTtl("recent", now)).toBe(true);
   });
 
   it("retains an entry exactly at the TTL boundary (not strictly older)", () => {
     const now = Date.now();
-    const FOUR_HOURS = 4 * 60 * 60 * 1000;
-    joinedAt.set("boundary", now - FOUR_HOURS);
+    markJoined("boundary", now - FOUR_HOURS_MS);
     purgeOldJoinedIds(now);
-    // cutoff = now - TTL; entry kept when ts >= cutoff
-    expect(joinedAt.has("boundary")).toBe(true);
+    // cutoff = now - TTL; entry kept when joined_at >= cutoff
+    expect(joinedWithinTtl("boundary", now)).toBe(true);
   });
 
   it("defaults to Date.now() when no time is provided", () => {
-    joinedAt.set("ancient", 0);
+    markJoined("ancient", 0);
     purgeOldJoinedIds();
-    expect(joinedAt.has("ancient")).toBe(false);
+    expect(joinedWithinTtl("ancient", Date.now())).toBe(false);
   });
 });
 

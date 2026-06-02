@@ -52,6 +52,13 @@ function runMigrations(db: Database.Database): void {
       category TEXT,
       created_at TEXT NOT NULL
     );
+
+    -- Persists Meet-watcher join dedup so it survives process restarts:
+    -- joined_at is epoch ms; rows older than the watcher's TTL are purged.
+    CREATE TABLE IF NOT EXISTS joined_meetings (
+      event_id TEXT PRIMARY KEY,
+      joined_at INTEGER NOT NULL
+    );
   `);
 
   // Migration: add response audit columns to query_log
