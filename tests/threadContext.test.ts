@@ -129,4 +129,54 @@ describe("fetchThreadContext", () => {
       fetchThreadContext(client, "C1", "1.0")
     ).resolves.toEqual([]);
   });
+
+  it("follows next_cursor across pages and accumulates all replies (minus parent)", async () => {
+    // Page 1: parent + 50 replies, advertises a next_cursor.
+    const page1Replies = Array.from({ length: 50 }, (_, i) => ({
+      user: `U${i + 1}`,
+      text: `reply ${i + 1}`,
+      ts: `1.${i + 1}`,
+    }));
+    // Page 2: 5 more replies, no further cursor.
+    const page2Replies = Array.from({ length: 5 }, (_, i) => ({
+      user: `V${i + 1}`,
+      text: `more ${i + 1}`,
+      ts: `2.${i + 1}`,
+    }));
+
+    const replies = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [{ user: "U0", text: "parent", ts: "1.0" }, ...page1Replies],
+        response_metadata: { next_cursor: "CURSOR_2" },
+      })
+      .mockResolvedValueOnce({
+        // Slack repeats the parent as the first message on every page of a
+        // thread; the function must drop the parent only once.
+        messages: [{ user: "U0", text: "parent", ts: "1.0" }, ...page2Replies],
+        response_metadata: { next_cursor: "" },
+      });
+    const client = { conversations: { replies } } as unknown as WebClient;
+
+    const result = await fetchThreadContext(client, "C1", "1.0");
+
+    // Both pages' replies returned (50 + 5), parent excluded.
+    expect(result).toHaveLength(55);
+    expect(result[0]).toEqual({ userId: "U1", text: "reply 1", ts: "1.1" });
+    expect(result[50]).toEqual({ userId: "V1", text: "more 1", ts: "2.1" });
+
+    // Two calls; the second one passes the cursor from the first page.
+    expect(replies).toHaveBeenCalledTimes(2);
+    expect(replies).toHaveBeenNthCalledWith(1, {
+      channel: "C1",
+      ts: "1.0",
+      limit: 50,
+    });
+    expect(replies).toHaveBeenNthCalledWith(2, {
+      channel: "C1",
+      ts: "1.0",
+      limit: 50,
+      cursor: "CURSOR_2",
+    });
+  });
 });

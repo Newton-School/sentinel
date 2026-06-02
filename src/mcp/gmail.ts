@@ -18,6 +18,12 @@ import {
   shapeSearchResult,
   shapeListResult,
 } from "./gmailList.js";
+import { paginate } from "./paginate.js";
+
+/** Minimal shape of a Gmail message-list stub (id + threadId). */
+interface GmailMessageStub {
+  id?: string | null;
+}
 
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
@@ -42,13 +48,35 @@ server.tool(
     max_results: z.number().default(15).describe("Maximum number of results (default: 15, max: 50)"),
   },
   async ({ query, max_results }) => {
-    const listRes = await gmail.users.messages.list({
-      userId: "me",
-      q: query,
-      maxResults: Math.min(max_results, 50),
+    const maxItems = Math.min(max_results, 50);
+    let resultSizeEstimate: number | null | undefined;
+
+    const { items: messages, truncated } = await paginate<GmailMessageStub>({
+      maxItems,
+      fetchPage: async (cursor) => {
+        const listRes = await gmail.users.messages.list({
+          userId: "me",
+          q: query,
+          maxResults: maxItems,
+          pageToken: cursor,
+        });
+        // Preserve the first page's estimate for the output's `total` field.
+        if (resultSizeEstimate === undefined) {
+          resultSizeEstimate = listRes.data.resultSizeEstimate;
+        }
+        return {
+          items: listRes.data.messages ?? [],
+          next: listRes.data.nextPageToken ?? undefined,
+        };
+      },
     });
 
-    const messages = listRes.data.messages ?? [];
+    if (truncated) {
+      console.error(
+        `gmail_search: truncated at max_results=${maxItems}; more messages matched.`
+      );
+    }
+
     if (messages.length === 0) {
       return {
         content: [{ type: "text" as const, text: JSON.stringify({ total: 0, results: [] }) }],
@@ -72,7 +100,7 @@ server.tool(
       content: [
         {
           type: "text" as const,
-          text: JSON.stringify({ total: listRes.data.resultSizeEstimate, results }, null, 2),
+          text: JSON.stringify({ total: resultSizeEstimate, results }, null, 2),
         },
       ],
     };
@@ -130,14 +158,34 @@ server.tool(
   },
   async ({ days, label, max_results }) => {
     const query = buildRecentQuery(days, new Date(), label);
+    const maxItems = Math.min(max_results, 50);
+    let resultSizeEstimate: number | null | undefined;
 
-    const listRes = await gmail.users.messages.list({
-      userId: "me",
-      q: query,
-      maxResults: Math.min(max_results, 50),
+    const { items: messages, truncated } = await paginate<GmailMessageStub>({
+      maxItems,
+      fetchPage: async (cursor) => {
+        const listRes = await gmail.users.messages.list({
+          userId: "me",
+          q: query,
+          maxResults: maxItems,
+          pageToken: cursor,
+        });
+        if (resultSizeEstimate === undefined) {
+          resultSizeEstimate = listRes.data.resultSizeEstimate;
+        }
+        return {
+          items: listRes.data.messages ?? [],
+          next: listRes.data.nextPageToken ?? undefined,
+        };
+      },
     });
 
-    const messages = listRes.data.messages ?? [];
+    if (truncated) {
+      console.error(
+        `gmail_list_recent: truncated at max_results=${maxItems}; more messages were available.`
+      );
+    }
+
     if (messages.length === 0) {
       return {
         content: [{ type: "text" as const, text: JSON.stringify({ total: 0, results: [] }) }],
@@ -161,7 +209,7 @@ server.tool(
       content: [
         {
           type: "text" as const,
-          text: JSON.stringify({ total: listRes.data.resultSizeEstimate, results }, null, 2),
+          text: JSON.stringify({ total: resultSizeEstimate, results }, null, 2),
         },
       ],
     };

@@ -19,7 +19,9 @@ import {
   truncateDocText,
   mapSearchFiles,
   mapRecentFiles,
+  type DriveFile,
 } from "./transcriptsQuery.js";
+import { paginate } from "./paginate.js";
 
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
@@ -50,15 +52,33 @@ server.tool(
     // when a query is given we match it on name/fullText, otherwise we fall back
     // to titles containing "transcript".
     const driveQuery = buildSearchQuery(days_back, new Date(), query);
+    const maxItems = Math.min(max_results, 30);
 
-    const res = await drive.files.list({
-      q: driveQuery,
-      fields: "files(id, name, createdTime, modifiedTime, webViewLink, owners)",
-      orderBy: "modifiedTime desc",
-      pageSize: Math.min(max_results, 30),
+    const { items: rawFiles, truncated } = await paginate<DriveFile>({
+      maxItems,
+      fetchPage: async (cursor) => {
+        const res = await drive.files.list({
+          q: driveQuery,
+          fields:
+            "nextPageToken, files(id, name, createdTime, modifiedTime, webViewLink, owners)",
+          orderBy: "modifiedTime desc",
+          pageSize: maxItems,
+          pageToken: cursor,
+        });
+        return {
+          items: res.data.files ?? [],
+          next: res.data.nextPageToken ?? undefined,
+        };
+      },
     });
 
-    const files = mapSearchFiles(res.data.files ?? []);
+    if (truncated) {
+      console.error(
+        `transcript_search: truncated at max_results=${maxItems}; more transcripts matched.`
+      );
+    }
+
+    const files = mapSearchFiles(rawFiles);
 
     return {
       content: [
@@ -120,15 +140,33 @@ server.tool(
   },
   async ({ days, max_results }) => {
     const driveQuery = buildRecentQuery(days, new Date());
+    const maxItems = Math.min(max_results, 30);
 
-    const res = await drive.files.list({
-      q: driveQuery,
-      fields: "files(id, name, createdTime, modifiedTime, webViewLink)",
-      orderBy: "modifiedTime desc",
-      pageSize: Math.min(max_results, 30),
+    const { items: rawFiles, truncated } = await paginate<DriveFile>({
+      maxItems,
+      fetchPage: async (cursor) => {
+        const res = await drive.files.list({
+          q: driveQuery,
+          fields:
+            "nextPageToken, files(id, name, createdTime, modifiedTime, webViewLink)",
+          orderBy: "modifiedTime desc",
+          pageSize: maxItems,
+          pageToken: cursor,
+        });
+        return {
+          items: res.data.files ?? [],
+          next: res.data.nextPageToken ?? undefined,
+        };
+      },
     });
 
-    const files = mapRecentFiles(res.data.files ?? []);
+    if (truncated) {
+      console.error(
+        `transcript_list_recent: truncated at max_results=${maxItems}; more transcripts were available.`
+      );
+    }
+
+    const files = mapRecentFiles(rawFiles);
 
     return {
       content: [
