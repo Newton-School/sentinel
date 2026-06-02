@@ -1,37 +1,30 @@
-import { describe, it, expect } from "vitest";
-import { z } from "zod";
+import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
+import type { z } from "zod";
 
-// Replicate the schema from config.ts to test it directly (avoids process.exit)
-const envSchema = z.object({
-  SLACK_BOT_TOKEN: z.string().startsWith("xoxb-"),
-  SLACK_APP_TOKEN: z.string().startsWith("xapp-"),
-  BOT_USER_ID: z.string().min(1),
-  CLAUDE_BIN: z.string().default("claude"),
-  ANTHROPIC_API_KEY: z.string().min(1).optional(),
-  METABASE_URL: z.string().url().optional(),
-  METABASE_USERNAME: z.string().min(1).optional(),
-  METABASE_PASSWORD: z.string().min(1).optional(),
-  GITHUB_TOKEN: z.string().min(1).optional(),
-  NOTION_API_KEY: z.string().min(1).optional(),
-  SLACK_USER_TOKEN: z.string().startsWith("xoxp-").optional(),
-  GOOGLE_CLIENT_ID: z.string().min(1).optional(),
-  GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
-  GOOGLE_REFRESH_TOKEN: z.string().min(1).optional(),
-  SQLITE_DB_PATH: z.string().default("./sentinel.db"),
-  ALLOWED_USER_IDS: z
-    .string()
-    .transform((s) =>
-      s
-        .split(",")
-        .map((id) => id.trim())
-        .filter(Boolean)
-    ),
-  LOG_LEVEL: z
-    .enum(["fatal", "error", "warn", "info", "debug", "trace"])
-    .default("info"),
+// Importing src/config.ts runs loadConfig() at module load, which calls
+// process.exit(1) if process.env is invalid. So we set a VALID baseline env
+// here BEFORE importing, and import the module DYNAMICALLY (never statically —
+// a static top-of-file import would trigger the import-time process.exit).
+process.env.SLACK_BOT_TOKEN = "xoxb-test";
+process.env.SLACK_APP_TOKEN = "xapp-test";
+process.env.BOT_USER_ID = "U123";
+process.env.ALLOWED_USER_IDS = "U123"; // non-empty so the ALLOWED_USER_IDS refine passes
+// No Google vars set, so the all-or-none Google refine passes.
+delete process.env.GOOGLE_CLIENT_ID;
+delete process.env.GOOGLE_CLIENT_SECRET;
+delete process.env.GOOGLE_REFRESH_TOKEN;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let envSchema: z.ZodType<any>;
+let loadConfig: () => unknown;
+
+beforeAll(async () => {
+  const mod = await import("../src/config.js");
+  envSchema = mod.envSchema;
+  loadConfig = mod.loadConfig;
 });
 
-describe("config schema", () => {
+describe("config envSchema (real module)", () => {
   const validEnv = {
     SLACK_BOT_TOKEN: "xoxb-test-token",
     SLACK_APP_TOKEN: "xapp-test-token",
@@ -45,7 +38,7 @@ describe("config schema", () => {
     ALLOWED_USER_IDS: "U123,U456",
   };
 
-  it("parses valid env correctly", () => {
+  it("parses valid env correctly with expected defaults", () => {
     const result = envSchema.safeParse(validEnv);
     expect(result.success).toBe(true);
     if (result.success) {
@@ -56,70 +49,51 @@ describe("config schema", () => {
     }
   });
 
-  it("rejects invalid Slack bot token prefix", () => {
-    const result = envSchema.safeParse({
-      ...validEnv,
-      SLACK_BOT_TOKEN: "bad-token",
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects invalid Slack app token prefix", () => {
-    const result = envSchema.safeParse({
-      ...validEnv,
-      SLACK_APP_TOKEN: "bad-token",
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects invalid Metabase URL", () => {
-    const result = envSchema.safeParse({
-      ...validEnv,
-      METABASE_URL: "not-a-url",
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("parses ALLOWED_USER_IDS with whitespace", () => {
-    const result = envSchema.safeParse({
-      ...validEnv,
-      ALLOWED_USER_IDS: " U111 , U222 , U333 ",
-    });
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.ALLOWED_USER_IDS).toEqual(["U111", "U222", "U333"]);
-    }
-  });
-
-  it("accepts valid log levels", () => {
-    const result = envSchema.safeParse({
-      ...validEnv,
-      LOG_LEVEL: "debug",
-    });
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.LOG_LEVEL).toBe("debug");
-    }
-  });
-
-  it("rejects invalid log level", () => {
-    const result = envSchema.safeParse({
-      ...validEnv,
-      LOG_LEVEL: "verbose",
-    });
-    expect(result.success).toBe(false);
-  });
-
-  describe("optional env vars", () => {
-    it("parses successfully without optional vars", () => {
+  describe("HEALTH_CHECK_PORT", () => {
+    it("defaults to 8080 when unset", () => {
       const result = envSchema.safeParse(validEnv);
       expect(result.success).toBe(true);
       if (result.success) {
-        expect(result.data.SLACK_USER_TOKEN).toBeUndefined();
-        expect(result.data.GOOGLE_CLIENT_ID).toBeUndefined();
-        expect(result.data.GOOGLE_CLIENT_SECRET).toBeUndefined();
-        expect(result.data.GOOGLE_REFRESH_TOKEN).toBeUndefined();
+        expect(result.data.HEALTH_CHECK_PORT).toBe(8080);
       }
+    });
+
+    it("coerces a numeric string to a number", () => {
+      const result = envSchema.safeParse({
+        ...validEnv,
+        HEALTH_CHECK_PORT: "3000",
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.HEALTH_CHECK_PORT).toBe(3000);
+        expect(typeof result.data.HEALTH_CHECK_PORT).toBe("number");
+      }
+    });
+
+    it("rejects a non-numeric string", () => {
+      const result = envSchema.safeParse({
+        ...validEnv,
+        HEALTH_CHECK_PORT: "not-a-port",
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe("Slack token prefix checks", () => {
+    it("rejects invalid SLACK_BOT_TOKEN prefix", () => {
+      const result = envSchema.safeParse({
+        ...validEnv,
+        SLACK_BOT_TOKEN: "bad-token",
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects invalid SLACK_APP_TOKEN prefix", () => {
+      const result = envSchema.safeParse({
+        ...validEnv,
+        SLACK_APP_TOKEN: "bad-token",
+      });
+      expect(result.success).toBe(false);
     });
 
     it("accepts valid SLACK_USER_TOKEN with xoxp- prefix", () => {
@@ -140,37 +114,56 @@ describe("config schema", () => {
       });
       expect(result.success).toBe(false);
     });
+  });
 
-    it("accepts Google credentials when all three are provided", () => {
+  describe("ALLOWED_USER_IDS splitting", () => {
+    it("splits a comma-separated list", () => {
       const result = envSchema.safeParse({
         ...validEnv,
-        GOOGLE_CLIENT_ID: "test-client-id",
-        GOOGLE_CLIENT_SECRET: "test-client-secret",
-        GOOGLE_REFRESH_TOKEN: "test-refresh-token",
+        ALLOWED_USER_IDS: "U123,U456",
       });
       expect(result.success).toBe(true);
       if (result.success) {
-        expect(result.data.GOOGLE_CLIENT_ID).toBe("test-client-id");
-        expect(result.data.GOOGLE_CLIENT_SECRET).toBe("test-client-secret");
-        expect(result.data.GOOGLE_REFRESH_TOKEN).toBe("test-refresh-token");
+        expect(result.data.ALLOWED_USER_IDS).toEqual(["U123", "U456"]);
       }
     });
 
-    it("accepts partial Google credentials (validation is per-field)", () => {
+    it("trims whitespace and drops empties", () => {
       const result = envSchema.safeParse({
         ...validEnv,
-        GOOGLE_CLIENT_ID: "test-client-id",
-        // GOOGLE_CLIENT_SECRET and GOOGLE_REFRESH_TOKEN omitted
+        ALLOWED_USER_IDS: " U111 , U222 , U333 ",
       });
       expect(result.success).toBe(true);
       if (result.success) {
-        expect(result.data.GOOGLE_CLIENT_ID).toBe("test-client-id");
-        expect(result.data.GOOGLE_CLIENT_SECRET).toBeUndefined();
+        expect(result.data.ALLOWED_USER_IDS).toEqual(["U111", "U222", "U333"]);
       }
     });
   });
 
-  describe("optional data source vars", () => {
+  describe("LOG_LEVEL", () => {
+    it("defaults to info", () => {
+      const result = envSchema.safeParse(validEnv);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.LOG_LEVEL).toBe("info");
+      }
+    });
+
+    it("accepts a valid enum value", () => {
+      const result = envSchema.safeParse({ ...validEnv, LOG_LEVEL: "debug" });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.LOG_LEVEL).toBe("debug");
+      }
+    });
+
+    it("rejects an out-of-enum value", () => {
+      const result = envSchema.safeParse({ ...validEnv, LOG_LEVEL: "verbose" });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe("optional Metabase/GitHub/Notion/Google fields", () => {
     const minimalEnv = {
       SLACK_BOT_TOKEN: "xoxb-test-token",
       SLACK_APP_TOKEN: "xapp-test-token",
@@ -178,7 +171,7 @@ describe("config schema", () => {
       ALLOWED_USER_IDS: "U123",
     };
 
-    it("parses successfully with only Slack vars (no API key, no data sources)", () => {
+    it("parses with only required Slack vars (everything optional unset)", () => {
       const result = envSchema.safeParse(minimalEnv);
       expect(result.success).toBe(true);
       if (result.success) {
@@ -186,35 +179,14 @@ describe("config schema", () => {
         expect(result.data.METABASE_URL).toBeUndefined();
         expect(result.data.GITHUB_TOKEN).toBeUndefined();
         expect(result.data.NOTION_API_KEY).toBeUndefined();
+        expect(result.data.SLACK_USER_TOKEN).toBeUndefined();
+        expect(result.data.GOOGLE_CLIENT_ID).toBeUndefined();
+        expect(result.data.GOOGLE_CLIENT_SECRET).toBeUndefined();
+        expect(result.data.GOOGLE_REFRESH_TOKEN).toBeUndefined();
       }
     });
 
-    it("parses successfully with ANTHROPIC_API_KEY when provided", () => {
-      const result = envSchema.safeParse({
-        ...minimalEnv,
-        ANTHROPIC_API_KEY: "sk-ant-test",
-      });
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.ANTHROPIC_API_KEY).toBe("sk-ant-test");
-      }
-    });
-
-    it("parses successfully with Slack + Claude + Google vars (no Metabase/GitHub/Notion)", () => {
-      const result = envSchema.safeParse({
-        ...minimalEnv,
-        GOOGLE_CLIENT_ID: "client-id",
-        GOOGLE_CLIENT_SECRET: "client-secret",
-        GOOGLE_REFRESH_TOKEN: "refresh-token",
-      });
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.GOOGLE_CLIENT_ID).toBe("client-id");
-        expect(result.data.METABASE_URL).toBeUndefined();
-      }
-    });
-
-    it("still accepts Metabase vars when provided", () => {
+    it("accepts Metabase vars when provided", () => {
       const result = envSchema.safeParse({
         ...minimalEnv,
         METABASE_URL: "https://metabase.example.com",
@@ -227,12 +199,90 @@ describe("config schema", () => {
       }
     });
 
-    it("still rejects invalid METABASE_URL when provided", () => {
+    it("rejects an invalid METABASE_URL when provided", () => {
       const result = envSchema.safeParse({
         ...minimalEnv,
         METABASE_URL: "not-a-url",
       });
       expect(result.success).toBe(false);
     });
+
+    it("accepts GITHUB_TOKEN and NOTION_API_KEY when provided", () => {
+      const result = envSchema.safeParse({
+        ...minimalEnv,
+        GITHUB_TOKEN: "ghp_test",
+        NOTION_API_KEY: "ntn_test",
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.GITHUB_TOKEN).toBe("ghp_test");
+        expect(result.data.NOTION_API_KEY).toBe("ntn_test");
+      }
+    });
+
+    it("accepts all three Google credentials together", () => {
+      const result = envSchema.safeParse({
+        ...minimalEnv,
+        GOOGLE_CLIENT_ID: "client-id",
+        GOOGLE_CLIENT_SECRET: "client-secret",
+        GOOGLE_REFRESH_TOKEN: "refresh-token",
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.GOOGLE_CLIENT_ID).toBe("client-id");
+        expect(result.data.GOOGLE_CLIENT_SECRET).toBe("client-secret");
+        expect(result.data.GOOGLE_REFRESH_TOKEN).toBe("refresh-token");
+      }
+    });
+  });
+});
+
+describe("loadConfig (real module)", () => {
+  // Snapshot the baseline valid env so each test can restore it.
+  const baselineEnv = { ...process.env };
+
+  afterEach(() => {
+    // Restore process.env to the valid baseline and clear any spies.
+    for (const key of Object.keys(process.env)) {
+      if (!(key in baselineEnv)) {
+        delete process.env[key];
+      }
+    }
+    Object.assign(process.env, baselineEnv);
+    vi.restoreAllMocks();
+  });
+
+  it("returns a parsed config object on the success path", () => {
+    const result = loadConfig() as Record<string, unknown>;
+    expect(result.SLACK_BOT_TOKEN).toBe("xoxb-test");
+    expect(result.SLACK_APP_TOKEN).toBe("xapp-test");
+    expect(result.BOT_USER_ID).toBe("U123");
+    expect(result.ALLOWED_USER_IDS).toEqual(["U123"]);
+    expect(result.LOG_LEVEL).toBe("info");
+    expect(result.HEALTH_CHECK_PORT).toBe(8080);
+    expect(result.CLAUDE_BIN).toBe("claude");
+    expect(result.SQLITE_DB_PATH).toBe("./sentinel.db");
+  });
+
+  it("calls process.exit(1) and console.error on an invalid config", () => {
+    const exitSpy = vi
+      .spyOn(process, "exit")
+      .mockImplementation(() => undefined as never);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    // Make the config invalid by removing a required field.
+    delete process.env.SLACK_BOT_TOKEN;
+
+    // process.exit is stubbed, so loadConfig falls through to `return result.data`
+    // where result is the failed parse — we only assert on the side effects.
+    try {
+      loadConfig();
+    } catch {
+      // safeParse failure path may throw when reading result.data after the
+      // stubbed exit; the side-effect assertions below are what matter.
+    }
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errorSpy).toHaveBeenCalled();
   });
 });
