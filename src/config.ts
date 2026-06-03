@@ -14,6 +14,9 @@ export const envSchema = z
   METABASE_URL: z.string().url().optional(),
   METABASE_USERNAME: z.string().min(1).optional(),
   METABASE_PASSWORD: z.string().min(1).optional(),
+  // API-key auth (X-API-KEY) — alternative to username/password; required for
+  // headless/EC2 against an SSO Metabase. When set, it takes precedence.
+  METABASE_API_KEY: z.string().min(1).optional(),
 
   // GitHub (optional)
   GITHUB_TOKEN: z.string().min(1).optional(),

@@ -5,8 +5,13 @@
  * so it can be imported directly in unit tests. `metabase.ts` builds a single
  * client from `process.env` and the tool handlers call `client.metabaseFetch`.
  *
- * Session token is per-client closure state: each client owns its own Metabase
- * session and re-authenticates on a 401.
+ * Two auth modes:
+ *  - **API-key mode** (`apiKey` set): every request carries header
+ *    `X-API-KEY: <key>`. No `/api/session` round-trip, no session token, and no
+ *    401 re-auth loop. This is the headless/EC2 path (also bypasses SSO).
+ *  - **Session mode** (`username` + `password`): POST `/api/session` for an
+ *    `X-Metabase-Session` token (per-client closure state) and re-authenticate
+ *    once on a 401.
  */
 
 import { redactedHttpError } from "./httpError.js";
@@ -14,8 +19,9 @@ import { fetchWithRetry } from "./httpRetry.js";
 
 export interface MetabaseClientOptions {
   url: string;
-  username: string;
-  password: string;
+  apiKey?: string;
+  username?: string;
+  password?: string;
 }
 
 export interface MetabaseClient {
@@ -32,7 +38,48 @@ export interface MetabaseClient {
 const METABASE_FETCH_OPTS = { retries: 0 } as const;
 
 export function createMetabaseClient(opts: MetabaseClientOptions): MetabaseClient {
-  const { url, username, password } = opts;
+  const { url, apiKey, username, password } = opts;
+
+  // API-key mode: stateless. Header `X-API-KEY` on every request, no session,
+  // no 401 re-auth loop. `getSession` is unused here but kept on the returned
+  // object for interface compatibility.
+  if (apiKey) {
+    // Capture into a const so the narrowing from `string | undefined` to
+    // `string` survives into the closures below.
+    const key = apiKey;
+
+    async function getSession(): Promise<string> {
+      throw new Error("getSession is not used with API-key auth");
+    }
+
+    async function metabaseFetch(
+      path: string,
+      options: RequestInit = {}
+    ): Promise<unknown> {
+      const res = await fetchWithRetry(
+        `${url}${path}`,
+        {
+          ...options,
+          headers: {
+            "Content-Type": "application/json",
+            "X-API-KEY": key,
+            ...options.headers,
+          },
+        },
+        METABASE_FETCH_OPTS
+      );
+
+      if (!res.ok) {
+        // Redacted: keep status/statusText, never embed the raw response body.
+        // No 401 re-auth — an API key doesn't expire mid-request.
+        throw redactedHttpError("Metabase API error", res);
+      }
+
+      return res.json();
+    }
+
+    return { getSession, metabaseFetch };
+  }
 
   let sessionToken: string | null = null;
 
