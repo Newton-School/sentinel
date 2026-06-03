@@ -179,4 +179,87 @@ describe("createMetabaseClient", () => {
     expect(err.message).not.toContain("hunter2");
     expect(err.message).not.toContain("bad password");
   });
+
+  describe("API-key auth (X-API-KEY)", () => {
+    const API_KEY_OPTS = {
+      url: "http://mb.test",
+      apiKey: "mb_test",
+    };
+
+    it("happy path: sends X-API-KEY, never opens a session, returns data", async () => {
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+      fetchMock.mockResolvedValueOnce(
+        fakeResponse({ ok: true, status: 200, json: { data: { rows: [], cols: [] } } })
+      );
+
+      const client = createMetabaseClient(API_KEY_OPTS);
+      const result = await client.metabaseFetch("/api/dataset", { method: "POST" });
+
+      expect(result).toEqual({ data: { rows: [], cols: [] } });
+
+      // Exactly ONE fetch: the data path. No /api/session round-trip.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [dataUrl, dataInit] = fetchMock.mock.calls[0];
+      expect(dataUrl).toBe("http://mb.test/api/dataset");
+      // The API key is carried in the X-API-KEY header.
+      expect(dataInit.headers["X-API-KEY"]).toBe("mb_test");
+      // Session auth must NOT be used in API-key mode.
+      expect(dataInit.headers["X-Metabase-Session"]).toBeUndefined();
+      // /api/session must never be fetched.
+      const sessionCalls = fetchMock.mock.calls.filter(
+        (c: unknown[]) => String(c[0]).endsWith("/api/session")
+      );
+      expect(sessionCalls).toHaveLength(0);
+    });
+
+    it("error: a 401 rejects (redacted) with NO session re-auth attempt", async () => {
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+      fetchMock.mockResolvedValueOnce(
+        fakeResponse({
+          ok: false,
+          status: 401,
+          statusText: "Unauthorized",
+          text: "bad key: secret-row-data",
+        })
+      );
+
+      const client = createMetabaseClient(API_KEY_OPTS);
+
+      const err = await client.metabaseFetch("/api/dataset").catch((e) => e as Error);
+      expect(err).toBeInstanceOf(Error);
+      expect(err.message).toBe("Metabase API error: 401 Unauthorized");
+      // The raw upstream body must never leak into the thrown error.
+      expect(err.message).not.toContain("secret-row-data");
+      expect(err.message).not.toContain("bad key");
+
+      // No 401-reauth loop in API-key mode: exactly one fetch, no /api/session.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const sessionCalls = fetchMock.mock.calls.filter(
+        (c: unknown[]) => String(c[0]).endsWith("/api/session")
+      );
+      expect(sessionCalls).toHaveLength(0);
+    });
+
+    it("error: a 500 rejects (redacted) with NO session re-auth attempt", async () => {
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+      fetchMock.mockResolvedValueOnce(
+        fakeResponse({
+          ok: false,
+          status: 500,
+          statusText: "Internal Server Error",
+          text: "boom: leaked-pii",
+        })
+      );
+
+      const client = createMetabaseClient(API_KEY_OPTS);
+
+      const err = await client.metabaseFetch("/api/dataset").catch((e) => e as Error);
+      expect(err).toBeInstanceOf(Error);
+      expect(err.message).toBe("Metabase API error: 500 Internal Server Error");
+      expect(err.message).not.toContain("leaked-pii");
+      expect(err.message).not.toContain("boom");
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+  });
 });

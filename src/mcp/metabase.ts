@@ -19,17 +19,25 @@ import {
 import { assertEnv } from "./requireEnv.js";
 
 // Validate required env up front so a misconfigured server fails with a clear
-// named message instead of e.g. fetch('undefined/api/session') later.
-assertEnv(["METABASE_URL", "METABASE_USERNAME", "METABASE_PASSWORD"], process.env, {
-  serverName: "metabase MCP server",
-});
+// named message instead of e.g. fetch('undefined/api/session') later. API-key
+// auth needs only the URL; session auth additionally needs username+password.
+assertEnv(
+  process.env.METABASE_API_KEY
+    ? ["METABASE_URL"]
+    : ["METABASE_URL", "METABASE_USERNAME", "METABASE_PASSWORD"],
+  process.env,
+  { serverName: "metabase MCP server" }
+);
 
-// Build a single client from the environment. Auth + fetch (incl. the 401
-// re-auth retry guard) live in the side-effect-free metabaseClient module.
+// Build a single client from the environment. The client picks its auth mode:
+// X-API-KEY when METABASE_API_KEY is set, otherwise the username/password
+// session flow (incl. the 401 re-auth retry guard). Both live in the
+// side-effect-free metabaseClient module.
 const client = createMetabaseClient({
   url: process.env.METABASE_URL!,
-  username: process.env.METABASE_USERNAME!,
-  password: process.env.METABASE_PASSWORD!,
+  apiKey: process.env.METABASE_API_KEY,
+  username: process.env.METABASE_USERNAME,
+  password: process.env.METABASE_PASSWORD,
 });
 
 const metabaseFetch = client.metabaseFetch;

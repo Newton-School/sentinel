@@ -51,21 +51,32 @@ export function getMcpConfigPath(): string {
     mcpServers: {},
   };
 
-  // Metabase — requires URL + credentials
+  // Metabase — requires URL + EITHER an API key OR username+password.
   const hasMetabase =
     config.METABASE_URL &&
-    config.METABASE_USERNAME &&
-    config.METABASE_PASSWORD;
+    (config.METABASE_API_KEY ||
+      (config.METABASE_USERNAME && config.METABASE_PASSWORD));
 
   if (hasMetabase) {
+    // Only emit the keys that are actually set, so an unset var is never
+    // written into the spawned env as the string "undefined".
+    const metabaseEnv: Record<string, string> = {
+      METABASE_URL: config.METABASE_URL!,
+    };
+    if (config.METABASE_API_KEY) {
+      metabaseEnv.METABASE_API_KEY = config.METABASE_API_KEY;
+    }
+    if (config.METABASE_USERNAME) {
+      metabaseEnv.METABASE_USERNAME = config.METABASE_USERNAME;
+    }
+    if (config.METABASE_PASSWORD) {
+      metabaseEnv.METABASE_PASSWORD = config.METABASE_PASSWORD;
+    }
+
     mcpConfig.mcpServers.metabase = {
       command: "node",
       args: [join(process.cwd(), "dist", "mcp", "metabase.js")],
-      env: {
-        METABASE_URL: config.METABASE_URL!,
-        METABASE_USERNAME: config.METABASE_USERNAME!,
-        METABASE_PASSWORD: config.METABASE_PASSWORD!,
-      },
+      env: metabaseEnv,
     };
     log.info("Metabase MCP server registered");
   } else {
@@ -210,8 +221,8 @@ export function getUnavailableSources(): string[] {
 
   const hasMetabase =
     config.METABASE_URL &&
-    config.METABASE_USERNAME &&
-    config.METABASE_PASSWORD;
+    (config.METABASE_API_KEY ||
+      (config.METABASE_USERNAME && config.METABASE_PASSWORD));
 
   if (!hasMetabase) {
     unavailable.push("Metabase");
