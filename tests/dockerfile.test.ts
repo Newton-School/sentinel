@@ -19,7 +19,7 @@ describe("Dockerfile runtime image", () => {
 
   it("keeps the curl-based HEALTHCHECK against /health", () => {
     expect(dockerfile).toMatch(/HEALTHCHECK/);
-    expect(dockerfile).toMatch(/curl -f http:\/\/localhost:8080\/health/);
+    expect(dockerfile).toMatch(/curl -f http:\/\/localhost:8930\/health/);
   });
 
   it('keeps the CMD ["node", "dist/index.js"]', () => {

@@ -12,4 +12,4 @@ data:
   # Keep the SQLite DB on the persistent volume mounted at /app/data so it
   # survives pod restarts/rollouts.
   SQLITE_DB_PATH: "/app/data/sentinel.db"
-  HEALTH_CHECK_PORT: "8080"
+  HEALTH_CHECK_PORT: "8930"

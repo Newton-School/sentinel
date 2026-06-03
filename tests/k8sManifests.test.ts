@@ -72,15 +72,15 @@ describe("k8s/deployment.yaml", () => {
     }
   });
 
-  it("exposes containerPort 8080", () => {
+  it("exposes containerPort 8930", () => {
     const raw = read("deployment.yaml");
     if (parseAll) {
       const doc: any = parseAll(raw).find((d: any) => d?.kind === "Deployment");
       const container = doc.spec.template.spec.containers[0];
       const ports = container.ports.map((p: any) => p.containerPort);
-      expect(ports).toContain(8080);
+      expect(ports).toContain(8930);
     } else {
-      expect(raw).toMatch(/containerPort:\s*8080\b/);
+      expect(raw).toMatch(/containerPort:\s*8930\b/);
     }
   });
 
@@ -132,18 +132,18 @@ describe("k8s/deployment.yaml", () => {
 });
 
 describe("k8s/service.yaml", () => {
-  it("is a Service mapping port 8080 to targetPort 8080", () => {
+  it("is a Service mapping port 8930 to targetPort 8930", () => {
     const raw = read("service.yaml");
     if (parseAll) {
       const doc: any = parseAll(raw).find((d: any) => d?.kind === "Service");
       expect(doc, "a Service document").toBeTruthy();
-      const portEntry = doc.spec.ports.find((p: any) => p.port === 8080);
-      expect(portEntry, "a port 8080 entry").toBeTruthy();
-      expect(portEntry.targetPort).toBe(8080);
+      const portEntry = doc.spec.ports.find((p: any) => p.port === 8930);
+      expect(portEntry, "a port 8930 entry").toBeTruthy();
+      expect(portEntry.targetPort).toBe(8930);
     } else {
       expect(raw).toMatch(/kind:\s*Service/);
-      expect(raw).toMatch(/port:\s*8080\b/);
-      expect(raw).toMatch(/targetPort:\s*8080\b/);
+      expect(raw).toMatch(/port:\s*8930\b/);
+      expect(raw).toMatch(/targetPort:\s*8930\b/);
     }
   });
 });

@@ -6,7 +6,7 @@ vi.mock("../src/config.js", () => ({
   config: {
     SQLITE_DB_PATH: ":memory:",
     LOG_LEVEL: "silent",
-    HEALTH_CHECK_PORT: 8080,
+    HEALTH_CHECK_PORT: 8930,
   },
 }));
 

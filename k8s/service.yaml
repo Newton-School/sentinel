@@ -10,6 +10,6 @@ spec:
     app: sentinel
   ports:
     - name: http
-      port: 8080
-      targetPort: 8080
+      port: 8930
+      targetPort: 8930
       protocol: TCP

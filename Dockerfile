@@ -31,7 +31,7 @@ COPY --from=builder /app/dist ./dist
 RUN mkdir -p /app/data && chown -R pwuser:pwuser /app
 USER pwuser
 VOLUME ["/app/data"]
-EXPOSE 8080
+EXPOSE 8930
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD curl -f http://localhost:8080/health || exit 1
+  CMD curl -f http://localhost:8930/health || exit 1
 CMD ["node", "dist/index.js"]

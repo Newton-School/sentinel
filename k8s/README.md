@@ -11,7 +11,7 @@ These manifests are packaged as a CodeBuild artifact (`buildspec.yml` ships
 | `secret.example.yaml` | Secret `sentinel-secrets` (template)  | Placeholder secret env. **Do not commit real values.**       |
 | `pvc.yaml`            | PersistentVolumeClaim `sentinel-data` | ReadWriteOnce 5Gi volume for `/app/data`.                    |
 | `deployment.yaml`     | Deployment `sentinel`                  | Single replica, `Recreate` strategy, probes, env, volume.    |
-| `service.yaml`        | Service `sentinel`                     | ClusterIP, port 8080 → targetPort 8080.                      |
+| `service.yaml`        | Service `sentinel`                     | ClusterIP, port 8930 → targetPort 8930.                      |
 
 ## Why single-replica / Recreate / ReadWriteOnce
 
