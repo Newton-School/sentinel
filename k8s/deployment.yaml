@@ -29,7 +29,7 @@ spec:
           image: PLACEHOLDER_IMAGE_URI
           ports:
             - name: http
-              containerPort: 8080
+              containerPort: 8930
           envFrom:
             # Mandatory + optional secret env (tokens, API keys, Google creds).
             - secretRef:
@@ -40,7 +40,7 @@ spec:
           livenessProbe:
             httpGet:
               path: /health
-              port: 8080
+              port: 8930
             # Docker HEALTHCHECK uses a 10s start-period; give the process a
             # little more headroom before the first liveness probe.
             initialDelaySeconds: 15
@@ -50,7 +50,7 @@ spec:
           readinessProbe:
             httpGet:
               path: /ready
-              port: 8080
+              port: 8930
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 5

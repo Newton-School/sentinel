@@ -50,11 +50,11 @@ describe("config envSchema (real module)", () => {
   });
 
   describe("HEALTH_CHECK_PORT", () => {
-    it("defaults to 8080 when unset", () => {
+    it("defaults to 8930 when unset", () => {
       const result = envSchema.safeParse(validEnv);
       expect(result.success).toBe(true);
       if (result.success) {
-        expect(result.data.HEALTH_CHECK_PORT).toBe(8080);
+        expect(result.data.HEALTH_CHECK_PORT).toBe(8930);
       }
     });
 
@@ -259,7 +259,7 @@ describe("loadConfig (real module)", () => {
     expect(result.BOT_USER_ID).toBe("U123");
     expect(result.ALLOWED_USER_IDS).toEqual(["U123"]);
     expect(result.LOG_LEVEL).toBe("info");
-    expect(result.HEALTH_CHECK_PORT).toBe(8080);
+    expect(result.HEALTH_CHECK_PORT).toBe(8930);
     expect(result.CLAUDE_BIN).toBe("claude");
     expect(result.SQLITE_DB_PATH).toBe("./sentinel.db");
   });
