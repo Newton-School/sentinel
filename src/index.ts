@@ -6,6 +6,7 @@ import { createSlackApp } from "./slack/socketClient.js";
 import { fetchThreadContext } from "./slack/threadContext.js";
 import { getOrCreatePersona, getTraits } from "./persona/store.js";
 import { searchMemories } from "./memory/memoryStore.js";
+import { extractFromConversation } from "./memory/conversationHook.js";
 import { buildSystemPrompt } from "./claude/systemPrompt.js";
 import type { RankedMemory } from "./memory/types.js";
 import { runClaude } from "./claude/runner.js";
@@ -134,9 +135,6 @@ async function handleEvent(
     }
 
     // Track query for persona evolution and audit logging.
-    // NOTE: keep `memories` (recalled above) in scope here — a later PR feeds
-    // the query/response plus the recalled memory texts into the fact
-    // extraction hook alongside this call.
     trackQuery({
       userId: envelope.userId,
       channelId: envelope.channelId,
@@ -144,6 +142,17 @@ async function handleEvent(
       queryText: envelope.text,
       responseText: response.text,
       responseDurationMs: response.durationMs,
+    });
+
+    // Fire-and-forget fact extraction from this exchange. User-turn-grounded:
+    // only `envelope.text` can evidence a fact; the bot's reply is context
+    // only. Never awaited, never throws — see conversationHook.ts.
+    extractFromConversation({
+      queryText: envelope.text,
+      responseText: response.text,
+      channelId: envelope.channelId,
+      threadTs: envelope.threadTs,
+      injectedMemories: memories.map((m) => m.text),
     });
 
     // Record ops metrics for /metrics (token/cost only present when the CLI
