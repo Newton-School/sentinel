@@ -15,6 +15,7 @@ import { markdownToSlackMrkdwn } from "./slack/formatters.js";
 import { startHealthServer, type HealthStatus } from "./health/server.js";
 import { record, renderPrometheus } from "./metrics/registry.js";
 import { startMeetWatcher } from "./meet-bot/watcher.js";
+import { startIngestWatcher } from "./memory/ingestWatcher.js";
 import { createGracefulShutdown } from "./shutdown.js";
 import type { SlackEventEnvelope } from "./types/contracts.js";
 import type http from "node:http";
@@ -219,6 +220,7 @@ const startTime = Date.now();
 // Module-scope handles assigned in main(), consumed by the shutdown sequence.
 let slackApp: ReturnType<typeof createSlackApp> | null = null;
 let stopWatcher: (() => void) | null = null;
+let stopIngest: (() => void) | null = null;
 let healthServer: http.Server | null = null;
 
 async function main(): Promise<void> {
@@ -272,6 +274,9 @@ async function main(): Promise<void> {
   // Start Meet watcher (auto-joins upcoming meetings via Playwright bot)
   stopWatcher = startMeetWatcher();
 
+  // Start memory ingest watcher (Meet transcripts + internal Gmail → memory)
+  stopIngest = startIngestWatcher();
+
   // Start Slack app
   const app = createSlackApp(handleEvent);
   slackApp = app;
@@ -292,6 +297,7 @@ main().catch((err) => {
 const shutdown = createGracefulShutdown({
   stopWatcher: () => {
     stopWatcher?.();
+    stopIngest?.();
   },
   stopSlackApp: async () => {
     if (slackApp) await slackApp.stop();
