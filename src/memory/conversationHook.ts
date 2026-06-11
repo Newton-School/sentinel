@@ -14,6 +14,7 @@
 
 import { config } from "../config.js";
 import { createLogger } from "../logging/logger.js";
+import { recordMemoryExtractError } from "../metrics/registry.js";
 import { extractFacts } from "./extractor.js";
 import { insertFact } from "./memoryStore.js";
 
@@ -84,6 +85,11 @@ export function extractFromConversation(opts: ConversationHookOptions): void {
       );
     }
   })().catch((err) => {
+    // LLM-call failures are already counted inside anthropicClient (which
+    // resolves null instead of throwing) — this catch counts the disjoint
+    // pipeline failures (extractor throw, SQLite insert error), so no event
+    // is double-counted.
+    recordMemoryExtractError();
     log.error({ err }, "Conversation fact extraction failed (non-fatal)");
   });
 }
