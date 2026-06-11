@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
 import { readFileSync, mkdtempSync, rmSync, statSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 // Mock pino
 vi.mock("pino", () => {
@@ -40,6 +40,7 @@ describe("getUnavailableSources", () => {
         GOOGLE_CLIENT_ID: undefined,
         GOOGLE_CLIENT_SECRET: undefined,
         GOOGLE_REFRESH_TOKEN: undefined,
+        SQLITE_DB_PATH: "./sentinel.db",
       },
     }));
 
@@ -66,6 +67,7 @@ describe("getUnavailableSources", () => {
         GOOGLE_CLIENT_ID: "client-id",
         GOOGLE_CLIENT_SECRET: "client-secret",
         GOOGLE_REFRESH_TOKEN: "refresh-token",
+        SQLITE_DB_PATH: "./sentinel.db",
       },
     }));
 
@@ -87,6 +89,7 @@ describe("getUnavailableSources", () => {
         GOOGLE_CLIENT_ID: undefined,
         GOOGLE_CLIENT_SECRET: undefined,
         GOOGLE_REFRESH_TOKEN: undefined,
+        SQLITE_DB_PATH: "./sentinel.db",
       },
     }));
 
@@ -113,6 +116,7 @@ describe("getUnavailableSources", () => {
         GOOGLE_CLIENT_ID: "client-id",
         GOOGLE_CLIENT_SECRET: "client-secret",
         GOOGLE_REFRESH_TOKEN: "refresh-token",
+        SQLITE_DB_PATH: "./sentinel.db",
       },
     }));
 
@@ -132,6 +136,7 @@ describe("getUnavailableSources", () => {
         GOOGLE_CLIENT_ID: "client-id",
         GOOGLE_CLIENT_SECRET: "client-secret",
         GOOGLE_REFRESH_TOKEN: "refresh-token",
+        SQLITE_DB_PATH: "./sentinel.db",
       },
     }));
 
@@ -153,6 +158,7 @@ describe("getUnavailableSources", () => {
         GOOGLE_CLIENT_ID: "client-id",
         GOOGLE_CLIENT_SECRET: "client-secret",
         GOOGLE_REFRESH_TOKEN: "refresh-token",
+        SQLITE_DB_PATH: "./sentinel.db",
       },
     }));
 
@@ -174,6 +180,7 @@ describe("getUnavailableSources", () => {
         GOOGLE_CLIENT_ID: "client-id",
         GOOGLE_CLIENT_SECRET: "client-secret",
         GOOGLE_REFRESH_TOKEN: "refresh-token",
+        SQLITE_DB_PATH: "./sentinel.db",
       },
     }));
 
@@ -201,6 +208,7 @@ describe("getMcpConfigPath", () => {
         GOOGLE_CLIENT_ID: undefined,
         GOOGLE_CLIENT_SECRET: undefined,
         GOOGLE_REFRESH_TOKEN: undefined,
+        SQLITE_DB_PATH: "./sentinel.db",
       },
     }));
 
@@ -225,6 +233,7 @@ describe("getMcpConfigPath", () => {
         GOOGLE_CLIENT_ID: undefined,
         GOOGLE_CLIENT_SECRET: undefined,
         GOOGLE_REFRESH_TOKEN: undefined,
+        SQLITE_DB_PATH: "./sentinel.db",
       },
     }));
 
@@ -248,6 +257,7 @@ describe("getMcpConfigPath", () => {
         GOOGLE_CLIENT_ID: undefined,
         GOOGLE_CLIENT_SECRET: undefined,
         GOOGLE_REFRESH_TOKEN: undefined,
+        SQLITE_DB_PATH: "./sentinel.db",
       },
     }));
 
@@ -270,6 +280,7 @@ describe("getMcpConfigPath", () => {
         GOOGLE_CLIENT_ID: "client-id",
         GOOGLE_CLIENT_SECRET: "client-secret",
         GOOGLE_REFRESH_TOKEN: "refresh-token",
+        SQLITE_DB_PATH: "./sentinel.db",
       },
     }));
 
@@ -301,6 +312,7 @@ describe("getMcpConfigPath", () => {
         GOOGLE_CLIENT_ID: undefined,
         GOOGLE_CLIENT_SECRET: undefined,
         GOOGLE_REFRESH_TOKEN: undefined,
+        SQLITE_DB_PATH: "./sentinel.db",
       },
     }));
 
@@ -326,6 +338,7 @@ describe("getMcpConfigPath", () => {
         GOOGLE_CLIENT_ID: "client-id",
         GOOGLE_CLIENT_SECRET: undefined, // Missing
         GOOGLE_REFRESH_TOKEN: "refresh-token",
+        SQLITE_DB_PATH: "./sentinel.db",
       },
     }));
 
@@ -351,6 +364,7 @@ describe("getMcpConfigPath", () => {
         GOOGLE_CLIENT_ID: "client-id",
         GOOGLE_CLIENT_SECRET: "client-secret",
         GOOGLE_REFRESH_TOKEN: "refresh-token",
+        SQLITE_DB_PATH: "./sentinel.db",
       },
     }));
 
@@ -373,6 +387,7 @@ describe("getMcpConfigPath", () => {
         GOOGLE_CLIENT_ID: undefined,
         GOOGLE_CLIENT_SECRET: undefined,
         GOOGLE_REFRESH_TOKEN: undefined,
+        SQLITE_DB_PATH: "./sentinel.db",
       },
     }));
 
@@ -395,6 +410,7 @@ describe("getMcpConfigPath", () => {
         GOOGLE_CLIENT_ID: undefined,
         GOOGLE_CLIENT_SECRET: undefined,
         GOOGLE_REFRESH_TOKEN: undefined,
+        SQLITE_DB_PATH: "./sentinel.db",
       },
     }));
 
@@ -417,6 +433,7 @@ describe("getMcpConfigPath", () => {
         GOOGLE_CLIENT_ID: "client-id",
         GOOGLE_CLIENT_SECRET: "client-secret",
         GOOGLE_REFRESH_TOKEN: "refresh-token",
+        SQLITE_DB_PATH: "./sentinel.db",
       },
     }));
 
@@ -431,6 +448,106 @@ describe("getMcpConfigPath", () => {
     expect(config.mcpServers).not.toHaveProperty("metabase");
     expect(config.mcpServers).not.toHaveProperty("github");
     expect(config.mcpServers).not.toHaveProperty("notion");
+  });
+});
+
+describe("memory MCP server registration", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("registers the memory server even when NO other credentials are set", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: undefined,
+        METABASE_USERNAME: undefined,
+        METABASE_PASSWORD: undefined,
+        GITHUB_TOKEN: undefined,
+        NOTION_API_KEY: undefined,
+        SLACK_USER_TOKEN: undefined,
+        GOOGLE_CLIENT_ID: undefined,
+        GOOGLE_CLIENT_SECRET: undefined,
+        GOOGLE_REFRESH_TOKEN: undefined,
+        SQLITE_DB_PATH: "./sentinel.db",
+      },
+    }));
+
+    const { getMcpConfigPath } = await import("../src/claude/mcpConfig.js");
+    const configPath = getMcpConfigPath();
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+
+    expect(config.mcpServers).toHaveProperty("memory");
+  });
+
+  it("runs the compiled server via node dist/mcp/memory.js", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: undefined,
+        METABASE_USERNAME: undefined,
+        METABASE_PASSWORD: undefined,
+        GITHUB_TOKEN: undefined,
+        NOTION_API_KEY: undefined,
+        SLACK_USER_TOKEN: undefined,
+        GOOGLE_CLIENT_ID: undefined,
+        GOOGLE_CLIENT_SECRET: undefined,
+        GOOGLE_REFRESH_TOKEN: undefined,
+        SQLITE_DB_PATH: "./sentinel.db",
+      },
+    }));
+
+    const { getMcpConfigPath } = await import("../src/claude/mcpConfig.js");
+    const configPath = getMcpConfigPath();
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+
+    expect(config.mcpServers.memory.command).toBe("node");
+    const args = config.mcpServers.memory.args as string[];
+    expect(args).toHaveLength(1);
+    expect(args[0].endsWith(join("dist", "mcp", "memory.js"))).toBe(true);
+  });
+
+  it("passes SQLITE_DB_PATH as an ABSOLUTE path (the CLI child's cwd may differ)", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: undefined,
+        METABASE_USERNAME: undefined,
+        METABASE_PASSWORD: undefined,
+        GITHUB_TOKEN: undefined,
+        NOTION_API_KEY: undefined,
+        SLACK_USER_TOKEN: undefined,
+        GOOGLE_CLIENT_ID: undefined,
+        GOOGLE_CLIENT_SECRET: undefined,
+        GOOGLE_REFRESH_TOKEN: undefined,
+        SQLITE_DB_PATH: "./sentinel.db",
+      },
+    }));
+
+    const { getMcpConfigPath } = await import("../src/claude/mcpConfig.js");
+    const configPath = getMcpConfigPath();
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+
+    const dbPath = config.mcpServers.memory.env.SQLITE_DB_PATH as string;
+    expect(isAbsolute(dbPath)).toBe(true);
+    expect(dbPath).toBe(resolve("./sentinel.db"));
+  });
+
+  it("never reports Memory in getUnavailableSources (it is never unavailable)", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: undefined,
+        METABASE_USERNAME: undefined,
+        METABASE_PASSWORD: undefined,
+        GITHUB_TOKEN: undefined,
+        NOTION_API_KEY: undefined,
+        SLACK_USER_TOKEN: undefined,
+        GOOGLE_CLIENT_ID: undefined,
+        GOOGLE_CLIENT_SECRET: undefined,
+        GOOGLE_REFRESH_TOKEN: undefined,
+        SQLITE_DB_PATH: "./sentinel.db",
+      },
+    }));
+
+    const { getUnavailableSources } = await import("../src/claude/mcpConfig.js");
+    expect(getUnavailableSources()).not.toContain("Memory");
   });
 });
 
@@ -451,6 +568,7 @@ describe("mcp-config secret file permissions and cleanup", () => {
         GOOGLE_CLIENT_ID: undefined,
         GOOGLE_CLIENT_SECRET: undefined,
         GOOGLE_REFRESH_TOKEN: undefined,
+        SQLITE_DB_PATH: "./sentinel.db",
       },
     }));
   };

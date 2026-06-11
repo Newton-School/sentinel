@@ -281,6 +281,32 @@ describe("buildSystemPrompt", () => {
     });
   });
 
+  describe("memory tools note", () => {
+    it("is always present, even with no traits and no recalled memories", () => {
+      const prompt = buildSystemPrompt(basePersona, []);
+      expect(prompt).toContain("## Memory tools");
+      expect(prompt).toContain(
+        "Use memory_store when the user explicitly asks you to remember something"
+      );
+      expect(prompt).toContain(
+        'Use memory_search before answering "what do you know about…" questions'
+      );
+      expect(prompt).toContain(
+        "memory_search first, confirm the exact record, then memory_forget / memory_supersede by id"
+      );
+    });
+
+    it("is present with the 3-arg signature (traits + unavailable sources)", () => {
+      const prompt = buildSystemPrompt(basePersona, [highConfidenceTrait], ["Gmail"]);
+      expect(prompt).toContain("## Memory tools");
+    });
+
+    it("is present with an empty memories array (4-arg signature)", () => {
+      const prompt = buildSystemPrompt(basePersona, [], [], []);
+      expect(prompt).toContain("## Memory tools");
+    });
+  });
+
   describe("read-only behavior", () => {
     it("instructs that Sentinel is read-only", () => {
       const prompt = buildSystemPrompt(basePersona, []);
