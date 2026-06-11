@@ -234,7 +234,7 @@ async function main(): Promise<void> {
 
   // Start health check server
   const unavailableSources = getUnavailableSources();
-  const allSources = ["Metabase", "GitHub", "Notion", "Slack search", "Gmail", "Google Calendar", "Meeting Transcripts", "Google Meet"];
+  const allSources = ["Metabase", "GitHub", "Notion", "Slack search", "Gmail", "Google Calendar", "Meeting Transcripts", "Google Meet", "Memory"];
   const activeSources = allSources.filter((s) => !unavailableSources.includes(s));
   const uptimeSeconds = (): number =>
     Math.floor((Date.now() - startTime) / 1000);

@@ -7,7 +7,7 @@ import {
   readdirSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { config } from "../config.js";
 import { createLogger } from "../logging/logger.js";
@@ -169,6 +169,17 @@ export function getMcpConfigPath(): string {
   } else {
     log.warn("Google credentials not set — Gmail, Calendar, and Transcripts disabled");
   }
+
+  // Memory — registered UNCONDITIONALLY: SQLITE_DB_PATH always has a config
+  // default and the server needs no credentials. The path is resolved to an
+  // ABSOLUTE path because the Claude CLI child process (which spawns the
+  // server) may run with a different cwd than the Sentinel process.
+  mcpConfig.mcpServers.memory = {
+    command: "node",
+    args: [join(process.cwd(), "dist", "mcp", "memory.js")],
+    env: { SQLITE_DB_PATH: resolve(config.SQLITE_DB_PATH) },
+  };
+  log.info("Memory MCP server registered");
 
   // This file holds plaintext credentials for every MCP server, so write it
   // owner-only. writeFileSync's `mode` applies on create (each path is fresh);

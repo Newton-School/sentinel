@@ -150,9 +150,9 @@ describe("buildSystemPrompt organizational memory section", () => {
     expect(prompt).toContain("- [email, 2026-06-01] fact three about NST (decision)");
   });
 
-  it("does not mention memory MCP tools (those land in a later PR)", () => {
+  it("renders the standing memory-tools note AFTER the recalled-records section (PR 3)", () => {
     const prompt = buildSystemPrompt(persona, [], undefined, [mem()]);
-    expect(prompt).not.toContain("memory_");
-    expect(prompt).not.toMatch(/memory tool/i);
+    const noteIdx = prompt.indexOf("## Memory tools");
+    expect(noteIdx).toBeGreaterThan(prompt.indexOf(HEADER));
   });
 });

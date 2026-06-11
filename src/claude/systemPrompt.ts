@@ -210,5 +210,12 @@ export function buildSystemPrompt(
     }
   }
 
+  // Standing note about the memory_* MCP tools. Always present — unlike the
+  // recalled-records section above, which only renders when retrieval hit.
+  parts.push(`\n## Memory tools`);
+  parts.push(
+    `You have memory_* tools backed by Sentinel's organizational memory store. Use memory_store when the user explicitly asks you to remember something. Use memory_search before answering "what do you know about…" questions and whenever recalled records above seem incomplete. When the user asks you to forget or correct something: memory_search first, confirm the exact record, then memory_forget / memory_supersede by id.`
+  );
+
   return parts.join("\n");
 }
