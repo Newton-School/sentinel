@@ -5,7 +5,9 @@ import { getMcpConfigPath, getUnavailableSources, cleanupMcpConfig } from "./cla
 import { createSlackApp } from "./slack/socketClient.js";
 import { fetchThreadContext } from "./slack/threadContext.js";
 import { getOrCreatePersona, getTraits } from "./persona/store.js";
+import { searchMemories } from "./memory/memoryStore.js";
 import { buildSystemPrompt } from "./claude/systemPrompt.js";
+import type { RankedMemory } from "./memory/types.js";
 import { runClaude } from "./claude/runner.js";
 import { trackQuery } from "./persona/tracker.js";
 import { markdownToSlackMrkdwn } from "./slack/formatters.js";
@@ -80,8 +82,19 @@ async function handleEvent(
     // Load/create persona and build system prompt
     const persona = getOrCreatePersona(envelope.userId, displayName);
     const traits = getTraits(envelope.userId);
+
+    // Recall relevant organizational memories for this query. Best-effort:
+    // searchMemories already swallows internal errors, and this try/catch is
+    // belt-and-braces — a memory failure must NEVER fail the reply.
+    let memories: RankedMemory[] = [];
+    try {
+      memories = searchMemories(envelope.text);
+    } catch {
+      // Never fail the reply over memory recall.
+    }
+
     const unavailableSources = getUnavailableSources();
-    const systemPrompt = buildSystemPrompt(persona, traits, unavailableSources);
+    const systemPrompt = buildSystemPrompt(persona, traits, unavailableSources, memories);
 
     // Run Claude
     log.info(
@@ -120,7 +133,10 @@ async function handleEvent(
       // Reaction management is best-effort
     }
 
-    // Track query for persona evolution and audit logging
+    // Track query for persona evolution and audit logging.
+    // NOTE: keep `memories` (recalled above) in scope here — a later PR feeds
+    // the query/response plus the recalled memory texts into the fact
+    // extraction hook alongside this call.
     trackQuery({
       userId: envelope.userId,
       channelId: envelope.channelId,
