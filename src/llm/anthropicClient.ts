@@ -20,6 +20,13 @@
 import { fetchWithRetry } from "../mcp/httpRetry.js";
 import { redactedHttpError } from "../mcp/httpError.js";
 import { createLogger } from "../logging/logger.js";
+// This client is used exclusively by the memory extraction pipeline, so its
+// failure/budget counters are memory metrics. Increments happen here (the
+// edge) rather than inside extractor.ts.
+import {
+  recordMemoryExtractError,
+  recordMemoryExtractBudgetExhausted,
+} from "../metrics/registry.js";
 
 const log = createLogger("anthropic-client");
 
@@ -137,6 +144,7 @@ export async function extractJson(
 
   const nowMs = (opts.now ?? Date.now)();
   if (!consumeBudget(nowMs)) {
+    recordMemoryExtractBudgetExhausted();
     log.warn(
       { cap: MAX_EXTRACTION_CALLS_PER_DAY, utcDate: budgetUtcDate },
       "Daily extraction-call budget exhausted — skipping"
@@ -155,6 +163,7 @@ export async function extractJson(
     }
 
     if (!res.ok) {
+      recordMemoryExtractError();
       log.warn(
         { message: redactedHttpError("Messages API request failed", res).message },
         "extractJson HTTP failure"
@@ -168,18 +177,21 @@ export async function extractJson(
     };
 
     if (payload.stop_reason === "refusal" || payload.stop_reason === "max_tokens") {
+      recordMemoryExtractError();
       log.warn({ stopReason: payload.stop_reason }, "extractJson unusable stop_reason");
       return null;
     }
 
     const textBlock = payload.content?.find((b) => b.type === "text");
     if (!textBlock || typeof textBlock.text !== "string") {
+      recordMemoryExtractError();
       log.warn("extractJson response had no text content block");
       return null;
     }
 
     return JSON.parse(textBlock.text) as unknown;
   } catch (err) {
+    recordMemoryExtractError();
     log.warn({ err }, "extractJson failed (non-fatal)");
     return null;
   }

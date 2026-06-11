@@ -290,6 +290,34 @@ Priority key: **P0** correctness/security/deploy-blocker · **P1** important gap
 
 ---
 
+## Memory v2 (deferred by design)
+
+Memory v1 (PRs #57–#60 + the metrics/docs PR) deliberately shipped without these.
+All P3 — revisit when the stated triggers fire or leadership asks.
+
+- [ ] **(feature, L, P3) Embeddings / hybrid retrieval.** Voyage embeddings stored in the
+  reserved `memories.embedding` BLOB, cosine similarity fused with FTS5 bm25 via RRF.
+  Trigger: a hit@5 regression in `tests/memoryRetrievalEval.test.ts` or >5k active rows.
+- [ ] **(feature, M, P3) Summarize-and-archive compaction.** Periodically roll up clusters of
+  old low-confidence facts into summary records and archive the originals, keeping the
+  active set (and prompt-injection candidates) small.
+- [ ] **(security, M, P3) Injection-likeness quarantine.** Score extracted facts for
+  instruction-shaped/injection-like content and hold suspicious ones out of recall pending
+  review, instead of relying solely on the extractor's prompt + evidence-quote gates.
+- [ ] **(feature, M, P3) Assistant-response extraction with `derived_from_memory` provenance.**
+  Mine the bot's own replies for facts (today only the user turn is extracted, by design),
+  marking them `derived_from_memory` so recalled-content can never silently launder back in.
+- [ ] **(security, L, P3) Per-channel/person ACLs + PII redaction.** Replace the single
+  `visibility='founders'` tier with per-channel/per-person access control and add PII
+  redaction before storage.
+- [ ] **(feature, M, P3) Slack-channel ingestion.** Extract facts from designated Slack
+  channels (not just direct conversations with the bot), reusing the ingest
+  cursor/dedup/allowlist machinery.
+- [ ] **(feature, M, P3) Proactive digests.** Scheduled "here's what changed this week"
+  summaries posted to leadership from newly stored memories.
+
+---
+
 ## Repo hygiene (not code — do when convenient)
 
 - [x] Pull `origin/main` into local `main`.

@@ -9,6 +9,11 @@
 import { getDb } from "../state/db.js";
 import { createLogger } from "../logging/logger.js";
 import {
+  recordMemoryFactStored,
+  recordMemoryInjected,
+  recordMemoryRetrievalEmpty,
+} from "../metrics/registry.js";
+import {
   insertFact as sqlInsertFact,
   forgetMemory as sqlForgetMemory,
   supersedeMemory as sqlSupersedeMemory,
@@ -38,25 +43,40 @@ export function searchMemories(
   k = 6,
   viewer = "founders"
 ): RankedMemory[] {
+  // Metrics note: searchMemories is the only in-process recall path, and its
+  // return value is exactly what buildSystemPrompt injects — so the
+  // injected/retrieval-empty counters live here (index.ts's main() is
+  // untestable wiring). Every zero-result exit, including the sanitized-empty
+  // and error paths, counts as one empty retrieval.
+  let results: RankedMemory[] = [];
   try {
     const db = getDb();
     const ftsQuery = sanitizeFtsQuery(query);
-    if (!ftsQuery) return [];
-
-    const candidates = searchCandidates(db, ftsQuery).filter(
-      (c) => c.visibility === viewer
-    );
-    return rankMemories(candidates, new Date(), k);
+    if (ftsQuery) {
+      const candidates = searchCandidates(db, ftsQuery).filter(
+        (c) => c.visibility === viewer
+      );
+      results = rankMemories(candidates, new Date(), k);
+    }
   } catch (err) {
     log.warn({ err }, "Memory recall failed (non-fatal) — returning none");
-    return [];
+    results = [];
   }
+
+  if (results.length === 0) recordMemoryRetrievalEmpty();
+  else recordMemoryInjected(results.length);
+  return results;
 }
 
 // Thin getDb-bound wrappers (used by the extraction/ingestion PRs).
 
 export function insertFact(fact: NewFact): InsertResult {
-  return sqlInsertFact(getDb(), fact);
+  const result = sqlInsertFact(getDb(), fact);
+  // One "stored" event whether freshly inserted or dedup-reinforced. The
+  // memory MCP server (separate process) inserts via memorySql directly and
+  // does NOT report metrics — see src/metrics/registry.ts.
+  recordMemoryFactStored(fact.sourceType);
+  return result;
 }
 
 export function forgetMemory(id: number, now?: Date): boolean {

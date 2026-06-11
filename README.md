@@ -82,6 +82,26 @@ the Meet / Transcripts MCP servers. See [`docs/MEET_TRANSCRIPT_EXPERIMENT.md`](d
 > Playwright base image with Google Chrome installed (#25) and runs as the non-root
 > `pwuser` (#41).
 
+## Organizational memory (company brain)
+
+Sentinel keeps a persistent SQLite-backed store of durable organizational facts
+(decisions, owners, deadlines, metrics) and recalls the most relevant ones into every
+answer. It learns automatically from three sources — Slack conversations with the bot,
+transcripts of meetings the Meet bot attended, and recent internal email — and supports
+explicit "remember/forget/correct that" requests via chat (`memory_*` MCP tools).
+
+- **Env:** `ANTHROPIC_API_KEY` is required for fact extraction (without it, memory is
+  recall-only). `MEMORY_GMAIL_DOMAINS` extends the internal-sender email allowlist;
+  `MEMORY_INGEST_MEET=0` / `MEMORY_INGEST_GMAIL=0` are per-source kill switches read on
+  every ingest tick.
+- **Cost:** extraction runs on claude-haiku-4-5 with a 500-call/day budget —
+  roughly $0.30–0.50/day at normal volume.
+- **Security posture:** internal-sender-only email ingestion, verbatim evidence-quote
+  validation on every extracted fact, and recalled memories are injected as records —
+  explicitly *not* instructions — into the prompt.
+- **Observability:** `sentinel_memory_*` counters on the `/metrics` endpoint (facts
+  stored by source, extraction errors, budget exhaustion, injected/empty retrievals).
+
 ## Deployment
 
 ```bash
