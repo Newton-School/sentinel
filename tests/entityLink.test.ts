@@ -34,11 +34,17 @@ function insertMemory(
 }
 
 describe("entityLink.guessEntityType", () => {
-  it("classifies team-ish names as teams, otherwise person", async () => {
+  it("classifies team / project / metric / product names, else person", async () => {
     const { guessEntityType } = await import("../src/memory/entityLink.js");
     expect(guessEntityType("Placements Team")).toBe("team");
     expect(guessEntityType("Growth squad")).toBe("team");
+    expect(guessEntityType("Q3 employer pipeline")).toBe("project");
+    expect(guessEntityType("admissions funnel revamp")).toBe("project");
+    expect(guessEntityType("CTC target")).toBe("metric");
+    expect(guessEntityType("placement conversion rate")).toBe("metric");
+    expect(guessEntityType("the mobile app")).toBe("product");
     expect(guessEntityType("Rahul Sharma")).toBe("person");
+    expect(guessEntityType("Priya Nair")).toBe("person");
   });
 });
 

@@ -49,15 +49,26 @@ export function resolveMin(): number {
   return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : DEFAULT_RESOLVE_MIN;
 }
 
-const TEAM_NAME = /\b(teams?|squads?|pods?|groups?|guilds?|councils?|orgs?|departments?|depts?)\b/i;
+const TEAM_NAME = /\b(teams?|squads?|pods?|guilds?|councils?|orgs?|departments?|depts?)\b/i;
+const PROJECT_NAME =
+  /\b(project|projects|revamp|migration|launch|initiative|rollout|playbook|pipeline|funnel|roadmap|redesign|overhaul|integration|epic|program|programme|workstream|effort)\b/i;
+const METRIC_NAME =
+  /\b(target|targets|rate|nps|csat|revenue|arr|mrr|churn|retention|conversion|metric|metrics|kpi|kpis|ratio|score|throughput|latency|uptime|ctc)\b|%/i;
+const PRODUCT_NAME =
+  /\b(app|apps|platform|product|dashboard|portal|sdk|api|website|extension|widget)\b/i;
 
 /**
- * Heuristic type for a freshly-seen entity name. Team-ish names → team;
- * everything else defaults to person (the dominant org entity). Misclassifications
- * are correctable later via merge; this only affects newly-CREATED entities.
+ * Heuristic type for a freshly-seen entity name when the LLM didn't supply one.
+ * Checks team → project → metric → product patterns, else defaults to person
+ * (the dominant org entity). Misclassifications only affect newly-CREATED
+ * entities and are correctable via merge.
  */
 export function guessEntityType(rawName: string): EntityType {
-  return TEAM_NAME.test(rawName) ? "team" : "person";
+  if (TEAM_NAME.test(rawName)) return "team";
+  if (PROJECT_NAME.test(rawName)) return "project";
+  if (METRIC_NAME.test(rawName)) return "metric";
+  if (PRODUCT_NAME.test(rawName)) return "product";
+  return "person";
 }
 
 export interface LinkResult {
