@@ -110,6 +110,10 @@ describe("extractor.buildExtractionSystemPrompt", () => {
     expect(prompt).toMatch(/verbatim evidence_quote/i);
     // Entities-population requirement (so the company-brain graph can link).
     expect(prompt).toMatch(/Populate "entities"/);
+    // Ownership facts MUST list BOTH the owner and the thing owned, or the
+    // graph can't derive the ownership edge (regression guard).
+    expect(prompt).toMatch(/thing owned/i);
+    expect(prompt).toMatch(/never shrinks that list/i);
     // Pronoun / relative-date resolution with today's date provided.
     expect(prompt).toMatch(/pronouns/i);
     expect(prompt).toContain(new Date().toISOString().slice(0, 10));
@@ -172,6 +176,26 @@ describe("extractor.extractFacts", () => {
     const facts = await extractFacts(baseInput(fetchImpl));
     expect(facts).toHaveLength(1);
     expect(facts[0].subject).toBe("Priya");
+  });
+
+  it("adds the declared subject to entities when the model omits it from the list", async () => {
+    const { extractFacts } = await importExtractor();
+    const fetchImpl = vi.fn(async () =>
+      llmFacts({
+        facts: [
+          validFact({
+            text: "Priya owns the pricing page revamp.",
+            category: "owner",
+            entities: ["pricing page revamp"], // subject missing from list
+            subject: "Priya",
+            evidence_quote: "Priya owns the pricing page revamp",
+          }),
+        ],
+      })
+    );
+    const facts = await extractFacts(baseInput(fetchImpl));
+    expect(facts[0].entities).toContain("Priya"); // auto-added so it's linkable
+    expect(facts[0].entities).toContain("pricing page revamp");
   });
 
   it("defaults subject to undefined when the model omits it", async () => {
