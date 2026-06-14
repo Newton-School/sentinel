@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import { sanitizeFtsQuery } from "./rank.js";
 import { jaccard, normalizeForHash, tokenSet } from "./textMatch.js";
+import { blobToFloat, cosine } from "./embedder.js";
 import type {
   InsertResult,
   MemoryCandidate,
@@ -323,6 +324,34 @@ export function memoriesMissingEmbedding(
        LIMIT ?`
     )
     .all(limit) as Array<{ id: number; text: string }>;
+}
+
+/**
+ * Semantic (vector) candidates: scores a recency-bounded pool of active,
+ * embedded rows by cosine to `queryVec` in JS (no native vector extension —
+ * brute force over ≤poolLimit rows is sub-millisecond at our scale) and
+ * returns the top `topK`, each carrying its `cos`. `bm` is neutral (0) so the
+ * fusion treats these as lexically-unranked unless they also matched FTS.
+ */
+export function semanticCandidates(
+  db: Database.Database,
+  queryVec: Float32Array,
+  poolLimit = 2000,
+  topK = 30
+): MemoryCandidate[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM memories
+       WHERE status = 'active' AND embedding IS NOT NULL
+       ORDER BY updated_at DESC, id DESC
+       LIMIT ?`
+    )
+    .all(poolLimit) as Array<MemoryDbRow & { embedding: Buffer }>;
+
+  return rows
+    .map((r) => ({ ...mapMemoryRow(r), bm: 0, cos: cosine(queryVec, blobToFloat(r.embedding)) }))
+    .sort((a, b) => b.cos - a.cos)
+    .slice(0, topK);
 }
 
 /** Loads active memory rows by id (entity-linked-fact retrieval). */

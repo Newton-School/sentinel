@@ -54,6 +54,8 @@ export interface MemoryRow {
 /** A search candidate: a memory row plus its bm25 relevance (lower = better). */
 export interface MemoryCandidate extends MemoryRow {
   bm: number;
+  /** Cosine similarity to the query (hybrid retrieval); undefined for FTS-only candidates. */
+  cos?: number;
 }
 
 /** A ranked memory: candidate plus the final composite score (higher = better). */

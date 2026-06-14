@@ -121,12 +121,25 @@ export function sanitizeFtsQuery(raw: string): string {
 }
 
 /**
+ * The recency × category × confidence multiplier applied on top of the
+ * relevance term. Shared by the BM25-only and hybrid rankers so they age,
+ * boost, and weight candidates identically.
+ */
+function scoreModulator(c: MemoryCandidate, now: Date): number {
+  const updatedMs = new Date(c.updatedAt).getTime();
+  let ageDays = (now.getTime() - updatedMs) / DAY_MS;
+  // Malformed or future timestamps must not zero out a memory: treat as fresh.
+  if (Number.isNaN(ageDays) || ageDays < 0) ageDays = 0;
+  const recency = Math.pow(0.5, ageDays / MEMORY_RECENCY_HALF_LIFE_DAYS);
+  const catBoost = BOOSTED_CATEGORIES.has(c.category) ? CATEGORY_BOOST : 1.0;
+  return (0.5 + 0.5 * recency) * catBoost * (0.5 + 0.5 * c.confidence);
+}
+
+/**
  * Ranks search candidates with a composite score and returns the top `k`.
  *
- *   rel      = -bm                      (SQLite bm25: lower/more negative = better)
- *   recency  = 0.5 ^ (ageDays / 90)     (from updated_at; malformed/future = fresh)
- *   catBoost = 1.25 for decision|owner|deadline, else 1.0
- *   score    = rel × (0.5 + 0.5·recency) × catBoost × (0.5 + 0.5·confidence)
+ *   rel   = -bm                      (SQLite bm25: lower/more negative = better)
+ *   score = rel × (0.5 + 0.5·recency) × catBoost × (0.5 + 0.5·confidence)
  *
  * For the LIKE fallback (constant bm) ranking degrades gracefully to
  * recency × category × confidence. Pure: `now` is injected.
@@ -137,20 +150,68 @@ export function rankMemories(
   k = 6
 ): RankedMemory[] {
   return candidates
+    .map((c) => ({ ...c, score: -c.bm * scoreModulator(c, now) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, k);
+}
+
+/** Weight of normalized BM25 vs cosine in the fused relevance (lexical-leaning). */
+export const HYBRID_ALPHA = 0.6;
+
+/** Returns a min-max normalizer over `values` (→[0,1]); all-equal/empty → 1. */
+function minMaxNormalizer(values: number[]): (x: number) => number {
+  if (values.length === 0) return () => 0;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  if (max === min) return () => 1;
+  return (x) => (x - min) / (max - min);
+}
+
+/**
+ * Unions FTS and semantic candidate lists by id: a candidate present in both
+ * keeps the FTS `bm` and gains the semantic `cos`; FTS-only keeps `bm` (no
+ * `cos`); semantic-only keeps its `cos` (and neutral `bm`).
+ */
+export function fuseCandidates(
+  fts: MemoryCandidate[],
+  semantic: MemoryCandidate[]
+): MemoryCandidate[] {
+  const byId = new Map<number, MemoryCandidate>();
+  for (const c of fts) byId.set(c.id, { ...c });
+  for (const c of semantic) {
+    const existing = byId.get(c.id);
+    if (existing) existing.cos = c.cos;
+    else byId.set(c.id, { ...c });
+  }
+  return [...byId.values()];
+}
+
+/**
+ * Hybrid ranking: fuses normalized BM25 (-bm) and cosine into a relevance term
+ * (`α·bmNorm + (1-α)·cosNorm`), then applies the shared recency/category/
+ * confidence modulator. Candidates without a `cos` contribute cosNorm 0 (rely
+ * on lexical match); the lexical-leaning α keeps semantic-only candidates as
+ * fill-ins behind solid keyword hits. Pure: `now` injected.
+ */
+export function rankHybrid(
+  candidates: MemoryCandidate[],
+  now: Date,
+  k = 6,
+  alpha = HYBRID_ALPHA
+): RankedMemory[] {
+  if (candidates.length === 0) return [];
+  const normBm = minMaxNormalizer(candidates.map((c) => -c.bm));
+  const cosValues = candidates
+    .filter((c) => typeof c.cos === "number")
+    .map((c) => c.cos as number);
+  const normCos = minMaxNormalizer(cosValues);
+
+  return candidates
     .map((c) => {
-      const rel = -c.bm;
-
-      const updatedMs = new Date(c.updatedAt).getTime();
-      let ageDays = (now.getTime() - updatedMs) / DAY_MS;
-      // Malformed or future timestamps must not zero out a memory: treat as fresh.
-      if (Number.isNaN(ageDays) || ageDays < 0) ageDays = 0;
-      const recency = Math.pow(0.5, ageDays / MEMORY_RECENCY_HALF_LIFE_DAYS);
-
-      const catBoost = BOOSTED_CATEGORIES.has(c.category) ? CATEGORY_BOOST : 1.0;
-      const score =
-        rel * (0.5 + 0.5 * recency) * catBoost * (0.5 + 0.5 * c.confidence);
-
-      return { ...c, score };
+      const bmNorm = normBm(-c.bm);
+      const cosNorm = typeof c.cos === "number" ? normCos(c.cos) : 0;
+      const rel = alpha * bmNorm + (1 - alpha) * cosNorm;
+      return { ...c, score: rel * scoreModulator(c, now) };
     })
     .sort((a, b) => b.score - a.score)
     .slice(0, k);
