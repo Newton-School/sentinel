@@ -295,6 +295,15 @@ export function linkMemoryEntity(db: Database.Database, link: LinkMemoryEntityIn
   );
 }
 
+/** Sets the per-fact governance subject (the one entity a fact is ABOUT). */
+export function setMemorySubject(
+  db: Database.Database,
+  memoryId: number,
+  entityId: number | null
+): void {
+  db.prepare(`UPDATE memories SET subject_entity_id = ? WHERE id = ?`).run(entityId, memoryId);
+}
+
 /** Distinct memory ids linked to an entity (any role). */
 export function getEntityMemoryIds(db: Database.Database, entityId: number): number[] {
   const rows = db

@@ -105,10 +105,15 @@ function softSimilarity(a: Set<string>, b: Set<string>): number {
   return (matchedA + matchedB) / (a.size + b.size);
 }
 
-/** Maps a fuzzy similarity in [threshold, 1] to a confidence in [0.6, 0.8). */
+/**
+ * Maps a fuzzy similarity in [threshold, 1] to a confidence in [0.6, 0.78].
+ * Deliberately capped below the subject-attribution floor (0.8): a fuzzy match
+ * is the least-certain rung, so it may LINK an entity to a fact but must never
+ * become the fact's governance subject — mis-attribution is a privacy risk.
+ */
 function fuzzyConfidence(sim: number): number {
   const span = (sim - FUZZY_THRESHOLD) / (1 - FUZZY_THRESHOLD);
-  return 0.6 + Math.min(Math.max(span, 0), 1) * 0.2;
+  return 0.6 + Math.min(Math.max(span, 0), 1) * 0.18;
 }
 
 export function resolveEntity(
