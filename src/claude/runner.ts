@@ -104,13 +104,10 @@ export async function runClaude(
   );
 
   return new Promise<ClaudeResponse>((resolve, reject) => {
-    const env = { ...process.env };
-    if (config.ANTHROPIC_API_KEY) {
-      env.ANTHROPIC_API_KEY = config.ANTHROPIC_API_KEY;
-    }
-
+    // The Claude CLI authenticates via its own login (no ANTHROPIC_API_KEY);
+    // it inherits the ambient env.
     const proc = spawn(config.CLAUDE_BIN, args, {
-      env,
+      env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
       timeout: TIMEOUT_MS,
     });

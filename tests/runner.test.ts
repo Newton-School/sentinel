@@ -144,15 +144,15 @@ describe("runClaude", () => {
       expect(args[idx + 1]).toBe(MCP_CONFIG_PATH);
     });
 
-    it("spawns with ANTHROPIC_API_KEY injected into the child env", async () => {
+    it("spawns the CLI inheriting the ambient environment (CLI uses its own login)", async () => {
       const { runClaude } = await import("../src/claude/runner.js");
 
       const promise = runClaude("sys", "msg");
       child.emit("close", 0);
       await promise;
 
-      const opts = spawnMock.mock.calls[0][2] as { env: Record<string, string> };
-      expect(opts.env.ANTHROPIC_API_KEY).toBe("sk-test-key");
+      const opts = spawnMock.mock.calls[0][2] as { env: NodeJS.ProcessEnv };
+      expect(opts.env).toBe(process.env);
     });
   });
 

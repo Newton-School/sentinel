@@ -52,8 +52,7 @@ function apiResponse(body: unknown, status = 200): Response {
 
 function successBody(payload: unknown): unknown {
   return {
-    content: [{ type: "text", text: JSON.stringify(payload) }],
-    stop_reason: "end_turn",
+    choices: [{ message: { content: JSON.stringify(payload) }, finish_reason: "stop" }],
   };
 }
 
@@ -308,7 +307,7 @@ describe("memory metrics", () => {
       const reg = await import("../src/metrics/registry.js");
       reg.reset();
       const { extractJson, __resetBudgetForTests } = await import(
-        "../src/llm/anthropicClient.js"
+        "../src/llm/openaiClient.js"
       );
       __resetBudgetForTests();
 
@@ -332,7 +331,7 @@ describe("memory metrics", () => {
       const reg = await import("../src/metrics/registry.js");
       reg.reset();
       const { extractJson, __resetBudgetForTests } = await import(
-        "../src/llm/anthropicClient.js"
+        "../src/llm/openaiClient.js"
       );
       __resetBudgetForTests();
 
@@ -355,7 +354,7 @@ describe("memory metrics", () => {
       const reg = await import("../src/metrics/registry.js");
       reg.reset();
       const { extractJson, __resetBudgetForTests } = await import(
-        "../src/llm/anthropicClient.js"
+        "../src/llm/openaiClient.js"
       );
       __resetBudgetForTests();
 
@@ -379,7 +378,7 @@ describe("memory metrics", () => {
       const reg = await import("../src/metrics/registry.js");
       reg.reset();
       const { extractJson, __resetBudgetForTests, MAX_EXTRACTION_CALLS_PER_DAY } =
-        await import("../src/llm/anthropicClient.js");
+        await import("../src/llm/openaiClient.js");
       __resetBudgetForTests();
 
       const nowMs = Date.UTC(2026, 5, 11, 10, 0, 0);
@@ -411,7 +410,7 @@ describe("memory metrics", () => {
       const reg = await import("../src/metrics/registry.js");
       reg.reset();
       const { extractJson, __resetBudgetForTests } = await import(
-        "../src/llm/anthropicClient.js"
+        "../src/llm/openaiClient.js"
       );
       __resetBudgetForTests();
 
@@ -425,7 +424,7 @@ describe("memory metrics", () => {
 
   describe("conversationHook counts pipeline failures as extract errors", () => {
     it("an exploding extractor increments extract_errors via the detached catch", async () => {
-      mockConfig({ ANTHROPIC_API_KEY: "sk-ant-test" });
+      mockConfig({ OPENAI_API_KEY: "sk-openai-test" });
       vi.doMock("../src/memory/extractor.js", () => ({
         extractFacts: vi.fn(async () => {
           throw new Error("extractor boom");
@@ -450,7 +449,7 @@ describe("memory metrics", () => {
     });
 
     it("a clean no-facts run increments nothing", async () => {
-      mockConfig({ ANTHROPIC_API_KEY: "sk-ant-test" });
+      mockConfig({ OPENAI_API_KEY: "sk-openai-test" });
       vi.doMock("../src/memory/extractor.js", () => ({
         extractFacts: vi.fn(async () => []),
       }));

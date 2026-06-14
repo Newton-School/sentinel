@@ -35,7 +35,7 @@ const FULL_CREDS = {
   GOOGLE_CLIENT_ID: "gid",
   GOOGLE_CLIENT_SECRET: "gsecret",
   GOOGLE_REFRESH_TOKEN: "grefresh",
-  ANTHROPIC_API_KEY: "sk-ant-test",
+  OPENAI_API_KEY: "sk-openai-test",
 };
 
 async function loadWatcher(cfg: Record<string, unknown>) {
@@ -72,7 +72,7 @@ describe("startIngestWatcher", () => {
 
   it("gates on Google credentials: warns and returns a no-op stop, no interval", async () => {
     const { mod, runMeetIngest, runGmailIngest } = await loadWatcher({
-      ANTHROPIC_API_KEY: "sk-ant-test",
+      OPENAI_API_KEY: "sk-openai-test",
     });
 
     const stop = mod.startIngestWatcher();
@@ -84,7 +84,7 @@ describe("startIngestWatcher", () => {
     expect(() => stop()).not.toThrow();
   });
 
-  it("gates on ANTHROPIC_API_KEY: warns and returns a no-op stop, no interval", async () => {
+  it("gates on the OpenAI key: warns and returns a no-op stop, no interval", async () => {
     const { mod, runMeetIngest } = await loadWatcher({
       GOOGLE_CLIENT_ID: "gid",
       GOOGLE_CLIENT_SECRET: "gsecret",
@@ -137,10 +137,10 @@ describe("startIngestWatcher", () => {
 
     const meetDeps = runMeetIngest.mock.calls[0][0] as Record<string, unknown>;
     expect(meetDeps.meetClient).toEqual({ tag: "meet-client" });
-    expect(meetDeps.apiKey).toBe("sk-ant-test");
+    expect(meetDeps.apiKey).toBe("sk-openai-test");
 
     const gmailDeps = runGmailIngest.mock.calls[0][0] as Record<string, unknown>;
-    expect(gmailDeps.apiKey).toBe("sk-ant-test");
+    expect(gmailDeps.apiKey).toBe("sk-openai-test");
     expect(gmailDeps.internalDomains).toEqual(["newtonschool.co"]);
     expect(gmailDeps.gmail).toBeTruthy();
 

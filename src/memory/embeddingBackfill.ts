@@ -8,17 +8,17 @@
  */
 
 import type Database from "better-sqlite3";
-import { config } from "../config.js";
 import { createLogger } from "../logging/logger.js";
 import { recordEmbedding } from "../metrics/registry.js";
 import { memoriesMissingEmbedding, setEmbedding } from "./memorySql.js";
 import { embedTexts, floatToBlob } from "./embedder.js";
+import { openaiApiKey } from "../llm/openaiClient.js";
 
 const log = createLogger("embedding-backfill");
 
-/** True when hybrid embeddings should run (runtime flag + a configured key). */
+/** True when hybrid embeddings should run (runtime flag + a configured OpenAI key). */
 export function isEmbeddingsEnabled(): boolean {
-  return process.env.MEMORY_EMBEDDINGS === "1" && Boolean(config.MEMORY_EMBEDDING_API_KEY);
+  return process.env.MEMORY_EMBEDDINGS === "1" && Boolean(openaiApiKey());
 }
 
 export interface EmbeddingBackfillDeps {

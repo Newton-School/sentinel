@@ -1,7 +1,7 @@
 /**
  * Memory ingestion poll loop (meet-bot watcher.ts pattern): every 5 minutes,
  * pull Meet transcripts, recent internal Gmail, and designated Slack channels
- * through the extraction pipeline. Requires ANTHROPIC_API_KEY; the Google
+ * through the extraction pipeline. Requires an OpenAI key (extraction); the Google
  * sources additionally require the Google credentials, and Slack ingestion is
  * opt-in (see below). Starts only if at least one source is runnable.
  *
@@ -24,6 +24,7 @@ import { createLogger } from "../logging/logger.js";
 import { createMeetClient } from "../google/meetClient.js";
 import { runMeetIngest } from "./meetIngest.js";
 import { runGmailIngest, resolveInternalDomains } from "./gmailIngest.js";
+import { openaiApiKey } from "../llm/openaiClient.js";
 import {
   runSlackIngest,
   resolveIngestChannels,
@@ -44,13 +45,14 @@ export function startIngestWatcher(): () => void {
   );
   const slackWanted = process.env.MEMORY_INGEST_SLACK === "1";
 
-  if (!config.ANTHROPIC_API_KEY || (!hasGoogle && !slackWanted)) {
+  const resolvedKey = openaiApiKey();
+  if (!resolvedKey || (!hasGoogle && !slackWanted)) {
     log.warn(
-      "No ingestable source (Google creds / Slack) with ANTHROPIC_API_KEY — ingest watcher disabled"
+      "No OpenAI key (extraction) or no ingestable source (Google creds / Slack) — ingest watcher disabled"
     );
     return () => {};
   }
-  const apiKey = config.ANTHROPIC_API_KEY;
+  const apiKey: string = resolvedKey;
 
   // Google clients (Meet + Gmail) — built only when credentials are present.
   let meetClient: ReturnType<typeof createMeetClient> | null = null;

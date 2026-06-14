@@ -4,7 +4,7 @@
  * ingestion (dossiers change less often), and bounded per tick so it can't
  * drain the shared daily LLM budget.
  *
- * Gated on ANTHROPIC_API_KEY (no key → no-op stop, like the ingest watcher).
+ * Gated on the OpenAI key (no key → no-op stop, like the ingest watcher).
  * Kill switch read straight from the env every tick (no rebuild): set
  * MEMORY_CONSOLIDATION=0 to disable. An overlapping-tick guard skips a tick
  * while the previous one is still running (consolidation is LLM-heavy).
@@ -15,6 +15,7 @@ import { createLogger } from "../logging/logger.js";
 import { getDb } from "../state/db.js";
 import { runConsolidation } from "./consolidate.js";
 import { backfillEmbeddings, isEmbeddingsEnabled } from "./embeddingBackfill.js";
+import { openaiApiKey } from "../llm/openaiClient.js";
 
 const log = createLogger("consolidation-watcher");
 
@@ -27,9 +28,9 @@ export const CONSOLIDATION_INTERVAL_MS = 30 * 60 * 1000; // 30 min
  * other. Starts only if at least one step is enabled. Returns a `stop()`.
  */
 export function startConsolidationWatcher(): () => void {
-  const hasAnthropic = Boolean(config.ANTHROPIC_API_KEY);
-  if (!hasAnthropic && !isEmbeddingsEnabled()) {
-    log.warn("No ANTHROPIC_API_KEY and embeddings disabled — maintenance watcher disabled");
+  const llmKey = openaiApiKey();
+  if (!llmKey && !isEmbeddingsEnabled()) {
+    log.warn("No OpenAI key and embeddings disabled — maintenance watcher disabled");
     return () => {};
   }
 
@@ -41,10 +42,10 @@ export function startConsolidationWatcher(): () => void {
     }
     running = true;
     try {
-      // Consolidation (gated on the Anthropic key + its kill switch).
-      if (config.ANTHROPIC_API_KEY && process.env.MEMORY_CONSOLIDATION !== "0") {
+      // Consolidation (gated on the OpenAI key + its kill switch).
+      if (llmKey && process.env.MEMORY_CONSOLIDATION !== "0") {
         try {
-          await runConsolidation(getDb(), { apiKey: config.ANTHROPIC_API_KEY });
+          await runConsolidation(getDb(), { apiKey: llmKey });
         } catch (err) {
           log.error({ err }, "Consolidation tick failed");
         }
@@ -53,7 +54,7 @@ export function startConsolidationWatcher(): () => void {
       if (isEmbeddingsEnabled()) {
         try {
           await backfillEmbeddings(getDb(), {
-            apiKey: config.MEMORY_EMBEDDING_API_KEY,
+            apiKey: openaiApiKey(),
             model: config.MEMORY_EMBEDDING_MODEL,
           });
         } catch (err) {

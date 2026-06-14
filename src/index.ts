@@ -9,6 +9,7 @@ import { searchMemories, assembleRetrieval, currentViewerScope } from "./memory/
 import { isEntityGraphEnabled } from "./memory/entityLink.js";
 import { isEmbeddingsEnabled } from "./memory/embeddingBackfill.js";
 import { embedText } from "./memory/embedder.js";
+import { openaiApiKey } from "./llm/openaiClient.js";
 import { extractFromConversation } from "./memory/conversationHook.js";
 import { buildSystemPrompt } from "./claude/systemPrompt.js";
 import type { RankedMemory, RetrievalBundle } from "./memory/types.js";
@@ -111,7 +112,7 @@ async function handleEvent(
         if (isEmbeddingsEnabled()) {
           queryVec =
             (await embedText(envelope.text, {
-              apiKey: config.MEMORY_EMBEDDING_API_KEY,
+              apiKey: openaiApiKey(),
               model: config.MEMORY_EMBEDDING_MODEL,
             })) ?? undefined;
         }

@@ -19,7 +19,7 @@ async function setup() {
   const { getDb } = await import("../src/state/db.js");
   const entitySql = await import("../src/memory/entitySql.js");
   const consolidate = await import("../src/memory/consolidate.js");
-  const client = await import("../src/llm/anthropicClient.js");
+  const client = await import("../src/llm/openaiClient.js");
   client.__resetBudgetForTests();
   return { db: getDb(), entitySql, consolidate, client };
 }
@@ -43,8 +43,9 @@ function fakeFetch(profileMd: string, keyFactIds: number[] = []) {
     bodies.push(JSON.parse(init.body));
     return new Response(
       JSON.stringify({
-        content: [{ type: "text", text: JSON.stringify({ profile_md: profileMd, key_fact_ids: keyFactIds }) }],
-        stop_reason: "end_turn",
+        choices: [
+          { message: { content: JSON.stringify({ profile_md: profileMd, key_fact_ids: keyFactIds }) }, finish_reason: "stop" },
+        ],
       }),
       { status: 200 }
     );
@@ -92,7 +93,7 @@ describe("consolidateEntity", () => {
     const { fn, bodies } = fakeFetch("profile");
     await consolidate.consolidateEntity(db, e.id, { apiKey: "k", fetchImpl: fn, now: () => NOW_MS });
 
-    const userContent = bodies[0].messages[0].content as string;
+    const userContent = bodies[0].messages[1].content as string; // [0] system, [1] user
     expect(userContent).toContain("public roadmap note");
     expect(userContent).not.toContain("SECRET comp");
     // The cursor still tracks the TOTAL active fact count (incl. sensitive)
@@ -106,7 +107,7 @@ describe("consolidateEntity", () => {
     linkFacts(e.id, [["a fact"]]);
     const { fn, bodies } = fakeFetch("p");
     await consolidate.consolidateEntity(db, e.id, { apiKey: "k", fetchImpl: fn, now: () => NOW_MS, model: "sonnet" });
-    expect(bodies[0].model).toBe(client.SONNET_MODEL);
+    expect(bodies[0].model).toBe(client.OPENAI_CONSOLIDATION_MODEL);
   });
 
   it("returns built:false (leaves no profile) when the LLM call fails", async () => {

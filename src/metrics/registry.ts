@@ -133,9 +133,9 @@ export function record(input: RecordInput): void {
 //   retrievalEmpty → memoryStore.searchMemories (the sole in-process recall
 //                    path; its return value is exactly what systemPrompt.ts
 //                    injects)
-//   extractErrors  → anthropicClient.extractJson failure paths +
+//   extractErrors  → openaiClient.extractJson failure paths +
 //                    conversationHook's detached catch
-//   budgetExhausted → anthropicClient's daily-cap gate
+//   budgetExhausted → openaiClient's daily-cap gate
 
 /** Record one stored-fact event (new insert or dedup-reinforce). */
 export function recordMemoryFactStored(source: MemorySourceType): void {
