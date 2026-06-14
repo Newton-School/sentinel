@@ -5,15 +5,16 @@
  * memory rows that lack a vector, via OpenAI, in batches. Seeds history before
  * (or alongside) the maintenance watcher. Sensitive rows are never embedded.
  *
- * Requires MEMORY_EMBEDDING_API_KEY (OpenAI). Respects the embedder's daily
- * budget. Usage:
- *   MEMORY_EMBEDDING_API_KEY=sk-... npx tsx scripts/backfill-embeddings.ts
+ * Requires an OpenAI key (OPENAI_API_KEY or MEMORY_EMBEDDING_API_KEY).
+ * Respects the embedder's daily budget. Usage:
+ *   OPENAI_API_KEY=sk-... npx tsx scripts/backfill-embeddings.ts
  *   ... --batch 500 --max 4
  */
 
 import { config } from "../src/config.js";
 import { getDb, closeDb } from "../src/state/db.js";
 import { backfillEmbeddings } from "../src/memory/embeddingBackfill.js";
+import { openaiApiKey } from "../src/llm/openaiClient.js";
 
 function arg(name: string, fallback: number): number {
   const i = process.argv.indexOf(name);
@@ -25,8 +26,9 @@ function arg(name: string, fallback: number): number {
 }
 
 async function main(): Promise<void> {
-  if (!config.MEMORY_EMBEDDING_API_KEY) {
-    process.stderr.write("MEMORY_EMBEDDING_API_KEY is not set — nothing to do.\n");
+  const apiKey = openaiApiKey();
+  if (!apiKey) {
+    process.stderr.write("No OpenAI key (OPENAI_API_KEY / MEMORY_EMBEDDING_API_KEY) — nothing to do.\n");
     process.exit(1);
   }
   const batch = arg("--batch", 200);
@@ -37,7 +39,7 @@ async function main(): Promise<void> {
   let totalEmbedded = 0;
   for (let i = 0; i < maxBatches; i++) {
     const { scanned, embedded } = await backfillEmbeddings(db, {
-      apiKey: config.MEMORY_EMBEDDING_API_KEY,
+      apiKey,
       model: config.MEMORY_EMBEDDING_MODEL,
       limit: batch,
     });

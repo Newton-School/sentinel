@@ -8,7 +8,10 @@ export const envSchema = z
   BOT_USER_ID: z.string().min(1),
 
   CLAUDE_BIN: z.string().default("claude"),
-  ANTHROPIC_API_KEY: z.string().min(1).optional(),
+  // OpenAI key — powers BOTH fact extraction (chat completions) and embeddings.
+  // OPENAI_API_KEY is preferred; MEMORY_EMBEDDING_API_KEY remains a fallback so
+  // an embeddings-only config keeps working. (There is no ANTHROPIC_API_KEY.)
+  OPENAI_API_KEY: z.string().min(1).optional(),
 
   // Metabase (optional — bot starts without it)
   METABASE_URL: z.string().url().optional(),

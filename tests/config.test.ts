@@ -29,7 +29,7 @@ describe("config envSchema (real module)", () => {
     SLACK_BOT_TOKEN: "xoxb-test-token",
     SLACK_APP_TOKEN: "xapp-test-token",
     BOT_USER_ID: "U123456",
-    ANTHROPIC_API_KEY: "sk-ant-test",
+    OPENAI_API_KEY: "sk-openai-test",
     METABASE_URL: "https://metabase.example.com",
     METABASE_USERNAME: "admin@test.com",
     METABASE_PASSWORD: "password",
@@ -175,7 +175,7 @@ describe("config envSchema (real module)", () => {
       const result = envSchema.safeParse(minimalEnv);
       expect(result.success).toBe(true);
       if (result.success) {
-        expect(result.data.ANTHROPIC_API_KEY).toBeUndefined();
+        expect(result.data.OPENAI_API_KEY).toBeUndefined();
         expect(result.data.METABASE_URL).toBeUndefined();
         expect(result.data.GITHUB_TOKEN).toBeUndefined();
         expect(result.data.NOTION_API_KEY).toBeUndefined();

@@ -12,10 +12,10 @@
  * never launder its own (possibly memory-derived) replies back into memory.
  */
 
-import { config } from "../config.js";
 import { createLogger } from "../logging/logger.js";
 import { recordMemoryExtractError } from "../metrics/registry.js";
 import { extractFacts } from "./extractor.js";
+import { openaiApiKey } from "../llm/openaiClient.js";
 import { insertFact } from "./memoryStore.js";
 
 const log = createLogger("conversation-hook");
@@ -48,7 +48,8 @@ let inflight: Promise<void> = Promise.resolve();
  */
 export function extractFromConversation(opts: ConversationHookOptions): void {
   inflight = (async () => {
-    if (!config.ANTHROPIC_API_KEY) return;
+    const apiKey = openaiApiKey();
+    if (!apiKey) return;
     if (opts.queryText.trim().length < MIN_QUERY_CHARS) return;
 
     const dateLabel = `Q&A ${new Date().toISOString().slice(0, 10)}`;
@@ -57,7 +58,7 @@ export function extractFromConversation(opts: ConversationHookOptions): void {
       sourceLabel: dateLabel,
       content: opts.queryText,
       alreadyKnown: opts.injectedMemories,
-      apiKey: config.ANTHROPIC_API_KEY,
+      apiKey,
       disambiguationContext: opts.responseText.slice(
         0,
         MAX_RESPONSE_CONTEXT_CHARS

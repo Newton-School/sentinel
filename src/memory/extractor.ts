@@ -19,7 +19,7 @@
  */
 
 import { z } from "zod";
-import { extractJson } from "../llm/anthropicClient.js";
+import { extractJson } from "../llm/openaiClient.js";
 import { createLogger } from "../logging/logger.js";
 
 const log = createLogger("memory-extractor");

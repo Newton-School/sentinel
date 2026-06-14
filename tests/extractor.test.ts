@@ -29,11 +29,10 @@ function apiResponse(body: unknown, status = 200): Response {
   } as unknown as Response;
 }
 
-/** A Messages API success whose single text block is the facts envelope. */
+/** An OpenAI chat-completions success whose message content is the facts envelope. */
 function llmFacts(envelope: unknown): Response {
   return apiResponse({
-    content: [{ type: "text", text: JSON.stringify(envelope) }],
-    stop_reason: "end_turn",
+    choices: [{ message: { content: JSON.stringify(envelope) }, finish_reason: "stop" }],
   });
 }
 
@@ -257,7 +256,7 @@ describe("extractor.extractFacts", () => {
     const body = JSON.parse(
       (fetchImpl.mock.calls[0][1] as RequestInit).body as string
     );
-    expect(body.messages[0].content).toHaveLength(12_000);
+    expect(body.messages[1].content).toHaveLength(12_000);
   });
 
   it("returns [] when the LLM call fails (non-ok)", async () => {

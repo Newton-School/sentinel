@@ -68,7 +68,7 @@ async function loadMeetIngest(opts: {
   const extractFacts = opts.extractFacts ?? vi.fn(async () => []);
   const extractJson = opts.extractJson ?? vi.fn(async () => null);
   vi.doMock("../src/memory/extractor.js", () => ({ extractFacts }));
-  vi.doMock("../src/llm/anthropicClient.js", () => ({ extractJson }));
+  vi.doMock("../src/llm/openaiClient.js", () => ({ extractJson }));
 
   const mod = await import("../src/memory/meetIngest.js");
   const { getDb } = await import("../src/state/db.js");

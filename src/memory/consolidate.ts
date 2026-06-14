@@ -12,7 +12,11 @@
 
 import type Database from "better-sqlite3";
 import { createLogger } from "../logging/logger.js";
-import { extractJson, HAIKU_MODEL, SONNET_MODEL } from "../llm/anthropicClient.js";
+import {
+  extractJson,
+  OPENAI_EXTRACT_MODEL,
+  OPENAI_CONSOLIDATION_MODEL,
+} from "../llm/openaiClient.js";
 import { getEntityMemoryIds, getEntityById, upsertEntityProfile } from "./entitySql.js";
 import { getMemoriesByIds } from "./memorySql.js";
 
@@ -136,7 +140,7 @@ export async function consolidateEntity(
   if (usable.length === 0) return { built: false };
 
   const { system, user } = buildConsolidationPrompt(entity.canonicalName, usable);
-  const modelId = deps.model === "sonnet" ? SONNET_MODEL : HAIKU_MODEL;
+  const modelId = deps.model === "sonnet" ? OPENAI_CONSOLIDATION_MODEL : OPENAI_EXTRACT_MODEL;
 
   const result = await extractJson({
     system,

@@ -44,7 +44,7 @@ async function loadHook(opts: {
     config: {
       SQLITE_DB_PATH: ":memory:",
       LOG_LEVEL: "silent",
-      ...(opts.apiKey ? { ANTHROPIC_API_KEY: opts.apiKey } : {}),
+      ...(opts.apiKey ? { OPENAI_API_KEY: opts.apiKey } : {}),
     },
   }));
   const extractFacts = opts.extractFacts ?? vi.fn(async () => []);
@@ -104,7 +104,7 @@ describe("conversationHook.extractFromConversation", () => {
     await expect(hook.__testing.flush()).resolves.toBeUndefined();
   });
 
-  it("skips extraction when ANTHROPIC_API_KEY is unset", async () => {
+  it("skips extraction when no OpenAI key is set", async () => {
     const { hook, extractFacts } = await loadHook({ apiKey: undefined });
 
     hook.extractFromConversation({

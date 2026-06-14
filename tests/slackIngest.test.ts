@@ -47,7 +47,7 @@ async function setup() {
   }));
   const { getDb } = await import("../src/state/db.js");
   const slackIngest = await import("../src/memory/slackIngest.js");
-  const client = await import("../src/llm/anthropicClient.js");
+  const client = await import("../src/llm/openaiClient.js");
   client.__resetBudgetForTests();
   delete process.env.MEMORY_ENTITY_GRAPH;
   return { db: getDb(), slackIngest };
@@ -60,7 +60,7 @@ const EVIDENCE = "raise the placements target to 300 offers";
 /** Extractor fetch that echoes one distinct, evidence-grounded fact per message. */
 const fakeExtractor = (async (_url: string, init: any) => {
   const body = JSON.parse(init.body);
-  const content: string = body.messages[0].content;
+  const content: string = body.messages[1].content; // [0] is system, [1] is user
   const tag = content.match(/\[\[id:[^\]]+\]\]/)?.[0] ?? "[[id:x]]";
   const fact = {
     text: `Decision ${tag} recorded about placements`,
@@ -71,7 +71,7 @@ const fakeExtractor = (async (_url: string, init: any) => {
     sensitivity: "normal",
   };
   return new Response(
-    JSON.stringify({ content: [{ type: "text", text: JSON.stringify({ facts: [fact] }) }], stop_reason: "end_turn" }),
+    JSON.stringify({ choices: [{ message: { content: JSON.stringify({ facts: [fact] }) }, finish_reason: "stop" }] }),
     { status: 200 }
   );
 }) as unknown as typeof fetch;

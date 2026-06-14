@@ -18,7 +18,7 @@
 import { getDb } from "../state/db.js";
 import { createLogger } from "../logging/logger.js";
 import { extractFacts } from "./extractor.js";
-import { extractJson } from "../llm/anthropicClient.js";
+import { extractJson } from "../llm/openaiClient.js";
 import { insertFact } from "./memoryStore.js";
 import {
   getCursor,
