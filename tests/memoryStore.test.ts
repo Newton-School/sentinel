@@ -254,6 +254,48 @@ describe("memory store (schema + memorySql)", () => {
       expect(rows[0].confidence).toBe(0.8); // bumped to max of both
     });
 
+    it("a provenance suffix on one copy does not defeat dedup (manual store vs conversation hook)", async () => {
+      const { sql, db } = await load();
+      // memory_store bakes attribution into the text; the conversation hook
+      // re-extracts the bare sentence. The suffix changes the hash AND dilutes
+      // Jaccard below 0.85 — without provenance-stripping these double-capture.
+      const manual = sql.insertFact(db, {
+        text: 'Rahul Sharma\'s performance rating last cycle was "exceeds expectations" (stated by Dipesh, 2026-06-15).',
+        category: "fact",
+        sourceType: "manual",
+        confidence: 0.9,
+      });
+      const hook = sql.insertFact(db, {
+        text: 'Rahul Sharma\'s performance rating last cycle was "exceeds expectations".',
+        category: "fact",
+        sourceType: "conversation",
+        confidence: 0.6,
+      });
+
+      expect(hook.deduped).toBe(true);
+      expect(hook.id).toBe(manual.id);
+      const rows = db.prepare("SELECT id FROM memories").all() as Array<{ id: number }>;
+      expect(rows).toHaveLength(1);
+    });
+
+    it("provenance-stripping still inserts a second row when the cores genuinely differ", async () => {
+      const { sql, db } = await load();
+      sql.insertFact(db, {
+        text: "Placements weekly target is 45 offers (stated by Dipesh, 2026-06-14).",
+        category: "metric",
+        sourceType: "manual",
+      });
+      // Same provenance shape but a different number — must NOT dedup.
+      const second = sql.insertFact(db, {
+        text: "Placements weekly target is 50 offers (corrected by Dipesh, 2026-06-15).",
+        category: "metric",
+        sourceType: "manual",
+      });
+      expect(second.deduped).toBe(false);
+      const count = db.prepare("SELECT COUNT(*) AS n FROM memories").get() as { n: number };
+      expect(count.n).toBe(2);
+    });
+
     it("a genuinely different fact inserts a second row", async () => {
       const { sql, db } = await load();
       sql.insertFact(db, {
