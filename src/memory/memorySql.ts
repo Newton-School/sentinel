@@ -15,7 +15,7 @@
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import { sanitizeFtsQuery } from "./rank.js";
-import { jaccard, normalizeForHash, tokenSet } from "./textMatch.js";
+import { jaccard, normalizeForHash, stripProvenanceSuffix, tokenSet } from "./textMatch.js";
 import { blobToFloat, cosine } from "./embedder.js";
 import type {
   InsertResult,
@@ -107,10 +107,13 @@ export function insertFact(db: Database.Database, fact: NewFact): InsertResult {
   const rawText = fact.text.length > MAX_FACT_TEXT_CHARS
     ? fact.text.slice(0, MAX_FACT_TEXT_CHARS)
     : fact.text;
-  const normalized = normalizeForHash(rawText);
-  if (normalized.length === 0) {
+  if (normalizeForHash(rawText).length === 0) {
     throw new Error("insertFact: fact text must not be empty");
   }
+  // Dedup identity ignores a trailing provenance parenthetical (the stored text
+  // keeps it): the same statement stored manually with attribution and
+  // re-extracted bare by the conversation hook must collapse to one row.
+  const normalized = normalizeForHash(stripProvenanceSuffix(rawText));
 
   const now = (fact.now ?? new Date()).toISOString();
   const hash = contentHash(normalized);
@@ -133,7 +136,10 @@ export function insertFact(db: Database.Database, fact: NewFact): InsertResult {
 
       const newTokens = tokenSet(normalized);
       for (const candidate of candidates) {
-        const similarity = jaccard(newTokens, tokenSet(normalizeForHash(candidate.text)));
+        const similarity = jaccard(
+          newTokens,
+          tokenSet(normalizeForHash(stripProvenanceSuffix(candidate.text)))
+        );
         if (similarity >= NEAR_DUP_JACCARD) {
           db.prepare(
             `UPDATE memories SET confidence = MAX(confidence, ?), updated_at = ? WHERE id = ?`

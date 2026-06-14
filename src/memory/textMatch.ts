@@ -19,6 +19,28 @@ export function normalizeForHash(text: string): string {
     .trim();
 }
 
+/**
+ * A trailing attribution parenthetical that `memory_store` (and similar paths)
+ * bake into fact text — e.g. `… (stated by Dipesh, 2026-06-15).` Provenance is
+ * metadata, not fact content, so it must not participate in dedup identity:
+ * left in, it changes the content hash AND dilutes token-set similarity, so the
+ * same statement stored manually (with the suffix) and re-extracted by the
+ * conversation hook (without it) double-captures. Only strips parentheticals
+ * carrying a provenance cue, so a meaningful trailing parenthetical survives.
+ */
+const PROVENANCE_SUFFIX =
+  /\s*\([^)]*\b(stated|said|updated|corrected|noted|reported|added|confirmed|recorded|per)\b[^)]*\)\s*[.!?]?\s*$/i;
+
+/**
+ * Strips a trailing provenance parenthetical for dedup-key purposes. Returns
+ * the original text unchanged when no provenance cue is present, or when
+ * stripping would leave nothing (a fact that is ONLY provenance).
+ */
+export function stripProvenanceSuffix(text: string): string {
+  const stripped = text.replace(PROVENANCE_SUFFIX, "").trim();
+  return stripped.length > 0 ? stripped : text;
+}
+
 /** Splits already-normalized text into a set of non-empty tokens. */
 export function tokenSet(normalized: string): Set<string> {
   return new Set(normalized.split(" ").filter(Boolean));

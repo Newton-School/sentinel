@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalizeForHash, tokenSet, jaccard } from "../src/memory/textMatch.js";
+import { normalizeForHash, tokenSet, jaccard, stripProvenanceSuffix } from "../src/memory/textMatch.js";
 
 describe("textMatch.normalizeForHash", () => {
   it("lowercases, strips punctuation, and collapses whitespace", () => {
@@ -58,5 +58,32 @@ describe("textMatch.jaccard", () => {
     expect(jaccard(tokenSet("rahul sharma"), tokenSet("rahul kumar"))).toBeCloseTo(
       1 / 3
     );
+  });
+});
+
+describe("textMatch.stripProvenanceSuffix", () => {
+  it("strips a trailing provenance parenthetical (with or without end punctuation)", () => {
+    expect(
+      stripProvenanceSuffix('Rahul\'s rating was "exceeds expectations" (stated by Dipesh, 2026-06-15).')
+    ).toBe('Rahul\'s rating was "exceeds expectations"');
+    expect(
+      stripProvenanceSuffix("Placements weekly target is 50 offers (corrected by Dipesh on 2026-06-14)")
+    ).toBe("Placements weekly target is 50 offers");
+  });
+
+  it("leaves a meaningful (non-provenance) trailing parenthetical intact", () => {
+    expect(stripProvenanceSuffix("Q3 target is 250 offers (across all campuses)")).toBe(
+      "Q3 target is 250 offers (across all campuses)"
+    );
+  });
+
+  it("returns the original text when there is no trailing parenthetical", () => {
+    expect(stripProvenanceSuffix("Rahul Sharma leads the placements team")).toBe(
+      "Rahul Sharma leads the placements team"
+    );
+  });
+
+  it("does not strip down to empty (a fact that is only provenance is kept)", () => {
+    expect(stripProvenanceSuffix("(stated by Dipesh)")).toBe("(stated by Dipesh)");
   });
 });
