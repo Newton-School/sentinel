@@ -13,10 +13,13 @@ export const EDGE_HALF_LIFE_DAYS = 60;
 
 /**
  * Decayed confidence at/above which an edge is considered "real" for display.
- * Set so a single explicit ownership signal (base 0.5) surfaces, while a stale
- * edge that has decayed below it drops out.
+ * Set strictly BELOW the ownership-edge base confidence (0.5) so a freshly
+ * derived edge still surfaces after real-time decay (querying it milliseconds
+ * after it was written shaves an epsilon off 0.5) — while genuinely weak (≤0.4)
+ * or stale-decayed edges still drop out. A single uncorroborated owner edge
+ * thus shows for the first few weeks, then fades unless reinforced.
  */
-export const EDGE_DISPLAY_THRESHOLD = 0.5;
+export const EDGE_DISPLAY_THRESHOLD = 0.45;
 
 /**
  * Confidence after exponential decay from `updatedAt` to `now`. A non-positive
