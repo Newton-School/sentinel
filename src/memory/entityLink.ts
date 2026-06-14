@@ -26,9 +26,12 @@ import {
 import {
   addAlias,
   createEntity,
+  getEntityById,
+  getMemoryEntities,
   getResolutionCandidates,
   isEntityExcluded,
   linkMemoryEntity,
+  retractEdge,
   setMemorySubject,
   upsertEdge,
   type MemoryEntityRole,
@@ -199,6 +202,56 @@ export function linkFactEntities(
   }
 
   return { linked, subjectEntityId: subject?.id ?? null };
+}
+
+/**
+ * Withdraws the org-graph edges a single fact contributed when that fact is
+ * superseded or forgotten. Reconstructs the fact's edge proposal from its
+ * persisted `memory_entities` links (subject = the owner/subject-role link,
+ * others = the remaining linked entities) and runs the SAME pure proposer used
+ * at link time, then retracts each proposed edge ({@link retractEdge}).
+ *
+ * Without this, a corrected ownership ("the project is owned by the design
+ * team, not Anjali") leaves the stale "Anjali owns" edge active, so org_lookup
+ * reports both owners. Idempotent: re-running after the edge is already retired
+ * is a no-op (retractEdge only touches active edges). Returns edges retracted.
+ */
+export function retractFactEdges(
+  db: Database.Database,
+  memoryId: number,
+  now: Date = new Date()
+): number {
+  const mem = db
+    .prepare(`SELECT category, asserted_at FROM memories WHERE id = ?`)
+    .get(memoryId) as { category: MemoryCategory; asserted_at: string | null } | undefined;
+  if (!mem) return 0;
+
+  const links = getMemoryEntities(db, memoryId);
+  const subjectLink = links.find((l) => l.role === "owner" || l.role === "subject");
+  if (!subjectLink) return 0;
+  const subjectEntity = getEntityById(db, subjectLink.entityId);
+  if (!subjectEntity) return 0;
+
+  const otherIds = [...new Set(links.map((l) => l.entityId))].filter(
+    (id) => id !== subjectLink.entityId
+  );
+  const others = otherIds
+    .map((id) => getEntityById(db, id))
+    .filter((e): e is NonNullable<typeof e> => e !== null)
+    .map((e) => ({ id: e.id, type: e.type }));
+
+  const proposed = proposeEdgesForFact({
+    category: mem.category,
+    subject: { id: subjectEntity.id, type: subjectEntity.type },
+    others,
+    assertedAt: mem.asserted_at ?? undefined,
+  });
+
+  let retracted = 0;
+  for (const e of proposed) {
+    retracted += retractEdge(db, e.srcId, e.dstId, e.relation, now);
+  }
+  return retracted;
 }
 
 interface BackfillRow {

@@ -146,6 +146,72 @@ describe("entityLink.linkFactEntities", () => {
   });
 });
 
+describe("entityLink.retractFactEdges", () => {
+  let db: Database.Database;
+  let closeDb: () => void;
+  beforeEach(async () => {
+    ({ db, closeDb } = await freshDb());
+  });
+
+  async function loadMods() {
+    const { linkFactEntities, retractFactEdges } = await import("../src/memory/entityLink.js");
+    const { createEntity, getEdges } = await import("../src/memory/entitySql.js");
+    return { linkFactEntities, retractFactEdges, createEntity, getEdges };
+  }
+
+  it("retires an ownership edge when its only supporting fact is retracted", async () => {
+    const { linkFactEntities, retractFactEdges, createEntity, getEdges } = await loadMods();
+    const anjali = createEntity(db, { type: "person", canonicalName: "Anjali Mehta" });
+    createEntity(db, { type: "project", canonicalName: "website redesign project" });
+    const m = insertMemory(db, "Anjali Mehta owns the website redesign project", "owner", [
+      "Anjali Mehta",
+      "website redesign project",
+    ]);
+    linkFactEntities(db, m.id, {
+      text: "Anjali Mehta owns the website redesign project",
+      category: "owner",
+      entities: ["Anjali Mehta", "website redesign project"],
+      sourceType: "manual",
+    });
+    expect(getEdges(db, { srcId: anjali.id, status: "active" })).toHaveLength(1);
+
+    const retracted = retractFactEdges(db, m.id);
+    expect(retracted).toBe(1);
+    expect(getEdges(db, { srcId: anjali.id, status: "active" })).toHaveLength(0);
+    expect(getEdges(db, { srcId: anjali.id, status: "superseded" })).toHaveLength(1);
+    closeDb();
+  });
+
+  it("only decrements an edge that still has other supporting facts", async () => {
+    const { linkFactEntities, retractFactEdges, createEntity, getEdges } = await loadMods();
+    const anjali = createEntity(db, { type: "person", canonicalName: "Anjali Mehta" });
+    createEntity(db, { type: "project", canonicalName: "website redesign project" });
+    const fact = {
+      text: "Anjali Mehta owns the website redesign project",
+      category: "owner" as const,
+      entities: ["Anjali Mehta", "website redesign project"],
+      sourceType: "manual" as const,
+    };
+    const m1 = insertMemory(db, fact.text, "owner", fact.entities);
+    const m2 = insertMemory(db, fact.text + " (per the kickoff)", "owner", fact.entities);
+    linkFactEntities(db, m1.id, fact);
+    linkFactEntities(db, m2.id, fact); // same edge → evidence_count = 2
+
+    retractFactEdges(db, m1.id);
+    const active = getEdges(db, { srcId: anjali.id, status: "active" });
+    expect(active).toHaveLength(1); // still supported by m2
+    expect(active[0].evidenceCount).toBe(1);
+    closeDb();
+  });
+
+  it("is a no-op for a fact that derived no edges", async () => {
+    const { retractFactEdges } = await import("../src/memory/entityLink.js");
+    const m = insertMemory(db, "Some general statement", "fact", []);
+    expect(retractFactEdges(db, m.id)).toBe(0);
+    closeDb();
+  });
+});
+
 describe("entityLink — insertFact integration (gated)", () => {
   beforeEach(() => {
     delete process.env.MEMORY_ENTITY_GRAPH;

@@ -38,7 +38,7 @@ import type { EntityRelation } from "../memory/entitySql.js";
 import type { MemoryCategory, MemoryRow } from "../memory/types.js";
 import { canView, viewerScopeFromEnv } from "../access/scope.js";
 import { entityDigest, orgDigest } from "../memory/digest.js";
-import { isEntityGraphEnabled, linkFactEntities } from "../memory/entityLink.js";
+import { isEntityGraphEnabled, linkFactEntities, retractFactEdges } from "../memory/entityLink.js";
 import { assertEnv } from "./requireEnv.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -351,6 +351,9 @@ server.tool(
       if (!row) return textResult(`memory ${id} not found`);
 
       forgetMemory(db, id);
+      // Withdraw the org-graph edges this fact contributed so a forgotten fact
+      // can't keep a stale ownership/role edge alive.
+      if (isEntityGraphEnabled()) retractFactEdges(db, id);
       return jsonResult({
         forgotten: true,
         id,
@@ -405,6 +408,11 @@ server.tool(
         // staler than the record it replaces.
         assertedAt: new Date().toISOString(),
       });
+      const superseded = result.id !== old_id;
+      // The old fact is no longer true, so withdraw the org-graph edges it
+      // derived — otherwise a corrected ownership leaves the stale edge active
+      // and org_lookup reports both the old and new owner.
+      if (superseded && isEntityGraphEnabled()) retractFactEdges(db, old_id);
       return jsonResult({
         oldId: old_id,
         oldText: old.text,
@@ -412,7 +420,7 @@ server.tool(
         newText: new_text,
         // insertFact may dedup the "new" text onto the old row itself, in
         // which case nothing was superseded.
-        superseded: result.id !== old_id,
+        superseded,
       });
     })
 );
