@@ -68,16 +68,29 @@ export interface MentionedEntityRef {
   type: string;
 }
 
+/** A consolidated per-entity dossier surfaced for a mentioned entity. */
+export interface EntityDossierRef {
+  entityId: number;
+  name: string;
+  type: string;
+  profileMd: string;
+  version: number;
+  builtAt: string;
+}
+
 /**
  * The multi-source result of entity-aware retrieval. `queryFacts` is the
- * keyword/hybrid text search (today's behaviour); `entityFacts` are facts
- * linked to entities named in the query, deduped against `queryFacts`.
- * Per-entity dossiers + asker context are added in Phase C.
+ * keyword/hybrid text search; `entityFacts` are facts linked to entities named
+ * in the query (deduped against `queryFacts`); `dossiers` are consolidated
+ * profiles for mentioned entities that have one — when present, that entity's
+ * raw facts are suppressed (the dossier replaces them: store a lot, inject a
+ * little).
  */
 export interface RetrievalBundle {
   queryFacts: RankedMemory[];
   entityFacts: RankedMemory[];
   mentionedEntities: MentionedEntityRef[];
+  dossiers: EntityDossierRef[];
 }
 
 /** Input shape for inserting a new fact. */

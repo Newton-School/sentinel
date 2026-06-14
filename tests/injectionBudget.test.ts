@@ -35,7 +35,7 @@ function fact(over: Partial<RankedMemory>): RankedMemory {
 }
 
 function bundle(over: Partial<RetrievalBundle>): RetrievalBundle {
-  return { queryFacts: [], entityFacts: [], mentionedEntities: [], ...over };
+  return { queryFacts: [], entityFacts: [], mentionedEntities: [], dossiers: [], ...over };
 }
 
 describe("renderMemoryLine", () => {
@@ -66,6 +66,7 @@ describe("allocateInjection", () => {
       fact({ id: 100 + i, text: `${i}-${big}` })
     );
     const plan = allocateInjection(bundle({ queryFacts }), {
+      dossiers: 0,
       entityFacts: 0,
       queryFacts: 700,
       total: 700,

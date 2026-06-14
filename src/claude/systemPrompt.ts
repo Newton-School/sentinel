@@ -207,11 +207,14 @@ export function buildSystemPrompt(
   // 2000-char cap. Bundle takes precedence when provided.
   if (bundle) {
     const plan = allocateInjection(bundle);
-    if (plan.entityLines.length > 0 || plan.queryLines.length > 0) {
+    const hasEntity = plan.dossierBlocks.length > 0 || plan.entityLines.length > 0;
+    if (hasEntity || plan.queryLines.length > 0) {
       parts.push(`\n${MEMORY_SECTION_HEADER}`);
       parts.push(MEMORY_SECTION_PREAMBLE);
-      if (plan.entityLines.length > 0) {
+      if (hasEntity) {
         parts.push(`\n### People & teams in this question`);
+        // Condensed dossiers first, then any raw facts for entities without one.
+        parts.push(...plan.dossierBlocks);
         parts.push(...plan.entityLines);
       }
       if (plan.queryLines.length > 0) {

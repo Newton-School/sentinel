@@ -23,9 +23,11 @@ import {
 } from "./memorySql.js";
 import {
   getEntityMemoryIds,
+  getEntityProfile,
   resolveQueryEntities,
   type MentionedEntity,
 } from "./entitySql.js";
+import type { EntityDossierRef } from "./types.js";
 import { rankMemories, sanitizeFtsQuery } from "./rank.js";
 import { isEntityGraphEnabled, linkFactEntities } from "./entityLink.js";
 import { config } from "../config.js";
@@ -132,6 +134,7 @@ export function assembleRetrieval(
   let queryFacts: RankedMemory[] = [];
   let entityFacts: RankedMemory[] = [];
   let mentionedEntities: MentionedEntity[] = [];
+  const dossiers: EntityDossierRef[] = [];
   try {
     const db = getDb();
     const now = new Date();
@@ -148,6 +151,20 @@ export function assembleRetrieval(
     const seen = new Set<number>(queryFacts.map((f) => f.id));
     const entityCandidates: MemoryCandidate[] = [];
     for (const m of mentionedEntities) {
+      // A consolidated dossier replaces this entity's raw facts (store a lot,
+      // inject a little) — only fall back to raw linked facts when none exists.
+      const profile = getEntityProfile(db, m.entityId);
+      if (profile && profile.profileMd.trim().length > 0) {
+        dossiers.push({
+          entityId: m.entityId,
+          name: m.name,
+          type: m.type,
+          profileMd: profile.profileMd,
+          version: profile.version,
+          builtAt: profile.builtAt,
+        });
+        continue;
+      }
       const ids = getEntityMemoryIds(db, m.entityId);
       for (const row of getMemoriesByIds(db, ids)) {
         if (seen.has(row.id) || !candidateVisible(row, viewer)) continue;
@@ -158,16 +175,17 @@ export function assembleRetrieval(
     entityFacts = rankMemories(entityCandidates, now, 8);
   } catch (err) {
     log.warn({ err }, "Entity-aware retrieval failed (non-fatal) — empty bundle");
-    return { queryFacts: [], entityFacts: [], mentionedEntities: [] };
+    return { queryFacts: [], entityFacts: [], mentionedEntities: [], dossiers: [] };
   }
 
-  const total = queryFacts.length + entityFacts.length;
+  const total = queryFacts.length + entityFacts.length + dossiers.length;
   if (total === 0) recordMemoryRetrievalEmpty();
   else recordMemoryInjected(total);
 
   return {
     queryFacts,
     entityFacts,
+    dossiers,
     mentionedEntities: mentionedEntities.map((m) => ({
       entityId: m.entityId,
       name: m.name,
