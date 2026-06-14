@@ -14,7 +14,7 @@ import { buildSystemPrompt } from "./claude/systemPrompt.js";
 import type { RankedMemory, RetrievalBundle } from "./memory/types.js";
 import { runClaude } from "./claude/runner.js";
 import { trackQuery } from "./persona/tracker.js";
-import { markdownToSlackMrkdwn } from "./slack/formatters.js";
+import { slackReplyText } from "./slack/formatters.js";
 import { startHealthServer, type HealthStatus } from "./health/server.js";
 import { record, renderPrometheus } from "./metrics/registry.js";
 import { startMeetWatcher } from "./meet-bot/watcher.js";
@@ -138,8 +138,9 @@ async function handleEvent(
 
     const response = await runClaude(systemPrompt, envelope.text, threadContext, viewer);
 
-    // Post response (convert Markdown to Slack mrkdwn)
-    const slackText = markdownToSlackMrkdwn(response.text);
+    // Post response (convert Markdown to Slack mrkdwn; never post an empty
+    // message — an empty/looped Claude result falls back to a notice).
+    const slackText = slackReplyText(response.text);
     await client.chat.postMessage({
       channel: envelope.channelId,
       thread_ts: envelope.threadTs,

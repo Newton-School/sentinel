@@ -8,6 +8,20 @@
  * - Strikethrough: ~text~ (not ~~text~~)
  * - No horizontal rules, no # headings
  */
+/** Shown instead of a blank message when the model returns no usable text. */
+export const EMPTY_REPLY_FALLBACK =
+  "_I couldn't generate a response just now — the request may have timed out or hit a tool loop. Please try rephrasing or ask again._";
+
+/**
+ * Formats an assistant reply for Slack, guaranteeing a non-empty message: a
+ * blank / whitespace / undefined result (e.g. the Claude CLI returned an empty
+ * `result`) falls back to a notice instead of posting an empty Slack message.
+ */
+export function slackReplyText(text: string | undefined): string {
+  const formatted = markdownToSlackMrkdwn(text ?? "");
+  return formatted.trim().length > 0 ? formatted : EMPTY_REPLY_FALLBACK;
+}
+
 export function markdownToSlackMrkdwn(text: string): string {
   if (!text) return text;
 
