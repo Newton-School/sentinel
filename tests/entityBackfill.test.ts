@@ -87,6 +87,24 @@ describe("backfillEntityLinks", () => {
     expect(res.scanned).toBe(0);
     closeDb();
   });
+
+  it("drains past UNLINKABLE facts via the id cursor (no infinite re-scan)", async () => {
+    const { backfillEntityLinks } = await import("../src/memory/entityLink.js");
+    const { createEntity } = await import("../src/memory/entitySql.js");
+    // Two "Rahul *" entities make a bare "Rahul" mention ambiguous → no link.
+    createEntity(db, { type: "person", canonicalName: "Rahul Sharma" });
+    createEntity(db, { type: "person", canonicalName: "Rahul Verma" });
+    insertMemory(db, "Rahul shipped the feature", ["Rahul"]);
+
+    const first = backfillEntityLinks(db, { afterId: 0 });
+    expect(first.scanned).toBe(1);
+    expect(first.linked).toBe(0); // ambiguous → never links
+    // The pure NOT-EXISTS drain would re-return it forever; the id cursor
+    // advances past it, so the next page is empty and the drain terminates.
+    const second = backfillEntityLinks(db, { afterId: first.maxId });
+    expect(second.scanned).toBe(0);
+    closeDb();
+  });
 });
 
 describe("entity resolution metrics", () => {

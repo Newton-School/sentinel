@@ -181,20 +181,28 @@ export interface BackfillResult {
   scanned: number;
   /** Of those, how many produced at least one entity link. */
   linked: number;
+  /** Highest memory id examined — pass as `afterId` to drain the next page. */
+  maxId: number;
 }
 
 /**
  * Re-runnable backfill: resolves+links the free-text `entities` of active
- * memories that have no `memory_entities` links yet. Idempotent (the NOT
- * EXISTS guard skips already-linked rows) and bounded by `limit` so a large
- * history backfills over several runs. Used by the one-off backfill script and
- * safe to re-run after a resolver/merge change to repair attributions.
+ * memories that still need links. Idempotent (the NOT EXISTS guard skips
+ * already-linked rows; resolution dedupes entities, so re-runs don't create
+ * duplicates) and bounded by `limit`.
+ *
+ * Pages by an `afterId` id-cursor (NOT by the link predicate alone): a fact
+ * whose names don't resolve to a link (ambiguous / single-token) never gains a
+ * link, so a pure NOT-EXISTS drain would re-scan it forever. Advancing the
+ * cursor past every examined id guarantees the drain terminates regardless of
+ * linking outcome.
  */
 export function backfillEntityLinks(
   db: Database.Database,
-  opts: { limit?: number; now?: Date } = {}
+  opts: { limit?: number; afterId?: number; now?: Date } = {}
 ): BackfillResult {
   const limit = opts.limit ?? 500;
+  const afterId = opts.afterId ?? 0;
   const now = opts.now ?? new Date();
   const rows = db
     .prepare(
@@ -202,14 +210,17 @@ export function backfillEntityLinks(
        FROM memories m
        WHERE m.status = 'active'
          AND m.entities IS NOT NULL AND m.entities != '[]'
+         AND m.id > ?
          AND NOT EXISTS (SELECT 1 FROM memory_entities me WHERE me.memory_id = m.id)
        ORDER BY m.id
        LIMIT ?`
     )
-    .all(limit) as BackfillRow[];
+    .all(afterId, limit) as BackfillRow[];
 
   let linked = 0;
+  let maxId = afterId;
   for (const r of rows) {
+    maxId = Math.max(maxId, r.id);
     let entities: string[] = [];
     try {
       const parsed = JSON.parse(r.entities ?? "[]");
@@ -231,5 +242,5 @@ export function backfillEntityLinks(
     );
     if (res.linked > 0) linked++;
   }
-  return { scanned: rows.length, linked };
+  return { scanned: rows.length, linked, maxId };
 }

@@ -1,0 +1,1170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sentinel — Interactive Technical Explainer</title>
+<style>
+  :root {
+    --bg: #0a0e16;
+    --bg2: #0f1521;
+    --panel: #131b2b;
+    --panel2: #182236;
+    --border: #243149;
+    --border-bright: #34466a;
+    --text: #dbe4f3;
+    --muted: #8595b3;
+    --dim: #5c6b8a;
+    --accent: #5e8bff;
+    --accent2: #7c5cff;
+    --slack: #36c5f0;
+    --claude: #d97757;
+    --mcp: #4ec9a8;
+    --brain: #c792ea;
+    --meet: #f0a35e;
+    --persona: #e06c9f;
+    --data: #67c1ff;
+    --ops: #9aa7c0;
+    --green: #4ade80;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --mono: "SF Mono", "JetBrains Mono", "Fira Code", Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: radial-gradient(ellipse at top, #11192b 0%, var(--bg) 55%);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.55;
+    min-height: 100vh;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  code, .mono { font-family: var(--mono); font-size: 0.86em; }
+
+  /* ---------- Header ---------- */
+  header {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(10,14,22,0.82);
+    backdrop-filter: blur(14px);
+    border-bottom: 1px solid var(--border);
+  }
+  .hbar { max-width: 1500px; margin: 0 auto; padding: 14px 24px; display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+  .logo { display: flex; align-items: center; gap: 11px; font-weight: 700; font-size: 17px; letter-spacing: 0.3px; }
+  .logo .dot { width: 26px; height: 26px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), var(--accent2));
+    display: grid; place-items: center; box-shadow: 0 0 22px rgba(94,139,255,0.5); font-size: 15px; }
+  .logo small { color: var(--muted); font-weight: 400; font-size: 12px; }
+  nav { display: flex; gap: 4px; flex-wrap: wrap; margin-left: auto; }
+  nav button {
+    background: transparent; color: var(--muted); border: 1px solid transparent;
+    padding: 7px 13px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 500;
+    font-family: var(--sans); transition: all 0.15s;
+  }
+  nav button:hover { color: var(--text); background: var(--panel); }
+  nav button.active { color: #fff; background: var(--panel2); border-color: var(--border-bright); box-shadow: 0 0 0 1px rgba(94,139,255,0.18); }
+
+  /* ---------- Layout ---------- */
+  main { max-width: 1500px; margin: 0 auto; padding: 28px 24px 90px; }
+  .view { display: none; animation: fade 0.35s ease; }
+  .view.active { display: block; }
+  @keyframes fade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+  h1.title { font-size: 26px; font-weight: 700; margin-bottom: 6px; letter-spacing: -0.4px; }
+  .subtitle { color: var(--muted); margin-bottom: 22px; max-width: 920px; }
+  h2.sec { font-size: 18px; margin: 34px 0 14px; font-weight: 650; display: flex; align-items: center; gap: 9px; }
+  h2.sec::before { content: ""; width: 4px; height: 18px; border-radius: 3px; background: var(--accent); }
+  h3.sub { font-size: 14px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--muted); margin: 22px 0 10px; font-weight: 600; }
+
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px; }
+  .grid { display: grid; gap: 16px; }
+  .pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 20px; font-size: 11px; font-weight: 600;
+    background: var(--panel2); border: 1px solid var(--border); color: var(--muted); }
+  .pill.on { color: var(--green); border-color: rgba(74,222,128,0.3); background: rgba(74,222,128,0.08); }
+  .pill.off { color: var(--dim); }
+  .tag { font-family: var(--mono); font-size: 11px; padding: 1px 6px; border-radius: 5px; background: rgba(94,139,255,0.12); color: var(--accent); border: 1px solid rgba(94,139,255,0.2); }
+  .kbd { font-family: var(--mono); font-size: 11px; background: var(--bg2); border: 1px solid var(--border); border-bottom-width: 2px; padding: 1px 6px; border-radius: 5px; color: var(--text); }
+
+  /* ---------- Stats strip ---------- */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 8px; }
+  .stat { background: linear-gradient(160deg, var(--panel2), var(--panel)); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+  .stat .n { font-size: 24px; font-weight: 700; background: linear-gradient(120deg,#fff,var(--accent)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .stat .l { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+  /* ---------- Architecture diagram ---------- */
+  .diagram-wrap { position: relative; }
+  .diagram-controls { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+  .btn { background: var(--panel2); color: var(--text); border: 1px solid var(--border-bright); border-radius: 8px; padding: 7px 14px; cursor: pointer; font-size: 13px; font-family: var(--sans); font-weight: 500; transition: all 0.15s; }
+  .btn:hover { background: var(--panel); border-color: var(--accent); }
+  .btn.primary { background: linear-gradient(135deg, var(--accent), var(--accent2)); border: none; color: #fff; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-left: auto; font-size: 12px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend i { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+
+  #diagram { position: relative; width: 100%; min-height: 1180px; border: 1px solid var(--border); border-radius: 16px;
+    background:
+      linear-gradient(var(--bg2) 1px, transparent 1px) 0 0 / 100% 40px,
+      linear-gradient(90deg, var(--bg2) 1px, transparent 1px) 0 0 / 40px 100%,
+      var(--bg);
+    overflow: hidden; }
+  #wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+  .node { position: absolute; z-index: 2; background: var(--panel); border: 1px solid var(--border-bright); border-radius: 11px;
+    padding: 9px 12px; cursor: pointer; transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s; user-select: none; }
+  .node:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.4); border-color: var(--accent); z-index: 6; }
+  .node.sel { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(94,139,255,0.35), 0 8px 24px rgba(0,0,0,0.5); z-index: 6; }
+  .node .nt { font-weight: 650; font-size: 13px; display: flex; align-items: center; gap: 7px; }
+  .node .ns { font-size: 11px; color: var(--muted); margin-top: 2px; font-family: var(--mono); }
+  .node .ic { width: 18px; height: 18px; border-radius: 5px; display: grid; place-items: center; font-size: 11px; flex-shrink: 0; }
+  .grp { position: absolute; z-index: 0; border: 1px dashed var(--border-bright); border-radius: 16px; background: rgba(255,255,255,0.012); }
+  .grp .glabel { position: absolute; top: -10px; left: 16px; background: var(--bg); padding: 0 10px; font-size: 11px; font-weight: 600;
+    letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+
+  /* node accent variants */
+  .n-slack { border-left: 3px solid var(--slack); } .n-slack .ic { background: rgba(54,197,240,0.16); color: var(--slack); }
+  .n-core { border-left: 3px solid var(--accent); } .n-core .ic { background: rgba(94,139,255,0.16); color: var(--accent); }
+  .n-claude { border-left: 3px solid var(--claude); } .n-claude .ic { background: rgba(217,119,87,0.16); color: var(--claude); }
+  .n-mcp { border-left: 3px solid var(--mcp); } .n-mcp .ic { background: rgba(78,201,168,0.16); color: var(--mcp); }
+  .n-brain { border-left: 3px solid var(--brain); } .n-brain .ic { background: rgba(199,146,234,0.16); color: var(--brain); }
+  .n-meet { border-left: 3px solid var(--meet); } .n-meet .ic { background: rgba(240,163,94,0.16); color: var(--meet); }
+  .n-data { border-left: 3px solid var(--data); } .n-data .ic { background: rgba(103,193,255,0.16); color: var(--data); }
+  .n-ops { border-left: 3px solid var(--ops); } .n-ops .ic { background: rgba(154,167,192,0.16); color: var(--ops); }
+
+  /* ---------- Detail drawer ---------- */
+  #drawer { position: fixed; top: 0; right: 0; height: 100vh; width: 460px; max-width: 92vw; background: var(--bg2);
+    border-left: 1px solid var(--border-bright); box-shadow: -16px 0 50px rgba(0,0,0,0.5); z-index: 100;
+    transform: translateX(100%); transition: transform 0.3s cubic-bezier(0.4,0,0.2,1); overflow-y: auto; }
+  #drawer.open { transform: none; }
+  .dr-head { position: sticky; top: 0; background: var(--bg2); padding: 20px 22px 14px; border-bottom: 1px solid var(--border); z-index: 2; }
+  .dr-close { position: absolute; top: 16px; right: 16px; background: var(--panel); border: 1px solid var(--border); color: var(--muted);
+    width: 30px; height: 30px; border-radius: 8px; cursor: pointer; font-size: 16px; }
+  .dr-close:hover { color: #fff; border-color: var(--accent); }
+  .dr-kicker { font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--accent); font-weight: 600; }
+  .dr-title { font-size: 19px; font-weight: 700; margin: 5px 0; }
+  .dr-files { font-family: var(--mono); font-size: 11px; color: var(--muted); word-break: break-all; }
+  .dr-body { padding: 18px 22px 60px; }
+  .dr-body p { margin-bottom: 12px; color: var(--text); }
+  .dr-body h4 { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin: 18px 0 8px; }
+  .dr-body ul { list-style: none; margin-bottom: 12px; }
+  .dr-body li { padding: 6px 0 6px 18px; position: relative; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .dr-body li:last-child { border-bottom: none; }
+  .dr-body li::before { content: "▸"; position: absolute; left: 0; color: var(--accent); font-size: 11px; top: 7px; }
+  .dr-body .codeblock { background: #080b12; border: 1px solid var(--border); border-radius: 9px; padding: 12px 14px; font-family: var(--mono);
+    font-size: 12px; color: #b9c7e3; overflow-x: auto; margin: 6px 0 14px; white-space: pre; line-height: 1.5; }
+  .scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 99; opacity: 0; pointer-events: none; transition: opacity 0.3s; }
+  .scrim.show { opacity: 1; pointer-events: auto; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 12px; margin: 4px 0 12px; }
+  .kv dt { color: var(--muted); font-family: var(--mono); }
+  .kv dd { color: var(--text); }
+
+  /* ---------- Lifecycle player ---------- */
+  .lc { display: grid; grid-template-columns: 320px 1fr; gap: 22px; align-items: start; }
+  .lc-steps { display: flex; flex-direction: column; gap: 6px; }
+  .lc-step { display: flex; gap: 11px; padding: 9px 11px; border-radius: 10px; cursor: pointer; border: 1px solid transparent; transition: all 0.15s; }
+  .lc-step:hover { background: var(--panel); }
+  .lc-step.active { background: var(--panel2); border-color: var(--border-bright); }
+  .lc-step.done .lc-num { background: var(--green); color: #04210f; border-color: var(--green); }
+  .lc-num { width: 26px; height: 26px; flex-shrink: 0; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700;
+    background: var(--panel); border: 1px solid var(--border-bright); color: var(--muted); }
+  .lc-step.active .lc-num { background: var(--accent); color: #021024; border-color: var(--accent); }
+  .lc-st { font-size: 13px; font-weight: 600; }
+  .lc-ss { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+  .lc-detail { position: sticky; top: 90px; }
+  .lc-detail .card { min-height: 380px; }
+  .lc-stage { font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--accent); font-weight: 600; }
+  .lc-h { font-size: 21px; font-weight: 700; margin: 6px 0 4px; }
+  .progressbar { height: 4px; background: var(--border); border-radius: 4px; overflow: hidden; margin: 16px 0; }
+  .progressbar > i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width 0.4s; }
+
+  /* ---------- Generic cards/tables ---------- */
+  .col2 { grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); }
+  .col3 { grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600; position: sticky; top: 64px; background: var(--bg); }
+  tbody tr:hover { background: rgba(255,255,255,0.018); }
+  td.mono, th.mono { font-family: var(--mono); font-size: 12px; }
+  .tablewrap { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+
+  .mcard { background: var(--panel); border: 1px solid var(--border); border-radius: 13px; overflow: hidden; transition: border-color 0.15s; }
+  .mcard:hover { border-color: var(--border-bright); }
+  .mcard .mh { padding: 14px 16px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--border); background: var(--panel2); }
+  .mcard .mh .ic { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; font-size: 14px; }
+  .mcard .mh .mt { font-weight: 650; font-size: 14px; }
+  .mcard .mh .mm { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+  .mcard .mb { padding: 14px 16px; }
+  .toollist { display: flex; flex-direction: column; gap: 7px; }
+  .tool { font-family: var(--mono); font-size: 12px; padding: 6px 9px; background: var(--bg2); border-radius: 7px; border: 1px solid var(--border); }
+  .tool b { color: var(--mcp); }
+  .note { font-size: 12px; color: var(--muted); padding: 9px 12px; border-left: 2px solid var(--accent); background: rgba(94,139,255,0.05); border-radius: 0 8px 8px 0; margin: 10px 0; }
+  .note.warn { border-color: var(--yellow); background: rgba(251,191,36,0.05); }
+  .note.sec { border-color: var(--green); background: rgba(74,222,128,0.05); }
+
+  .flow { display: grid; gap: 12px; }
+  .flowstep { display: flex; gap: 14px; align-items: flex-start; }
+  .flowstep .fi { width: 34px; height: 34px; border-radius: 10px; flex-shrink: 0; display: grid; place-items: center; font-weight: 700; font-size: 14px;
+    background: var(--panel2); border: 1px solid var(--border-bright); }
+  .flowstep .fc { flex: 1; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+  .flowstep:last-child .fc { border-bottom: none; }
+  .flowstep .fc b { font-size: 14px; }
+  .flowstep .fc p { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  .arrowdown { color: var(--dim); text-align: center; font-size: 12px; }
+
+  details.acc { background: var(--panel); border: 1px solid var(--border); border-radius: 11px; margin-bottom: 10px; overflow: hidden; }
+  details.acc > summary { padding: 13px 16px; cursor: pointer; font-weight: 600; list-style: none; display: flex; align-items: center; gap: 9px; }
+  details.acc > summary::-webkit-details-marker { display: none; }
+  details.acc > summary::before { content: "+"; color: var(--accent); font-weight: 700; width: 14px; }
+  details.acc[open] > summary::before { content: "−"; }
+  details.acc > summary:hover { background: var(--panel2); }
+  details.acc .accbody { padding: 4px 16px 16px; }
+
+  .gate { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 10px; }
+  .gate .g { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 11px 13px; }
+  .gate .g .gn { font-family: var(--mono); font-size: 12px; color: var(--text); font-weight: 600; }
+  .gate .g .gd { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+
+  .small { font-size: 12px; color: var(--muted); }
+  .hl { color: var(--accent); font-weight: 600; }
+  .danger { color: var(--red); }
+  .ok { color: var(--green); }
+  .center { text-align: center; }
+  hr.div { border: none; border-top: 1px solid var(--border); margin: 26px 0; }
+
+  /* schema diagram */
+  .erd { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px,1fr)); gap: 14px; }
+  .ent { background: var(--panel); border: 1px solid var(--border); border-radius: 11px; overflow: hidden; }
+  .ent .eh { background: var(--panel2); padding: 9px 13px; font-family: var(--mono); font-weight: 700; font-size: 13px; color: var(--data);
+    border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  .ent .eh .cnt { font-size: 10px; color: var(--muted); font-weight: 400; }
+  .ent .er { padding: 5px 13px; font-family: var(--mono); font-size: 11.5px; display: flex; justify-content: space-between; gap: 8px; border-bottom: 1px solid rgba(36,49,73,0.5); }
+  .ent .er:last-child { border-bottom: none; }
+  .ent .er .cn { color: var(--text); }
+  .ent .er .ct { color: var(--dim); }
+  .ent .er.pk .cn::after { content: " PK"; color: var(--yellow); font-size: 9px; }
+  .ent .er.fk .cn::after { content: " FK"; color: var(--accent2); font-size: 9px; }
+  .ent .er.uq .cn::after { content: " UQ"; color: var(--green); font-size: 9px; }
+
+  @media (max-width: 900px) {
+    .lc { grid-template-columns: 1fr; }
+    .lc-detail { position: static; }
+    nav { width: 100%; overflow-x: auto; }
+    #diagram { min-height: 0; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="hbar">
+    <div class="logo">
+      <span class="dot">🛰️</span>
+      <div>Sentinel <small>· interactive technical explainer</small></div>
+    </div>
+    <nav id="nav">
+      <button data-view="overview" class="active">Overview</button>
+      <button data-view="lifecycle">Request Lifecycle</button>
+      <button data-view="mcp">MCP Servers</button>
+      <button data-view="brain">Company Brain</button>
+      <button data-view="meet">Meet Bot</button>
+      <button data-view="persona">Persona</button>
+      <button data-view="data">Data Model</button>
+      <button data-view="ops">Ops &amp; Config</button>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<!-- ============ OVERVIEW ============ -->
+<section class="view active" id="view-overview">
+  <h1 class="title">What is Sentinel, end to end?</h1>
+  <p class="subtitle">
+    Sentinel is a <b>founders-only leadership/data assistant for Newton School</b>, delivered as a Slack bot. It is <b>not</b> an LLM
+    wrapped in a server — it is an orchestrator that spawns the <span class="hl">Claude CLI</span> as a subprocess and hands it up to
+    <span class="hl">9 MCP tool servers</span> for live data access. Two independent pipelines share one process: the <b>Q&amp;A path</b>
+    (Slack → Claude → tools → answer) and the <b>Meet-bot path</b> (a Playwright Chrome bot that auto-joins Google Meets to generate transcripts).
+    Wrapped around both is a <b>“company brain”</b> — a persistent organizational memory with an entity graph, hybrid retrieval, and provenance/ACL governance.
+    Click any box below to drill into the exact files, functions and constants.
+  </p>
+
+  <div class="stats">
+    <div class="stat"><div class="n">9</div><div class="l">MCP tool servers</div></div>
+    <div class="stat"><div class="n">2</div><div class="l">independent pipelines</div></div>
+    <div class="stat"><div class="n">13</div><div class="l">SQLite tables</div></div>
+    <div class="stat"><div class="n">4</div><div class="l">memory data-flows</div></div>
+    <div class="stat"><div class="n">3</div><div class="l">background pollers</div></div>
+    <div class="stat"><div class="n">120s</div><div class="l">per-query CLI budget</div></div>
+  </div>
+
+  <div class="diagram-wrap">
+    <div class="diagram-controls">
+      <button class="btn primary" id="playFlow">▶ Animate a query</button>
+      <button class="btn" id="resetFlow">Reset</button>
+      <span class="small">Click any node for technical detail →</span>
+      <div class="legend">
+        <span><i style="background:var(--slack)"></i>Slack</span>
+        <span><i style="background:var(--accent)"></i>Core</span>
+        <span><i style="background:var(--claude)"></i>Claude CLI</span>
+        <span><i style="background:var(--mcp)"></i>MCP</span>
+        <span><i style="background:var(--brain)"></i>Brain</span>
+        <span><i style="background:var(--meet)"></i>Meet bot</span>
+        <span><i style="background:var(--data)"></i>State</span>
+      </div>
+    </div>
+    <div id="diagram">
+      <svg id="wires"></svg>
+      <!-- nodes injected by JS -->
+    </div>
+  </div>
+
+  <h2 class="sec">The two pipelines, in one sentence each</h2>
+  <div class="grid col2">
+    <div class="card">
+      <div class="pill" style="color:var(--accent);border-color:rgba(94,139,255,0.3)">Q&amp;A PATH</div>
+      <p style="margin-top:10px">A founder @mentions / DMs / <code>/sentinel</code>s the bot → <code>socketClient</code> authorizes &amp; de-dupes →
+      <code>handleEvent</code> gathers thread context + persona + recalled memories → <code>buildSystemPrompt</code> assembles the prompt →
+      <code>runClaude</code> spawns <code>claude --print</code> with an <code>--mcp-config</code> → Claude calls tools across the 9 MCP servers →
+      the answer is reformatted to Slack mrkdwn and posted, with the exchange logged &amp; mined for new facts.</p>
+    </div>
+    <div class="card">
+      <div class="pill" style="color:var(--meet);border-color:rgba(240,163,94,0.3)">MEET-BOT PATH</div>
+      <p style="margin-top:10px">A calendar watcher polls every <b>60s</b> → eligible Meet events (starting within 2 min) spawn a <b>detached</b>
+      Playwright Chrome subprocess → it joins muted using a persistent signed-in profile, clicks <i>Join/Ask-to-join</i>, and turns on
+      Google’s <b>server-side transcription</b> → the transcript later becomes queryable via the Meet/Transcripts MCP servers and is
+      ingested into the company brain.</p>
+    </div>
+  </div>
+
+  <h2 class="sec">Everything is gated &amp; inert by default</h2>
+  <p class="small" style="margin-bottom:12px;max-width:900px">Each MCP server only registers if its credentials are present. The entire company-brain’s advanced behavior
+  (entity graph, embeddings, scoped ACLs, Slack ingestion) ships dark behind runtime kill-switches, so the blast radius is controlled.
+  Defaults below reflect a fresh deploy.</p>
+  <div class="gate" id="gates"></div>
+</section>
+
+<!-- ============ LIFECYCLE ============ -->
+<section class="view" id="view-lifecycle">
+  <h1 class="title">Request lifecycle: a Slack message → an answer</h1>
+  <p class="subtitle">Every inbound event flows through <code>handleEvent()</code> in <code>src/index.ts</code>, bounded by a
+  3-request in-flight semaphore. Step through the exact sequence — or hit play to watch it run.</p>
+
+  <div class="diagram-controls" style="margin-bottom:18px">
+    <button class="btn primary" id="lcPlay">▶ Auto-play</button>
+    <button class="btn" id="lcPrev">‹ Prev</button>
+    <button class="btn" id="lcNext">Next ›</button>
+    <span class="small" id="lcCounter"></span>
+  </div>
+
+  <div class="lc">
+    <div class="lc-steps" id="lcSteps"></div>
+    <div class="lc-detail">
+      <div class="card" id="lcCard">
+        <div class="progressbar"><i id="lcBar" style="width:0%"></i></div>
+        <div class="lc-stage" id="lcStage"></div>
+        <div class="lc-h" id="lcHead"></div>
+        <div class="dr-files" id="lcFile"></div>
+        <div id="lcContent" style="margin-top:14px"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ MCP ============ -->
+<section class="view" id="view-mcp">
+  <h1 class="title">The 9 MCP servers — Claude’s hands</h1>
+  <p class="subtitle">For each Claude spawn, <code>mcpConfig.ts</code> writes a fresh <code>mcp-config-&lt;uuid&gt;.json</code>
+  (mode <code>0600</code>, plaintext creds, deleted after the spawn). Each server is a stdio subprocess. Custom servers run from
+  <code>dist/mcp/*.js</code> (so <code>npm run build</code> is required); GitHub &amp; Notion are <code>npx</code> packages.
+  Shared utilities give every HTTP server: bounded <code>paginate()</code>, <code>fetchWithRetry()</code> (15s timeout, 3 retries, 429/5xx backoff, Retry-After aware),
+  and <code>redactedHttpError()</code> (status only — never leaks bodies).</p>
+  <div class="grid col3" id="mcpGrid"></div>
+
+  <h2 class="sec">Security &amp; correctness highlights</h2>
+  <div class="grid col2">
+    <details class="acc" open><summary>SQL read-only enforcement (<code>sqlReadOnly.ts</code>)</summary>
+      <div class="accbody small">
+        <code>metabase_query</code> is hard-gated to read-only. An AST check via <code>node-sql-parser</code> (MySQL dialect) accepts only
+        node types <code>select / explain / show / desc</code>, blocks data-modifying CTEs (<code>WITH x AS (DELETE…)</code>),
+        <code>SELECT … INTO</code>, and stacked statements (<code>SELECT 1; DROP…</code>). If the parser throws on a dialect quirk, it
+        <b>falls back to a regex guard</b> (forbidden whole-word keywords: INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/TRUNCATE/…) so it never regresses open.
+      </div>
+    </details>
+    <details class="acc"><summary>Per-spawn secret hygiene (<code>mcpConfig.ts</code> + <code>runner.ts</code>)</summary>
+      <div class="accbody small">
+        The config file holds every server’s plaintext credentials, so each spawn writes a <b>UUID-named</b> file (no fixed path → no torn
+        reads under concurrency), <code>chmod 0600</code>, and <code>runner.ts</code> removes it on <code>close</code>/<code>error</code>.
+        Graceful shutdown sweeps any strays. The detached Meet joiner gets a <b>scrubbed env</b> (<code>buildJoinerEnv</code>) — no secrets,
+        it authenticates via the Chrome profile instead.
+      </div>
+    </details>
+    <details class="acc"><summary>Google data quirks handled</summary>
+      <div class="accbody small">
+        Calendar “this week” is computed timezone-aware via <code>Intl.DateTimeFormat</code> (two-pass DST-correct, IST fallback).
+        Meet transcript speakers are resolved from opaque participant ids to human names with an in-process cache.
+        Drive <code>q</code> query values are escaped backslash-first to prevent query injection. Gmail bodies are extracted by recursively
+        walking the MIME multipart tree for the first <code>text/plain</code> node.
+      </div>
+    </details>
+    <details class="acc"><summary>Memory MCP server is read-mostly &amp; never migrates</summary>
+      <div class="accbody small">
+        <code>memory.js</code> opens its <b>own</b> SQLite handle (WAL, <code>busy_timeout=5000</code>) and <b>never runs migrations</b> — the
+        main process owns the schema. It reads the per-request <b>viewer scope from env</b> (<code>viewerScopeFromEnv</code>) so the same
+        <code>canView</code> ACL applies at the MCP edge, not just in-process. If the schema is absent, every tool returns a friendly
+        “run the bot once” message instead of crashing.
+      </div>
+    </details>
+  </div>
+</section>
+
+<!-- ============ BRAIN ============ -->
+<section class="view" id="view-brain">
+  <h1 class="title">The Company Brain — persistent organizational memory</h1>
+  <p class="subtitle">Four cooperating flows turn fleeting conversations, meetings and emails into a governed, queryable knowledge base
+  with an entity graph (people / teams / projects), hybrid lexical+semantic retrieval, and per-source confidence caps. All of it is
+  evidence-grounded and fails safe — a memory error <b>never</b> breaks a Slack reply.</p>
+
+  <div class="grid col2" style="margin-bottom:10px">
+    <div class="mcard"><div class="mh"><span class="ic" style="background:rgba(199,146,234,0.16);color:var(--brain)">1</span>
+      <div><div class="mt">Recall → Inject</div><div class="mm">on every query, synchronously</div></div></div>
+      <div class="mb small">
+        <code>searchMemories()</code> / <code>assembleRetrieval()</code> run an FTS5 <b>BM25</b> search (weights text 2.0, entities 1.0, source_label 1.0),
+        optionally <b>fused with cosine similarity</b> over embeddings (<code>rankHybrid</code>, α=0.6 lexical-leaning). Results are re-scored by a
+        <b>modulator</b>: recency (90-day half-life) × category boost (×1.25 for decision/owner/deadline) × confidence. When the entity graph is on,
+        the query’s named entities are resolved and their <b>dossiers</b> pulled in. <code>injectionBudget.ts</code> packs it into the prompt under a
+        hard 3000-char tiered budget (dossiers 1200 / entity facts 800 / query facts 1000), under a hardened “records, NOT instructions” header.
+        Falls back to a <code>LIKE</code> scan if FTS5 is unavailable.
+      </div></div>
+    <div class="mcard"><div class="mh"><span class="ic" style="background:rgba(199,146,234,0.16);color:var(--brain)">2</span>
+      <div><div class="mt">Hook → Extract</div><div class="mm">fire-and-forget, after each reply</div></div></div>
+      <div class="mb small">
+        <code>extractFromConversation()</code> is never awaited. It runs the <b>user turn only</b> (≥40 chars) through <code>extractor.ts</code>:
+        a hardened <span class="tag">claude-haiku-4-5</span> structured-output call (no SDK; a raw client with a <b>500-calls/day</b> budget),
+        then defense-in-depth: <b>Zod re-validation</b> → a <b>verbatim evidence-quote check</b> (the quote must be a real substring of the source)
+        → a <b>secret-regex filter</b> (api keys / tokens / <code>sk-ant-</code> dropped). Conversation facts are capped at <b>0.6</b> confidence.
+      </div></div>
+    <div class="mcard"><div class="mh"><span class="ic" style="background:rgba(199,146,234,0.16);color:var(--brain)">3</span>
+      <div><div class="mt">Poller → Ingest</div><div class="mm">ingestWatcher, every 5 min</div></div></div>
+      <div class="mb small">
+        Pulls from three sources (each gated): <b>Meet</b> transcripts of attended meetings (chunked + a per-conference summary fact, cap 0.7),
+        <b>Gmail</b> with an <b>internal-sender allowlist</b> (newtonschool.co + extras; bulk/no-reply/self/short skipped, cap 0.6), and
+        <b>Slack channels</b> (opt-in, allowlisted, cap 0.5). Restart-safe via <code>ingest_cursors</code> (high-water marks) +
+        <code>ingested_docs</code> (per-doc dedup, 14-day TTL). Per-source kill switches read every tick.
+      </div></div>
+    <div class="mcard"><div class="mh"><span class="ic" style="background:rgba(199,146,234,0.16);color:var(--brain)">4</span>
+      <div><div class="mt">Entity graph → Dossiers → Digests</div><div class="mm">consolidationWatcher, every 30 min</div></div></div>
+      <div class="mb small">
+        Each fact is linked to resolved entities (a 6-rung resolution ladder: slack id → email → name → alias → fuzzy → create).
+        Owner-facts <b>infer org edges</b> (manages/owns) at 0.5 base confidence, reinforced toward 0.95, <b>decayed at read time</b>
+        (60-day half-life, display ≥0.45). <code>consolidateEntity()</code> rolls an entity’s facts into a ≤1200-char markdown
+        <b>dossier</b> (“store a lot, inject a little”). <code>entity_digest</code> / <code>org_digest</code> answer “what changed” over a window.
+      </div></div>
+  </div>
+
+  <h2 class="sec">The full pipeline, top to bottom</h2>
+  <div class="card">
+    <div class="flow" id="brainFlow"></div>
+  </div>
+
+  <h2 class="sec">Governance: every fact carries provenance &amp; policy</h2>
+  <div class="grid col2">
+    <div class="card">
+      <h3 class="sub" style="margin-top:0">Provenance columns</h3>
+      <div class="kv">
+        <dt>source_type</dt><dd>conversation · meeting · email · manual</dd>
+        <dt>source_ref</dt><dd>e.g. <code>slack:C123:171…</code>, <code>gmail:&lt;id&gt;</code></dd>
+        <dt>source_label</dt><dd>human-readable origin</dd>
+        <dt>speaker</dt><dd>who asserted it (meetings)</dd>
+        <dt>asserted_at</dt><dd>when it was said</dd>
+        <dt>evidence_quote</dt><dd>verbatim substring proving the fact</dd>
+      </div>
+      <h3 class="sub">Confidence caps by source</h3>
+      <div class="kv">
+        <dt>meeting</dt><dd>0.70</dd>
+        <dt>conversation / email</dt><dd>0.60</dd>
+        <dt>meeting summary</dt><dd>0.60</dd>
+        <dt>slack channel</dt><dd>0.50 (noisiest)</dd>
+      </div>
+    </div>
+    <div class="card">
+      <h3 class="sub" style="margin-top:0">Governance &amp; lifecycle columns</h3>
+      <div class="kv">
+        <dt>confidence</dt><dd>per-source capped; grows on reinforcement</dd>
+        <dt>verified</dt><dd>human-confirmed flag</dd>
+        <dt>visibility</dt><dd>founders (default) / leadership / team / public</dd>
+        <dt>sensitivity</dt><dd>normal / sensitive (HR/comp/legal/medical)</dd>
+        <dt>subject_entity_id</dt><dd>the entity a fact is <i>about</i> (governance subject)</dd>
+        <dt>scope_team_id</dt><dd>team scoping for team-tier rows</dd>
+        <dt>status</dt><dd>active / superseded / forgotten</dd>
+        <dt>content_hash</dt><dd>unique → dedup; + Jaccard ≥0.85 near-dup reinforce</dd>
+      </div>
+      <div class="note sec">ACL seam <code>canView()</code> runs at <b>both</b> recall edges. Mode <code>founders</code> (default): founders see all, nobody else sees anything — provably equal to pre-brain behavior. Mode <code>scoped</code> (built, dormant): tier + per-team checks.</div>
+    </div>
+  </div>
+
+  <h2 class="sec">Key tuning constants</h2>
+  <div class="tablewrap">
+    <table id="brainConsts"><thead><tr><th>Constant</th><th class="mono">Value</th><th>Where</th><th>Purpose</th></tr></thead><tbody></tbody></table>
+  </div>
+</section>
+
+<!-- ============ MEET ============ -->
+<section class="view" id="view-meet">
+  <h1 class="title">Meet bot — the Playwright auto-join pipeline</h1>
+  <p class="subtitle">A completely separate pipeline whose only job is to make transcripts <i>exist</i>. Google only generates a transcript
+  if a real participant turns it on, so Sentinel sends a headless Chrome bot to do exactly that. It shares the process and Google OAuth creds
+  with the Q&amp;A path, but runs independently.</p>
+
+  <div class="grid col2">
+    <div class="card">
+      <h3 class="sub" style="margin-top:0">Watcher — <code>meet-bot/watcher.ts</code></h3>
+      <div class="flow" id="meetWatch"></div>
+    </div>
+    <div class="card">
+      <h3 class="sub" style="margin-top:0">Joiner — <code>meet-bot/joiner.ts</code> (detached Chrome)</h3>
+      <div class="flow" id="meetJoin"></div>
+    </div>
+  </div>
+
+  <h2 class="sec">Why these design choices</h2>
+  <div class="grid col3">
+    <div class="card"><b>Detached subprocess</b><p class="small" style="margin-top:6px">The joiner is spawned with <code>detached:true</code> + <code>unref()</code> and logs to a per-spawn file. If Sentinel restarts mid-meeting, the bot keeps recording.</p></div>
+    <div class="card"><b>Concurrency cap = 1</b><p class="small" style="margin-top:6px"><code>MAX_CONCURRENT_JOINERS</code> defaults to 1 because all joins share <b>one</b> persistent Chrome profile — two at once would corrupt it. Deferred meetings retry next poll.</p></div>
+    <div class="card"><b>Persisted dedup</b><p class="small" style="margin-top:6px"><code>joined_meetings</code> table (4h TTL) means an in-progress meeting isn’t re-joined after a restart. Locks are cleaned from the profile before each launch.</p></div>
+    <div class="card"><b>Stay-until-end hardcoded</b><p class="small" style="margin-top:6px">The watcher overrides the CLI’s <code>leave-after-join</code> default with <code>--stay-mode stay-until-end</code> (a deliberate #17 revert) so the bot stays for in-call artifacts.</p></div>
+    <div class="card"><b>Scrubbed env</b><p class="small" style="margin-top:6px"><code>buildJoinerEnv()</code> forwards only an allowlist (PATH/HOME/TZ/DISPLAY/CHROME*/PLAYWRIGHT*) — zero secrets reach the child.</p></div>
+    <div class="card"><b>Fake media + no-sandbox</b><p class="small" style="margin-top:6px">Launched with <code>--use-fake-ui-for-media-stream</code>, <code>--no-sandbox</code>, mic/cam muted, name “Sentinel”. Runtime image is the Playwright base with Chrome.</p></div>
+  </div>
+</section>
+
+<!-- ============ PERSONA ============ -->
+<section class="view" id="view-persona">
+  <h1 class="title">Persona system — per-user personalization that decays</h1>
+  <p class="subtitle">SQLite-backed, learned implicitly from query patterns. Every interaction is categorized, logged, and used to reinforce a
+  <code>focus_area</code> trait whose confidence <b>grows on reinforcement</b> and <b>decays at read time</b> — so stale interests fade without
+  ever mutating stored rows.</p>
+
+  <div class="grid col2">
+    <div class="card">
+      <h3 class="sub" style="margin-top:0">Confidence math (<code>store.ts</code> · <code>personaDecay.ts</code>)</h3>
+      <p class="small">A new trait starts at <b>0.5</b>. Each reinforcement (same user+label+value) closes 15% of the gap to the 0.95 ceiling via an
+      <code>ON CONFLICT DO UPDATE</code> upsert:</p>
+      <div class="dr-files codeblock" style="background:#080b12;border:1px solid var(--border);padding:12px 14px;border-radius:9px;color:#b9c7e3;white-space:pre">confidence = MIN(c + (1 - c) * 0.15, 0.95)
+0.50 → 0.575 → 0.609 → 0.633 → … → 0.95 (limit)</div>
+      <p class="small">At <b>read time only</b>, confidence is decayed by a 30-day half-life based on <code>updated_at</code>:</p>
+      <div class="dr-files codeblock" style="background:#080b12;border:1px solid var(--border);padding:12px 14px;border-radius:9px;color:#b9c7e3;white-space:pre">decayed = confidence * 0.5 ^ (ageDays / 30)</div>
+      <p class="small"><code>buildSystemPrompt</code> keeps only traits ≥0.6 decayed confidence, sorts by it, and caps to the <b>top 8</b> to bound prompt growth.</p>
+    </div>
+    <div class="card">
+      <h3 class="sub" style="margin-top:0">The 7 query categories (<code>tracker.ts</code>)</h3>
+      <p class="small"><code>categorizeQuery()</code> lowercases the text, counts keyword hits per bucket, and returns the top bucket (or <code>general</code>).
+      A non-general category reinforces <code>upsertTrait(user, "focus_area", category)</code>.</p>
+      <div id="catList" style="margin-top:10px"></div>
+    </div>
+  </div>
+
+  <div class="note" style="margin-top:18px">Every interaction is also written to <code>query_log</code> (an append-only audit trail with response text, duration &amp; sources) — pruned to ~90 days, indexed on user &amp; time.</div>
+</section>
+
+<!-- ============ DATA ============ -->
+<section class="view" id="view-data">
+  <h1 class="title">Data model — one SQLite file, 13 tables</h1>
+  <p class="subtitle"><code>sentinel.db</code> (WAL mode, foreign keys, <code>busy_timeout=5000</code>) opened lazily as a single <code>better-sqlite3</code>
+  connection in the main process. Idempotent migrations run once on first <code>getDb()</code>; the memory MCP server opens its own read handle and
+  never migrates. Retention sweeps run once at boot (query log &amp; non-active memories → 90 days).</p>
+
+  <h3 class="sub">Persona &amp; audit</h3>
+  <div class="erd" id="erd1"></div>
+  <h3 class="sub">Company brain — facts</h3>
+  <div class="erd" id="erd2"></div>
+  <h3 class="sub">Company brain — entity graph</h3>
+  <div class="erd" id="erd3"></div>
+  <h3 class="sub">Meet bot</h3>
+  <div class="erd" id="erd4"></div>
+</section>
+
+<!-- ============ OPS ============ -->
+<section class="view" id="view-ops">
+  <h1 class="title">Operations, config &amp; deployment</h1>
+  <p class="subtitle">Process bootstrap, health/readiness, metrics, graceful shutdown, and the full env surface validated by Zod at boot
+  (invalid config → <code>process.exit(1)</code>).</p>
+
+  <h2 class="sec">Bootstrap order (<code>main()</code> in <code>index.ts</code>)</h2>
+  <div class="card"><div class="flow" id="bootFlow"></div></div>
+
+  <h2 class="sec">Health endpoints (<code>health/server.ts</code>, port 8930)</h2>
+  <div class="grid col3">
+    <div class="card"><div class="pill on">GET /health</div><p class="small" style="margin-top:8px"><b>Liveness</b> — always 200 <code>{status:"alive",uptime}</code>. Deliberately decoupled from Slack/DB so a transient blip can’t trigger a K8s restart loop.</p></div>
+    <div class="card"><div class="pill" style="color:var(--yellow);border-color:rgba(251,191,36,0.3)">GET /ready</div><p class="small" style="margin-top:8px"><b>Readiness</b> — 200 only when Slack is connected <b>and</b> a DB <code>SELECT 1</code> passes; else 503 with Slack/DB status, active MCP servers, unavailable sources.</p></div>
+    <div class="card"><div class="pill" style="color:var(--accent);border-color:rgba(94,139,255,0.3)">GET /metrics</div><p class="small" style="margin-top:8px"><b>Prometheus</b> exposition: request count/duration/tokens/cost (parsed from the CLI’s JSON telemetry) + <code>sentinel_memory_*</code> counters.</p></div>
+  </div>
+
+  <h2 class="sec">Graceful shutdown (<code>shutdown.ts</code>)</h2>
+  <div class="card">
+    <div class="flow" id="shutFlow"></div>
+  </div>
+
+  <h2 class="sec">Environment surface (<code>config.ts</code>)</h2>
+  <div class="tablewrap">
+    <table id="envTable"><thead><tr><th>Variable</th><th>Required</th><th class="mono">Default</th><th>Notes</th></tr></thead><tbody></tbody></table>
+  </div>
+
+  <h2 class="sec">Deployment</h2>
+  <div class="grid col3">
+    <div class="card"><b>Docker</b><p class="small" style="margin-top:6px">Two-stage: <code>node:20-alpine</code> builds <code>dist/</code>; runtime is the Playwright <code>jammy</code> image with Chrome so the Meet bot can launch. Drops to non-root <code>pwuser</code>. <code>EXPOSE 8930</code>, curl HEALTHCHECK.</p></div>
+    <div class="card"><b>CI/CD — AWS CodeBuild</b><p class="small" style="margin-top:6px"><code>npm ci</code> → <code>build</code> → <code>test</code> → ECR login → build/push (SHA + latest) → emit <code>imageDetail.json</code> + package <code>k8s/**</code>.</p></div>
+    <div class="card"><b>Kubernetes</b><p class="small" style="margin-top:6px">1 replica, Recreate strategy, RWO PVC at <code>/app/data</code>, <code>/health</code> liveness + <code>/ready</code> readiness probes. Image URI substituted at deploy.</p></div>
+  </div>
+</section>
+
+</main>
+
+<!-- ============ DRAWER ============ -->
+<div class="scrim" id="scrim"></div>
+<aside id="drawer">
+  <div class="dr-head">
+    <button class="dr-close" id="drClose">✕</button>
+    <div class="dr-kicker" id="drKicker"></div>
+    <div class="dr-title" id="drTitle"></div>
+    <div class="dr-files" id="drFiles"></div>
+  </div>
+  <div class="dr-body" id="drBody"></div>
+</aside>
+
+<script>
+/* =========================================================================
+   DATA MODEL — everything technical lives here, rendering is data-driven
+   ========================================================================= */
+
+// ---- Architecture nodes (positions in % of the diagram canvas) ----
+const NODES = [
+  // group boxes
+  {grp:true, id:"g-slack",  label:"Slack · Socket Mode", x:2,  y:1,  w:30, h:9},
+  {grp:true, id:"g-core",   label:"Sentinel process (dist/index.js)", x:2, y:12, w:62, h:46},
+  {grp:true, id:"g-mcp",    label:"MCP servers (stdio subprocesses)", x:67, y:12, w:31, h:62},
+  {grp:true, id:"g-meet",   label:"Meet-bot pipeline (independent)", x:2, y:78, w:62, h:20},
+  {grp:true, id:"g-poll",   label:"Background pollers", x:2, y:60, w:40, h:16},
+
+  // slack
+  {id:"slack-in", cls:"n-slack", ic:"💬", t:"User event", s:"@mention · DM · /sentinel", x:4, y:3.5, w:26, key:"slack-in"},
+
+  // core
+  {id:"socket", cls:"n-core", ic:"🔌", t:"socketClient.ts", s:"authorize · dedupe · normalize", x:4, y:15.5, w:27, key:"socket"},
+  {id:"handle", cls:"n-core", ic:"⚙️", t:"handleEvent()", s:"semaphore · :eyes: · orchestrate", x:4, y:23.5, w:27, key:"handle"},
+  {id:"thread", cls:"n-core", ic:"🧵", t:"threadContext.ts", s:"fetch prior replies", x:4, y:31.5, w:27, key:"thread"},
+  {id:"persona", cls:"n-core", ic:"🧬", t:"persona store + tracker", s:"get persona · traits", x:4, y:39.5, w:27, key:"persona"},
+  {id:"recall", cls:"n-brain", ic:"🧠", t:"memory recall", s:"searchMemories / assembleRetrieval", x:34, y:31.5, w:28, key:"recall"},
+  {id:"sysprompt", cls:"n-core", ic:"📝", t:"buildSystemPrompt()", s:"persona + traits + memories", x:34, y:39.5, w:28, key:"sysprompt"},
+  {id:"runner", cls:"n-claude", ic:"🚀", t:"runner.ts → spawn", s:"claude --print --mcp-config", x:4, y:47.5, w:27, key:"runner"},
+  {id:"format", cls:"n-core", ic:"✨", t:"formatters.ts", s:"markdown → Slack mrkdwn", x:34, y:47.5, w:28, key:"format"},
+
+  // claude (sits between core and mcp)
+  {id:"cli", cls:"n-claude", ic:"🤖", t:"Claude CLI subprocess", s:"agentic tool loop · 120s", x:34, y:15.5, w:28, key:"cli"},
+
+  // mcp servers
+  {id:"mcp-metabase", cls:"n-mcp", ic:"📊", t:"metabase", s:"SQL · read-only AST", x:69, y:15, w:27, key:"mcp-metabase"},
+  {id:"mcp-github", cls:"n-mcp", ic:"🐙", t:"github (npx)", s:"PRs · issues · repos", x:69, y:20.5, w:27, key:"mcp-github"},
+  {id:"mcp-notion", cls:"n-mcp", ic:"📔", t:"notion (npx)", s:"docs · roadmaps", x:69, y:26, w:27, key:"mcp-notion"},
+  {id:"mcp-slack", cls:"n-mcp", ic:"🔍", t:"slack-search", s:"search · history · thread", x:69, y:31.5, w:27, key:"mcp-slack"},
+  {id:"mcp-gmail", cls:"n-mcp", ic:"✉️", t:"gmail", s:"search · thread · recent", x:69, y:37, w:27, key:"mcp-gmail"},
+  {id:"mcp-cal", cls:"n-mcp", ic:"📅", t:"google-calendar", s:"events · search", x:69, y:42.5, w:27, key:"mcp-cal"},
+  {id:"mcp-tr", cls:"n-mcp", ic:"📄", t:"meeting-transcripts", s:"Drive Docs", x:69, y:48, w:27, key:"mcp-tr"},
+  {id:"mcp-meet", cls:"n-mcp", ic:"🎥", t:"google-meet", s:"Meet API v2 entries", x:69, y:53.5, w:27, key:"mcp-meet"},
+  {id:"mcp-mem", cls:"n-brain", ic:"🧠", t:"memory", s:"memory_* · entity_* · digests", x:69, y:59, w:27, key:"mcp-mem"},
+
+  // db
+  {id:"db", cls:"n-data", ic:"🗄️", t:"sentinel.db (SQLite/WAL)", s:"13 tables · personas · memories · entities", x:44, y:64, w:21, key:"db"},
+
+  // pollers
+  {id:"ingest", cls:"n-brain", ic:"⏱️", t:"ingestWatcher", s:"5 min · meet/gmail/slack → facts", x:4, y:63.5, w:24, key:"ingest"},
+  {id:"consol", cls:"n-brain", ic:"🧱", t:"consolidationWatcher", s:"30 min · dossiers + embeddings", x:4, y:69.5, w:24, key:"consol"},
+  {id:"hook", cls:"n-brain", ic:"🪝", t:"conversationHook", s:"fire-and-forget extract", x:30, y:63.5, w:11.5, key:"hook"},
+
+  // meet pipeline
+  {id:"watcher", cls:"n-meet", ic:"📡", t:"watcher.ts", s:"poll calendar /60s", x:4, y:81, w:18, key:"watcher"},
+  {id:"joiner", cls:"n-meet", ic:"🎭", t:"joiner.ts (Playwright)", s:"detached Chrome · join + mute", x:24, y:81, w:20, key:"joiner"},
+  {id:"gmeet", cls:"n-meet", ic:"🟢", t:"Google Meet web", s:"server-side transcription ON", x:46, y:81, w:16, key:"gmeet"},
+  {id:"health", cls:"n-ops", ic:"❤️", t:"health server", s:"/health /ready /metrics :8930", x:4, y:88.5, w:18, key:"health"},
+];
+
+// ---- Wires (edges) between nodes; flow=true means animated on "play" ----
+const WIRES = [
+  ["slack-in","socket",true],["socket","handle",true],
+  ["handle","thread",true],["handle","persona",true],
+  ["handle","recall",true],["recall","sysprompt",true],["persona","sysprompt",true],
+  ["handle","runner",true],["sysprompt","runner",true],
+  ["runner","cli",true],
+  ["cli","mcp-metabase"],["cli","mcp-github"],["cli","mcp-notion"],["cli","mcp-slack"],
+  ["cli","mcp-gmail"],["cli","mcp-cal"],["cli","mcp-tr"],["cli","mcp-meet"],["cli","mcp-mem"],
+  ["cli","format",true],["format","slack-in",true],
+  ["recall","db"],["persona","db"],["mcp-mem","db"],
+  ["ingest","db"],["consol","db"],["hook","db"],
+  ["watcher","joiner"],["joiner","gmeet"],["gmeet","mcp-meet"],["gmeet","mcp-tr"],
+];
+
+// ---- Drawer detail for each node ----
+const DETAIL = {
+  "slack-in": {k:"Entry point", t:"Slack inbound event", f:"src/slack/socketClient.ts",
+    body:`<p>Sentinel connects to Slack over <b>Socket Mode</b> (no public webhook). Three event types are routed:</p>
+    <ul><li><b>app_mention</b> — the bot is @mentioned in a channel</li><li><b>message</b> (DM only) — filtered to genuine user IMs (no subtypes, not the bot)</li><li><b>/sentinel</b> slash command — ACKs immediately, posts a "Processing…" message to open a thread</li></ul>
+    <h4>Security gate</h4><p><code>isAllowed(userId)</code> checks the <code>ALLOWED_USER_IDS</code> allow-list — the single check keeping non-founders out. Unlisted users are silently ignored.</p>
+    <h4>Normalization</h4><p>Each event becomes a <code>SlackEventEnvelope</code> {type, userId, channelId, threadTs, text, messageTs}; the bot mention is stripped from text.</p>`},
+  "socket": {k:"Transport", t:"socketClient.ts", f:"src/slack/socketClient.ts · src/slack/dedupe.ts",
+    body:`<p>Builds the <code>@slack/bolt</code> App and registers handlers. Because Claude can take up to 120s, Slack re-delivers events — so a per-app <b>TTL deduper</b> keyed <code>channelId:messageTs</code> suppresses repeats.</p>
+    <h4>Functions</h4><ul><li><code>isAllowed</code> — allow-list gate</li><li><code>stripBotMention</code> — removes <code>&lt;@BOT&gt;</code></li><li><code>isUserDmMessage</code> — DM subtype filter</li><li><code>normalizeMention / DmMessage / SlashCommand</code></li></ul>`},
+  "handle": {k:"Orchestrator", t:"handleEvent()", f:"src/index.ts",
+    body:`<p>The heart of the Q&A path. Bounded by a <b>3-request in-flight semaphore</b> (extra requests get an "I'm busy" message).</p>
+    <h4>Reaction state machine</h4><ul><li>Adds <span class="kbd">:eyes:</span> on start</li><li>Swaps to <span class="kbd">:white_check_mark:</span> on success</li><li>Swaps to <span class="kbd">:x:</span> + error message on failure (timeout → a distinct hint)</li></ul>
+    <h4>Sequence per request</h4><p>thread context → user lookup → persona/traits → memory recall (with the asker's <b>viewer scope</b>) → system prompt → <code>runClaude</code> → post → swap reaction → <code>trackQuery</code> → fire-and-forget <code>extractFromConversation</code> → record metrics.</p>`},
+  "thread": {k:"Context", t:"threadContext.ts", f:"src/slack/threadContext.ts",
+    body:`<p>Fetches prior replies in the thread (following the cursor via the shared <code>paginate()</code> helper). Each is rendered <code>&lt;@user&gt;: text</code> and prepended to the prompt as <code>threadContext</code>. Errors are swallowed to <code>[]</code> — context is best-effort, never fatal.</p>`},
+  "persona": {k:"Personalization", t:"Persona store + tracker", f:"src/persona/store.ts · tracker.ts",
+    body:`<p><code>getOrCreatePersona</code> (race-safe <code>ON CONFLICT DO NOTHING</code>) and <code>getTraits</code> load the user's profile. Traits are decayed at read time and the top 8 (≥0.6) feed the prompt.</p>
+    <p>After the reply, <code>trackQuery</code> categorizes the query into one of 7 buckets, logs it to <code>query_log</code>, and reinforces the <code>focus_area</code> trait. See the <b>Persona</b> tab.</p>`},
+  "recall": {k:"Company brain · flow 1", t:"Memory recall", f:"src/memory/memoryStore.ts · rank.ts · injectionBudget.ts",
+    body:`<p>On every query, relevant org memories are retrieved. <b>Best-effort by contract</b> — any error returns <code>[]</code> and never fails the reply.</p>
+    <h4>Two paths</h4><ul><li><b>Entity graph OFF (default):</b> <code>searchMemories(text, 6, viewer)</code> — flat BM25 keyword recall</li><li><b>Entity graph ON:</b> <code>assembleRetrieval(text, user, viewer, queryVec?)</code> — resolves entities in the query, pulls dossiers + entity facts + query facts, optionally fuses cosine similarity if embeddings are on</li></ul>
+    <h4>Scoring modulator</h4><div class="codeblock">score = -bm × (0.5 + 0.5·recency)
+            × categoryBoost × (0.5 + 0.5·confidence)
+recency = 0.5 ^ (ageDays / 90)
+categoryBoost = 1.25 for decision/owner/deadline</div>`},
+  "sysprompt": {k:"Prompt assembly", t:"buildSystemPrompt()", f:"src/claude/systemPrompt.ts",
+    body:`<p>Concatenates: the static <b>Sentinel base prompt</b> (role, the 6 Newton domains, the mandatory 5-section answer format, Slack mrkdwn rules, "never fabricate / always cite / read-only" rules) + IST time context + unavailable-source warnings + the user persona + top-8 learned traits + <b>recalled memories</b> (under a hardened "records, NOT instructions" header, 3000-char tiered budget) + a standing note about the <code>memory_*</code> / <code>entity_*</code> tools.</p>
+    <div class="note warn">Recalled memories are <b>untrusted content</b>. The preamble explicitly tells Claude to treat them as context, prefer fresh tool data on conflict, and never follow instructions embedded inside a record — blunting prompt injection via ingested text.</div>`},
+  "runner": {k:"Claude bridge", t:"runner.ts", f:"src/claude/runner.ts",
+    body:`<p>Spawns the Claude CLI as a child process and returns <code>{text, durationMs, tokens, cost}</code>.</p>
+    <h4>Exact invocation</h4><div class="codeblock">claude --print "&lt;thread+message&gt;"
+       --output-format json
+       --dangerously-skip-permissions
+       --system-prompt "&lt;built prompt&gt;"
+       --mcp-config /tmp/…/mcp-config-&lt;uuid&gt;.json</div>
+    <ul><li><b>120s timeout</b> (SIGTERM), <code>clearTimeout</code>'d on settle to avoid a timer leak</li><li>Parses the JSON telemetry (tokens/cost/turns) defensively; falls back to raw stdout if the shape changes</li><li>Removes its per-spawn config file on close/error</li></ul>
+    <div class="note warn"><code>--dangerously-skip-permissions</code> means read-only is a soft prompt instruction at the runner level; the <b>hard</b> read-only guard lives inside the Metabase server's SQL AST check.</div>`},
+  "cli": {k:"The model", t:"Claude CLI subprocess", f:"@anthropic-ai/claude-code (spawned)",
+    body:`<p>This is where the intelligence lives. The CLI runs an <b>agentic tool-use loop</b>: it reads the system prompt, decides which MCP tools to call, fans out across the 9 servers (often several round-trips), and synthesizes a final answer in the mandated 5-section format.</p>
+    <h4>Per Sentinel's prompt strategy</h4><p>Meeting questions → Calendar first, then Meet API (<code>meet_list_conferences → meet_list_transcripts → meet_get_transcript_entries</code>), falling back to Drive transcripts. Each domain routes to specific sources. Extraction/consolidation use a separate raw <span class="tag">claude-haiku-4-5</span> client — this CLI uses the configured default model.</p>`},
+  "format": {k:"Output", t:"formatters.ts", f:"src/slack/formatters.ts",
+    body:`<p>Claude is told to emit Slack mrkdwn, but <code>markdownToSlackMrkdwn</code> defensively converts any standard Markdown that slips through: <code>**bold**</code>→<code>*bold*</code>, <code>[t](u)</code>→<code>&lt;u|t&gt;</code>, headers→bold lines, etc. — while <b>protecting code blocks</b> from mangling. Posted with <code>unfurl_links:false</code>.</p>`},
+  "db": {k:"State", t:"sentinel.db", f:"src/state/db.ts",
+    body:`<p>A single <code>better-sqlite3</code> connection (WAL, foreign keys, <code>busy_timeout=5000</code>), opened lazily. Holds 13 tables across personas, audit, the company brain (facts + entity graph), and meet-bot dedup. See the <b>Data Model</b> tab for the full schema.</p>`},
+  "ingest": {k:"Company brain · flow 3", t:"ingestWatcher", f:"src/memory/ingestWatcher.ts",
+    body:`<p>Ticks every <b>5 min</b> (and once at boot). Requires <code>ANTHROPIC_API_KEY</code> and ≥1 runnable source, else it stays off. Overlapping ticks are skipped.</p>
+    <ul><li><code>runMeetIngest</code> — transcripts of attended meetings (≤3/tick, 15-min grace, chunked, +summary)</li><li><code>runGmailIngest</code> — internal-sender allowlist only (≤10 extractions/tick)</li><li><code>runSlackIngest</code> — opt-in, allowlisted channels only</li></ul>
+    <p>Kill switches read every tick: <code>MEMORY_INGEST_MEET=0</code>, <code>MEMORY_INGEST_GMAIL=0</code>, <code>MEMORY_INGEST_SLACK=1</code> (enable), <code>MEMORY_SLACK_CHANNELS</code>.</p>`},
+  "consol": {k:"Company brain · flow 4", t:"consolidationWatcher", f:"src/memory/consolidationWatcher.ts · consolidate.ts",
+    body:`<p>Ticks every <b>30 min</b>. Selects entities "due" for a dossier rebuild (never built &amp; ≥3 facts; or ≥8 new facts; or >14 days old with new facts), then <code>consolidateEntity()</code> synthesizes a ≤1200-char markdown dossier via Haiku. Also runs <code>backfillEmbeddings()</code> when <code>MEMORY_EMBEDDINGS=1</code>. Gated by <code>MEMORY_CONSOLIDATION</code>.</p>`},
+  "hook": {k:"Company brain · flow 2", t:"conversationHook", f:"src/memory/conversationHook.ts · extractor.ts",
+    body:`<p>Fire-and-forget after each reply — never awaited, never throws. Runs the <b>user turn only</b> (≥40 chars) through the haiku extractor with defense-in-depth (Zod → evidence-quote check → secret filter). Conversation facts capped at 0.6 confidence. See the <b>Company Brain</b> tab.</p>`},
+  "watcher": {k:"Meet bot", t:"watcher.ts", f:"src/meet-bot/watcher.ts",
+    body:`<p>Polls the primary calendar every <b>60s</b> for events in the next 5 min, filters eligible ones (starting ≤2 min out / in progress, valid Meet URL, not already joined), and spawns a detached joiner — capped at <code>MAX_CONCURRENT_JOINERS</code> (default 1). Dedup persisted in <code>joined_meetings</code> (4h TTL). See the <b>Meet Bot</b> tab.</p>`},
+  "joiner": {k:"Meet bot", t:"joiner.ts", f:"src/meet-bot/joiner.ts",
+    body:`<p>A detached Playwright Chrome process using the persistent signed-in profile. Cleans profile locks → launches headless Chrome (<code>channel:"chrome"</code>, fake media, no-sandbox) → mutes mic/cam → clicks Join/Ask-to-join (15 retries) → starts transcription → stays until the meeting ends (watcher hardcodes <code>stay-until-end</code>). Gets a scrubbed env (no secrets).</p>`},
+  "gmeet": {k:"Meet bot", t:"Google Meet (server-side transcript)", f:"—",
+    body:`<p>Once the bot enables transcription, Google generates the transcript <b>server-side</b> and saves it to the organizer's Drive. It later becomes queryable via the <b>google-meet</b> MCP server (API v2 structured entries with speakers/timestamps) and the <b>meeting-transcripts</b> server (Drive Docs), and is ingested into the brain by <code>meetIngest</code>.</p>`},
+  "health": {k:"Ops", t:"health server", f:"src/health/server.ts",
+    body:`<p>HTTP server on port 8930 exposing <code>/health</code> (liveness), <code>/ready</code> (readiness), <code>/metrics</code> (Prometheus). See the <b>Ops &amp; Config</b> tab.</p>`},
+};
+// MCP server nodes share generated detail (see mcpData below); add lightweight detail
+["mcp-metabase","mcp-github","mcp-notion","mcp-slack","mcp-gmail","mcp-cal","mcp-tr","mcp-meet","mcp-mem"].forEach(id=>{});
+
+/* ---- Lifecycle steps ---- */
+const LIFECYCLE = [
+  {stage:"Ingress", h:"Event arrives & is authorized", f:"socketClient.ts",
+   c:`Slack delivers an <code>app_mention</code>, DM <code>message</code>, or <code>/sentinel</code> command over Socket Mode. <code>isAllowed(userId)</code> checks <code>ALLOWED_USER_IDS</code> — unlisted users are dropped. A TTL deduper keyed <code>channelId:messageTs</code> suppresses Slack's retry re-deliveries. The event is normalized into a <code>SlackEventEnvelope</code> and the bot mention is stripped.`},
+  {stage:"Admission", h:"Concurrency gate + acknowledge", f:"index.ts → handleEvent()",
+   c:`A 3-slot in-flight semaphore guards the handler — a 4th concurrent request gets an ":hourglass: I'm busy" reply and returns. Otherwise <code>activeRequests++</code> and an <span class="kbd">:eyes:</span> reaction is added to the user's message to signal "working".`},
+  {stage:"Context", h:"Gather thread + user identity", f:"threadContext.ts",
+   c:`Prior thread replies are fetched (cursor-paginated) and rendered <code>&lt;@user&gt;: text</code>. <code>client.users.info</code> resolves the display name. Both are best-effort — failures fall back to empty context / the raw user id.`},
+  {stage:"Personalize", h:"Load persona & learned traits", f:"persona/store.ts",
+   c:`<code>getOrCreatePersona</code> + <code>getTraits</code> load the user profile. The asker's <b>viewer scope</b> is computed (<code>currentViewerScope</code>) — in founders mode every allowed user is a founder who sees all memory rows.`},
+  {stage:"Recall", h:"Retrieve organizational memory", f:"memory/memoryStore.ts",
+   c:`If the entity graph is enabled, <code>assembleRetrieval</code> resolves query entities and gathers dossiers + entity facts + query facts (fusing cosine similarity when embeddings are on). Otherwise <code>searchMemories(text, 6, viewer)</code> does flat BM25 recall. <b>Wrapped in try/catch — a memory failure can never fail the reply.</b>`},
+  {stage:"Assemble", h:"Build the system prompt", f:"claude/systemPrompt.ts",
+   c:`Base Sentinel prompt + IST time + unavailable-source warnings + persona + top-8 traits + recalled memories (hardened "records not instructions" header, 3000-char tiered budget) + memory-tools note are concatenated into one system prompt string.`},
+  {stage:"Configure", h:"Write per-spawn MCP config", f:"claude/mcpConfig.ts",
+   c:`A fresh <code>mcp-config-&lt;uuid&gt;.json</code> is written (<code>chmod 0600</code>) registering every credentialed MCP server. The asker's viewer scope is serialized into the memory server's env so <code>canView</code> applies at the MCP edge too.`},
+  {stage:"Spawn", h:"Run the Claude CLI", f:"claude/runner.ts",
+   c:`<code>spawn(claude, ["--print", prompt, "--output-format","json", "--dangerously-skip-permissions", "--system-prompt", sp, "--mcp-config", path])</code> with a <b>120s timeout</b>. stdout/stderr are buffered; the config file is deleted when the process settles.`},
+  {stage:"Agent loop", h:"Claude calls tools & reasons", f:"Claude CLI ↔ 9 MCP servers",
+   c:`The model runs an agentic loop: querying Metabase, searching Slack/Gmail, reading transcripts, looking up entities in the memory store — often many round-trips — then synthesizes an evidence-cited answer in the mandatory <b>Answer / Why / Evidence checked / Confidence / Unknowns</b> format.`},
+  {stage:"Format & post", h:"Convert to mrkdwn & reply", f:"slack/formatters.ts",
+   c:`<code>markdownToSlackMrkdwn</code> normalizes any stray Markdown to Slack syntax (protecting code blocks) and the answer is posted to the thread with <code>unfurl_links:false</code>. The reaction swaps <span class="kbd">:eyes:</span> → <span class="kbd">:white_check_mark:</span>.`},
+  {stage:"Learn", h:"Log, evolve persona, mine facts", f:"persona/tracker.ts · memory/conversationHook.ts",
+   c:`<code>trackQuery</code> writes the exchange to <code>query_log</code> and reinforces the <code>focus_area</code> trait. <code>extractFromConversation</code> is fired <b>and not awaited</b> — it mines the user turn for new facts in the background. Per-request token/cost/duration metrics are recorded for <code>/metrics</code>.`},
+  {stage:"Release", h:"Decrement semaphore", f:"index.ts (finally)",
+   c:`In a <code>finally</code> block, <code>activeRequests--</code> frees a slot. On any error along the way the reaction becomes <span class="kbd">:x:</span>, a friendly (timeout-aware) message is posted, and the failure is recorded as an error metric.`},
+];
+
+/* ---- MCP server detail ---- */
+const MCP = [
+  {id:"metabase", ic:"📊", clr:"var(--mcp)", name:"metabase", file:"src/mcp/metabase.ts", auth:"Session token OR X-API-KEY",
+   tools:["metabase_query(sql, db_id) — native SQL, read-only AST guarded","metabase_get_question(id) — run a saved card","metabase_list_dashboards()","metabase_list_databases()"],
+   note:"Read-only enforced by node-sql-parser AST + regex fallback. 401 → re-auth once (checks retry.ok)."},
+  {id:"github", ic:"🐙", clr:"var(--mcp)", name:"github", file:"npx @modelcontextprotocol/server-github", auth:"Personal Access Token",
+   tools:["Official MCP server — PRs, issues, commits, repo & release data"],
+   note:"Not a custom server; spawned via npx with GITHUB_PERSONAL_ACCESS_TOKEN."},
+  {id:"notion", ic:"📔", clr:"var(--mcp)", name:"notion", file:"npx @notionhq/notion-mcp-server", auth:"Bearer (OPENAPI_MCP_HEADERS)",
+   tools:["Official Notion MCP — docs, project pages, roadmaps"],
+   note:"npx package (NOT @modelcontextprotocol/server-notion). Notion-Version 2022-06-28."},
+  {id:"slack-search", ic:"🔍", clr:"var(--mcp)", name:"slack-search", file:"src/mcp/slack.ts", auth:"xoxp user token",
+   tools:["slack_search_messages(query, count, sort)","slack_read_channel_history(channel, limit, oldest?)","slack_read_thread(channel, thread_ts, limit)"],
+   note:"Text clamped to 500 chars; threads de-dup the parent across pages; bounded pagination."},
+  {id:"gmail", ic:"✉️", clr:"var(--mcp)", name:"gmail", file:"src/mcp/gmail.ts", auth:"Google OAuth2 refresh token",
+   tools:["gmail_search(query, max)","gmail_read_thread(thread_id)","gmail_list_recent(days, label?, max)"],
+   note:"Recursive MIME walk for first text/plain body; bodies clamped to 2000 chars."},
+  {id:"google-calendar", ic:"📅", clr:"var(--mcp)", name:"google-calendar", file:"src/mcp/calendar.ts", auth:"Google OAuth2 refresh token",
+   tools:["calendar_list_events(start?, end?, max, cal) — defaults to Mon–Fri week","calendar_get_event(id)","calendar_search(query, days_back, days_forward)"],
+   note:"Timezone-aware week math via Intl.DateTimeFormat (two-pass DST-correct, IST fallback)."},
+  {id:"meeting-transcripts", ic:"📄", clr:"var(--mcp)", name:"meeting-transcripts", file:"src/mcp/transcripts.ts", auth:"Google OAuth2 (Drive v3 + Docs v1)",
+   tools:["transcript_search(query?, days_back, max)","transcript_read(doc_id, max_length)","transcript_list_recent(days, max)"],
+   note:"Drive q-grammar escaped backslash-first. Returns nothing unless a Doc is shared with Sentinel."},
+  {id:"google-meet", ic:"🎥", clr:"var(--mcp)", name:"google-meet", file:"src/mcp/meet.ts", auth:"Google OAuth2 (raw Meet REST v2)",
+   tools:["meet_list_conferences(page_size, filter?)","meet_get_conference(id)","meet_list_transcripts(conf_id)","meet_get_transcript_entries(conf_id, tr_id, page_size)"],
+   note:"In-process token cache (30s early-expiry); resolves speaker ids → names with a cache. Preferred over Drive transcripts."},
+  {id:"memory", ic:"🧠", clr:"var(--brain)", name:"memory", file:"src/mcp/memory.ts", auth:"Own SQLite handle (no creds) + viewer scope from env",
+   tools:["memory_search / memory_store / memory_forget / memory_forget_source / memory_supersede / memory_recent","entity_search / entity_get / entity_facts","team_roster / org_lookup","entity_digest / org_digest","memory_forget_entity (right-to-be-forgotten)"],
+   note:"Registered UNCONDITIONALLY. Never migrates (main process owns schema). Applies canView at the MCP edge."},
+];
+
+/* ---- Brain pipeline flow ---- */
+const BRAIN_FLOW = [
+  {n:"IN", t:"Raw input arrives", d:"A Slack turn, a Meet transcript chunk, an internal email, or a Slack-channel message."},
+  {n:"1", t:"Extract candidate facts", d:"extractor.ts → claude-haiku-4-5 structured output (≤10 facts/call, 500 calls/day budget). Each fact: text ≤300 chars, category, entities, confidence, evidence_quote, sensitivity."},
+  {n:"2", t:"Validate (defense in depth)", d:"Zod re-validation → verbatim evidence-quote substring check against the source → secret-regex filter. Anything that fails is dropped."},
+  {n:"3", t:"Dedup & insert", d:"Unique content_hash blocks exact dupes; an FTS near-dup check (Jaccard ≥0.85) reinforces an existing fact instead of inserting. Per-source confidence cap applied."},
+  {n:"4", t:"Link to entities", d:"linkFactEntities resolves names via the 6-rung ladder; ambiguous matches drop (missing link beats wrong link). Highest-confidence entity ≥0.8 becomes the subject."},
+  {n:"5", t:"Infer org edges", d:"orgInfer proposes high-precision edges from owner-facts (person→team manages, →project/metric owns) at 0.5 base, reinforced to 0.95, read-time decayed (60-day half-life)."},
+  {n:"6", t:"Consolidate into dossiers", d:"Every 30 min, due entities get a ≤1200-char markdown dossier synthesized from their facts (store a lot, inject a little)."},
+  {n:"7", t:"Embed (optional)", d:"If MEMORY_EMBEDDINGS=1, backfill text-embedding-3-small vectors (2000 calls/day) into the embedding BLOB for cosine fusion."},
+  {n:"OUT", t:"Recall on next query", d:"BM25 (+cosine) → modulator re-rank → entity dossiers → injectionBudget packs ≤3000 chars into the prompt as untrusted records."},
+];
+
+const BRAIN_CONSTS = [
+  ["MEMORY_RECENCY_HALF_LIFE_DAYS","90","rank.ts","Recency decay in recall ranking"],
+  ["CATEGORY_BOOST","1.25","rank.ts","Boost for decision/owner/deadline facts"],
+  ["HYBRID_ALPHA","0.6","rank.ts","BM25 vs cosine blend (lexical-leaning)"],
+  ["BM25 weights","text 2.0 / entities 1.0 / label 1.0","memorySql.ts","FTS5 column weighting"],
+  ["NEAR_DUP_JACCARD","0.85","memorySql.ts","Near-dup → reinforce instead of insert"],
+  ["MAX fact text","300 chars","memorySql.ts","Hard cap on stored fact length"],
+  ["Injection budget","3000 (1200/800/1000)","injectionBudget.ts","Total / dossiers / entity / query chars"],
+  ["MAX_EXTRACTION_CALLS_PER_DAY","500","anthropicClient.ts","Haiku extraction budget"],
+  ["MAX_EMBEDDING_CALLS_PER_DAY","2000","embedder.ts","OpenAI embedding-request budget"],
+  ["FUZZY_THRESHOLD","0.6","entityResolve.ts","Entity name soft-overlap minimum"],
+  ["DEFAULT_RESOLVE_MIN","0.8","entityLink.ts","Subject-attribution confidence floor"],
+  ["EDGE growth / cap","+15% / 0.95","entitySql.ts","Edge confidence reinforcement"],
+  ["EDGE_HALF_LIFE_DAYS / display","60 / 0.45","edgeDecay.ts","Read-time edge decay & display threshold"],
+  ["INGEST_INTERVAL_MS","5 min","ingestWatcher.ts","Ingest poll cadence"],
+  ["CONSOLIDATION_INTERVAL_MS","30 min","consolidationWatcher.ts","Dossier rebuild cadence"],
+  ["Confidence caps","meet .70 / email,conv .60 / slack .50","ingest*.ts","Per-source trust ceilings"],
+  ["ingested_docs TTL","14 days","memorySql.ts","Per-doc ingest dedup window"],
+];
+
+/* ---- Gating flags (overview) ---- */
+const GATES = [
+  ["per-MCP credentials","Each server registers only if its env creds are present; missing → source reported unavailable","off"],
+  ["MEMORY_ACL_MODE","founders (default) — founders see all, others nothing. scoped = built but dormant","founders"],
+  ["MEMORY_ENTITY_GRAPH","=1 to enable entity-aware recall, linking & org-edge inference. Default OFF (flat recall)","off"],
+  ["MEMORY_EMBEDDINGS","=1 to enable cosine fusion + embedding backfill. Default OFF (BM25-only)","off"],
+  ["MEMORY_INGEST_MEET / GMAIL","ON by default (need ANTHROPIC_API_KEY + Google creds). =0 to disable","on"],
+  ["MEMORY_INGEST_SLACK","OFF by default; =1 + MEMORY_SLACK_CHANNELS allowlist to enable (untrusted source)","off"],
+  ["MEMORY_SENSITIVE_RECALL","Default OFF — sensitive (HR/comp/legal) facts excluded from ambient recall","off"],
+  ["MEMORY_CONSOLIDATION","ON by default; =0 to stop dossier synthesis","on"],
+];
+
+/* ---- Meet flows ---- */
+const MEET_WATCH = [
+  {n:"1", t:"Poll every 60s", d:"calendar.events.list(primary, now → now+5min, singleEvents, orderBy startTime)."},
+  {n:"2", t:"Filter eligible", d:"start ≤2 min away (or in progress), not ended, valid meet.google.com URL, not in joined_meetings (4h TTL)."},
+  {n:"3", t:"Check capacity", d:"canSpawnJoiner(active, MAX_CONCURRENT_JOINERS=1). At cap → defer to next poll."},
+  {n:"4", t:"Spawn detached", d:"buildJoinerArgs + scrubbed buildJoinerEnv; spawn detached, unref, log to data/meet-bot-logs/. markJoined."},
+];
+const MEET_JOIN = [
+  {n:"1", t:"Clean & launch", d:"Remove stale profile locks; launchPersistentContext(channel:chrome, headless, fake-media, no-sandbox)."},
+  {n:"2", t:"Navigate & prep", d:"Open Meet URL; wait for UI; mute mic + camera; set guest name 'Sentinel'."},
+  {n:"3", t:"Join", d:"Click 'Join now' / 'Ask to join' (≤15 retries, 2s apart); confirm via 'Leave call' button."},
+  {n:"4", t:"Transcribe", d:"Activities → Transcripts → 'Start transcription' (Google records server-side)."},
+  {n:"5", t:"Stay until end", d:"Poll every 15s for end conditions or max 2h; leave gracefully. (watcher hardcodes stay-until-end)"},
+];
+
+/* ---- Persona categories ---- */
+const CATS = [
+  ["placements","placement · employer · offer · interview · salary · ctc"],
+  ["admissions","admission · funnel · counselor · lead · cohort · enrollment"],
+  ["student_health","escalation · dropout · sentiment · complaint · nps"],
+  ["product_execution","product · feature · sprint · PR · deploy · bug · launch"],
+  ["finance","revenue · arr · churn · billing · budget · expense"],
+  ["nst_operations","nst · campus · internship · academic · faculty · curriculum"],
+  ["general","fallback when no keywords match"],
+];
+
+/* ---- Boot / shutdown flows ---- */
+const BOOT = [
+  {n:"1",t:"getDb()",d:"Open SQLite, run idempotent migrations, prune query log + non-active memories (90d)."},
+  {n:"2",t:"getMcpConfigPath()",d:"Generate the initial MCP config (validates which sources are available)."},
+  {n:"3",t:"startHealthServer()",d:"Bind :8930 with /health, /ready, /metrics providers."},
+  {n:"4",t:"startMeetWatcher()",d:"Begin the 60s calendar poll → Playwright joiner pipeline."},
+  {n:"5",t:"startIngestWatcher()",d:"Begin the 5-min memory ingest poller (if a source + API key exist)."},
+  {n:"6",t:"startConsolidationWatcher()",d:"Begin the 30-min dossier + embedding poller."},
+  {n:"7",t:"app.start()",d:"Connect Slack Socket Mode; flip slackConnected=true → /ready turns green."},
+];
+const SHUT = [
+  {n:"1",t:"Stop pollers",d:"Halt watcher / ingest / consolidation loops (detached Meet joiners are left running)."},
+  {n:"2",t:"Stop Slack app",d:"Stop accepting new events."},
+  {n:"3",t:"Drain in-flight",d:"Poll activeRequests every 250ms up to a 25s cap (under K8s 30s grace), then continue."},
+  {n:"4",t:"Close health + DB",d:"Close the HTTP server, close SQLite, sweep stray MCP config files."},
+  {n:"5",t:"exit(0)",d:"Idempotent — repeat SIGINT/SIGTERM await the same in-flight shutdown."},
+];
+
+/* ---- Env table ---- */
+const ENV = [
+  ["SLACK_BOT_TOKEN","yes","—","Must start xoxb-"],
+  ["SLACK_APP_TOKEN","yes","—","Must start xapp- (Socket Mode)"],
+  ["BOT_USER_ID","yes","—","For mention stripping"],
+  ["ALLOWED_USER_IDS","yes","—","CSV allow-list; .refine ≥1 non-empty"],
+  ["CLAUDE_BIN","no","claude","Path to the Claude CLI binary"],
+  ["ANTHROPIC_API_KEY","no","—","Passed to CLI + enables extraction/ingest"],
+  ["METABASE_URL + (API_KEY | USER+PASS)","no","—","Metabase server if set"],
+  ["GITHUB_TOKEN","no","—","GitHub MCP if set"],
+  ["NOTION_API_KEY","no","—","Notion MCP if set"],
+  ["SLACK_USER_TOKEN","no","—","xoxp- → slack-search MCP"],
+  ["GOOGLE_CLIENT_ID/SECRET/REFRESH_TOKEN","no","—","All-or-nothing (.refine); Gmail/Cal/Meet/Transcripts"],
+  ["MEMORY_EMBEDDING_API_KEY","no","—","OpenAI key for embeddings"],
+  ["MEMORY_EMBEDDING_MODEL","no","text-embedding-3-small","Embedding model id"],
+  ["HEALTH_CHECK_PORT","no","8930","Health/metrics HTTP port"],
+  ["SQLITE_DB_PATH","no","./sentinel.db","DB file (CWD-relative)"],
+  ["LOG_LEVEL","no","info","fatal…trace (Pino)"],
+  ["MAX_CONCURRENT_JOINERS","no","1","Meet joiner cap (shared Chrome profile)"],
+];
+
+/* ---- Schema (ERD) ---- */
+const SCHEMA = {
+  erd1:[
+    {name:"personas", note:"1/user", rows:[["user_id","TEXT","pk"],["display_name","TEXT",""],["role","TEXT",""],["created_at","TEXT",""],["updated_at","TEXT",""]]},
+    {name:"persona_traits", note:"UQ(user,label,value)", rows:[["id","INTEGER","pk"],["user_id","TEXT",""],["label","TEXT",""],["value","TEXT","uq"],["confidence","REAL",""],["evidence_count","INT",""],["updated_at","TEXT",""]]},
+    {name:"query_log", note:"audit · 90d", rows:[["id","INTEGER","pk"],["user_id","TEXT",""],["query_text","TEXT",""],["category","TEXT",""],["response_text","TEXT",""],["response_duration_ms","INT",""],["sources_used","JSON",""],["created_at","TEXT",""]]},
+  ],
+  erd2:[
+    {name:"memories", note:"the fact store", rows:[["id","INTEGER","pk"],["text","TEXT ≤300",""],["category","enum(7)",""],["source_type","enum(4)",""],["source_ref / label","TEXT",""],["evidence_quote","TEXT",""],["confidence","REAL",""],["visibility","TEXT",""],["sensitivity","enum",""],["subject_entity_id","INT","fk"],["scope_team_id","INT",""],["content_hash","TEXT","uq"],["status","enum",""],["superseded_by","INT","fk"],["embedding","BLOB",""]]},
+    {name:"memories_fts", note:"FTS5 · porter", rows:[["text","",""],["entities","",""],["source_label","",""],["(triggers ai/ad/au sync)","",""]]},
+    {name:"ingest_cursors", note:"high-water marks", rows:[["source","TEXT","pk"],["cursor","TEXT",""],["updated_at","TEXT",""]]},
+    {name:"ingested_docs", note:"per-doc dedup 14d", rows:[["doc_id","TEXT","pk"],["ingested_at","INT",""]]},
+  ],
+  erd3:[
+    {name:"entities", note:"people/teams/…", rows:[["id","INTEGER","pk"],["type","enum(8)",""],["canonical_name","TEXT",""],["normalized_name","TEXT",""],["aliases","JSON",""],["slack_user_id","TEXT","uq"],["email","TEXT","uq"],["confidence","REAL",""],["status","enum",""],["merged_into","INT","fk"],["embedding","BLOB",""]]},
+    {name:"entity_edges", note:"UQ(src,dst,rel)", rows:[["id","INTEGER","pk"],["src_id","INT","fk"],["dst_id","INT","fk"],["relation","enum(8)",""],["confidence","REAL",""],["evidence_count","INT",""],["provenance","JSON",""],["status","enum",""]]},
+    {name:"memory_entities", note:"fact↔entity links", rows:[["memory_id","INT","pk"],["entity_id","INT","pk"],["role","enum(4)","pk"],["confidence","REAL",""]]},
+    {name:"entity_profiles", note:"dossiers ≤1200", rows:[["entity_id","INT","pk"],["profile_md","TEXT",""],["source_fact_ids","JSON",""],["fact_count","INT",""],["version","INT",""],["model","TEXT",""],["embedding","BLOB",""]]},
+    {name:"entity_profile_cursors", note:"rebuild delta", rows:[["entity_id","INT","pk"],["last_fact_count","INT",""]]},
+    {name:"entity_exclusions", note:"right-to-be-forgotten", rows:[["entity_id","INT","pk"],["reason","TEXT",""],["created_by","TEXT",""]]},
+  ],
+  erd4:[
+    {name:"joined_meetings", note:"dedup · 4h TTL", rows:[["event_id","TEXT","pk"],["joined_at","INT (ms)",""]]},
+  ],
+};
+
+/* =========================================================================
+   RENDERING
+   ========================================================================= */
+const $ = (s,r=document)=>r.querySelector(s);
+const $$ = (s,r=document)=>[...r.querySelectorAll(s)];
+const el = (tag,cls,html)=>{const e=document.createElement(tag); if(cls)e.className=cls; if(html!=null)e.innerHTML=html; return e;};
+
+// ----- Nav / view switching -----
+$$("#nav button").forEach(b=>b.addEventListener("click",()=>{
+  $$("#nav button").forEach(x=>x.classList.remove("active"));
+  b.classList.add("active");
+  $$(".view").forEach(v=>v.classList.remove("active"));
+  $("#view-"+b.dataset.view).classList.add("active");
+  window.scrollTo({top:0,behavior:"instant"});
+  if(b.dataset.view==="overview") requestAnimationFrame(drawWires);
+}));
+
+// ----- Diagram render -----
+const diagram = $("#diagram");
+const nodeEls = {};
+function renderDiagram(){
+  NODES.forEach(n=>{
+    if(n.grp){
+      const g = el("div","grp");
+      g.style.left=n.x+"%"; g.style.top=n.y+"%"; g.style.width=n.w+"%"; g.style.height=n.h+"%";
+      g.appendChild(el("span","glabel",n.label));
+      diagram.appendChild(g);
+      return;
+    }
+    const d = el("div","node "+(n.cls||""));
+    d.style.left=n.x+"%"; d.style.top=n.y+"%"; if(n.w) d.style.width=n.w+"%";
+    d.innerHTML = `<div class="nt"><span class="ic">${n.ic||""}</span>${n.t}</div><div class="ns">${n.s||""}</div>`;
+    d.dataset.key=n.key;
+    d.addEventListener("click",()=>openDrawerFor(n.key));
+    diagram.appendChild(d);
+    nodeEls[n.id]=d;
+  });
+}
+function center(id){
+  const e=nodeEls[id]; if(!e) return null;
+  const dr=diagram.getBoundingClientRect(), r=e.getBoundingClientRect();
+  return {x:r.left-dr.left+r.width/2, y:r.top-dr.top+r.height/2, w:r.width, h:r.height,
+          left:r.left-dr.left, right:r.right-dr.left, top:r.top-dr.top, bottom:r.bottom-dr.top};
+}
+const svg=$("#wires");
+function drawWires(){
+  const dr=diagram.getBoundingClientRect();
+  svg.setAttribute("viewBox",`0 0 ${dr.width} ${dr.height}`);
+  svg.innerHTML="";
+  const defs=document.createElementNS("http://www.w3.org/2000/svg","defs");
+  defs.innerHTML=`<marker id="arw" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 Z" fill="#34466a"/></marker>`;
+  svg.appendChild(defs);
+  WIRES.forEach(([a,b,flow],i)=>{
+    const A=center(a),B=center(b); if(!A||!B) return;
+    // choose anchor points: exit from nearest edge
+    let x1=A.x,y1=A.y,x2=B.x,y2=B.y;
+    if(Math.abs(B.x-A.x)>Math.abs(B.y-A.y)){
+      x1 = B.x>A.x ? A.right : A.left; x2 = B.x>A.x ? B.left : B.right;
+    } else {
+      y1 = B.y>A.y ? A.bottom : A.top; y2 = B.y>A.y ? B.top : B.bottom;
+    }
+    const mx=(x1+x2)/2, my=(y1+y2)/2;
+    const path=document.createElementNS("http://www.w3.org/2000/svg","path");
+    const d = Math.abs(x2-x1)>Math.abs(y2-y1)
+      ? `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`
+      : `M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}`;
+    path.setAttribute("d",d);
+    path.setAttribute("fill","none");
+    path.setAttribute("stroke", flow ? "#3a5180" : "#243149");
+    path.setAttribute("stroke-width", flow ? "1.8":"1.3");
+    path.setAttribute("marker-end","url(#arw)");
+    path.setAttribute("id","wire-"+i);
+    if(flow) path.dataset.flow="1";
+    svg.appendChild(path);
+  });
+}
+
+// ----- Flow animation -----
+let flowTimers=[];
+function clearFlow(){ flowTimers.forEach(t=>clearTimeout(t)); flowTimers=[]; $$(".flowdot").forEach(d=>d.remove()); }
+function playFlow(){
+  clearFlow();
+  const flowWires = WIRES.map((w,i)=>({w,i})).filter(o=>o.w[2]);
+  flowWires.forEach((o,k)=>{
+    const t=setTimeout(()=>animateDot("wire-"+o.i), k*260);
+    flowTimers.push(t);
+  });
+}
+function animateDot(wireId){
+  const path=$("#"+wireId); if(!path) return;
+  const dot=document.createElementNS("http://www.w3.org/2000/svg","circle");
+  dot.setAttribute("r","4.5"); dot.setAttribute("fill","#7cc4ff"); dot.setAttribute("class","flowdot");
+  dot.setAttribute("filter","drop-shadow(0 0 6px #5e8bff)");
+  const am=document.createElementNS("http://www.w3.org/2000/svg","animateMotion");
+  am.setAttribute("dur","0.9s"); am.setAttribute("repeatCount","1"); am.setAttribute("rotate","auto");
+  const mp=document.createElementNS("http://www.w3.org/2000/svg","mpath");
+  mp.setAttributeNS("http://www.w3.org/1999/xlink","href","#"+wireId);
+  am.appendChild(mp); dot.appendChild(am); svg.appendChild(dot);
+  am.beginElement();
+  am.addEventListener("endEvent",()=>dot.remove());
+  setTimeout(()=>dot.remove(),1000);
+}
+$("#playFlow").addEventListener("click",playFlow);
+$("#resetFlow").addEventListener("click",()=>{clearFlow(); $$(".node").forEach(n=>n.classList.remove("sel"));});
+
+// ----- Drawer -----
+const drawer=$("#drawer"), scrim=$("#scrim");
+function openDrawerFor(key){
+  let det = DETAIL[key];
+  if(!det && key.startsWith("mcp-")){
+    const m = MCP.find(x=>("mcp-"+x.id)===key || ("mcp-"+x.name)===key) || MCP.find(x=> key.includes(x.id.split("-")[0]));
+    if(m) det = mcpDetail(m);
+  }
+  if(!det) return;
+  $("#drKicker").textContent=det.k;
+  $("#drTitle").textContent=det.t;
+  $("#drFiles").textContent=det.f;
+  $("#drBody").innerHTML=det.body;
+  drawer.classList.add("open"); scrim.classList.add("show");
+  $$(".node").forEach(n=>n.classList.toggle("sel", n.dataset.key===key));
+}
+function mcpDetail(m){
+  return {k:"MCP server", t:m.name, f:m.file,
+    body:`<div class="kv"><dt>auth</dt><dd>${m.auth}</dd></div><h4>Tools</h4><ul>${m.tools.map(t=>`<li>${t}</li>`).join("")}</ul><div class="note">${m.note}</div>`};
+}
+$("#drClose").addEventListener("click",closeDrawer);
+scrim.addEventListener("click",closeDrawer);
+function closeDrawer(){ drawer.classList.remove("open"); scrim.classList.remove("show"); $$(".node").forEach(n=>n.classList.remove("sel")); }
+document.addEventListener("keydown",e=>{if(e.key==="Escape")closeDrawer();});
+
+// ----- Gates -----
+$("#gates").innerHTML = GATES.map(g=>`<div class="g"><div class="gn">${g[0]} <span class="pill ${g[2]==='on'?'on':g[2]==='off'?'off':''}" style="float:right">${g[2]}</span></div><div class="gd">${g[1]}</div></div>`).join("");
+
+// ----- Lifecycle -----
+let lcIdx=0, lcTimer=null;
+function renderLcSteps(){
+  $("#lcSteps").innerHTML = LIFECYCLE.map((s,i)=>`<div class="lc-step" data-i="${i}"><div class="lc-num">${i+1}</div><div><div class="lc-st">${s.h}</div><div class="lc-ss">${s.stage} · ${s.f}</div></div></div>`).join("");
+  $$("#lcSteps .lc-step").forEach(s=>s.addEventListener("click",()=>{lcGoto(+s.dataset.i); stopLc();}));
+}
+function lcGoto(i){
+  lcIdx=Math.max(0,Math.min(LIFECYCLE.length-1,i));
+  const s=LIFECYCLE[lcIdx];
+  $("#lcStage").textContent=`Step ${lcIdx+1} / ${LIFECYCLE.length} · ${s.stage}`;
+  $("#lcHead").textContent=s.h;
+  $("#lcFile").textContent=s.f;
+  $("#lcContent").innerHTML=`<p>${s.c}</p>`;
+  $("#lcBar").style.width=((lcIdx+1)/LIFECYCLE.length*100)+"%";
+  $("#lcCounter").textContent=`${lcIdx+1} of ${LIFECYCLE.length}`;
+  $$("#lcSteps .lc-step").forEach((e,i)=>{e.classList.toggle("active",i===lcIdx); e.classList.toggle("done",i<lcIdx);});
+  const active=$(`#lcSteps .lc-step[data-i="${lcIdx}"]`);
+  if(active) active.scrollIntoView({block:"nearest",behavior:"smooth"});
+}
+function stopLc(){ if(lcTimer){clearInterval(lcTimer); lcTimer=null; $("#lcPlay").textContent="▶ Auto-play";} }
+$("#lcNext").addEventListener("click",()=>{lcGoto(lcIdx+1); stopLc();});
+$("#lcPrev").addEventListener("click",()=>{lcGoto(lcIdx-1); stopLc();});
+$("#lcPlay").addEventListener("click",()=>{
+  if(lcTimer){stopLc(); return;}
+  $("#lcPlay").textContent="⏸ Pause";
+  if(lcIdx>=LIFECYCLE.length-1) lcGoto(0);
+  lcTimer=setInterval(()=>{ if(lcIdx>=LIFECYCLE.length-1){stopLc(); return;} lcGoto(lcIdx+1); },2600);
+});
+
+// ----- MCP grid -----
+$("#mcpGrid").innerHTML = MCP.map(m=>`
+  <div class="mcard">
+    <div class="mh"><span class="ic" style="background:rgba(78,201,168,0.16);color:${m.clr}">${m.ic}</span>
+      <div><div class="mt">${m.name}</div><div class="mm">${m.file}</div></div></div>
+    <div class="mb">
+      <div class="small" style="margin-bottom:8px"><span class="pill">${m.auth}</span></div>
+      <div class="toollist">${m.tools.map(t=>{const i=t.indexOf(" ");const nm=t.split("(")[0].split(" —")[0]; return `<div class="tool"><b>${nm.trim()}</b>${t.slice(nm.length)}</div>`;}).join("")}</div>
+      <div class="note">${m.note}</div>
+    </div>
+  </div>`).join("");
+
+// ----- Brain flow + consts -----
+$("#brainFlow").innerHTML = BRAIN_FLOW.map(s=>`<div class="flowstep"><div class="fi">${s.n}</div><div class="fc"><b>${s.t}</b><p>${s.d}</p></div></div>`).join("");
+$("#brainConsts tbody").innerHTML = BRAIN_CONSTS.map(r=>`<tr><td>${r[0]}</td><td class="mono">${r[1]}</td><td class="mono">${r[2]}</td><td>${r[3]}</td></tr>`).join("");
+
+// ----- Meet flows -----
+$("#meetWatch").innerHTML = MEET_WATCH.map(s=>`<div class="flowstep"><div class="fi" style="color:var(--meet)">${s.n}</div><div class="fc"><b>${s.t}</b><p>${s.d}</p></div></div>`).join("");
+$("#meetJoin").innerHTML = MEET_JOIN.map(s=>`<div class="flowstep"><div class="fi" style="color:var(--meet)">${s.n}</div><div class="fc"><b>${s.t}</b><p>${s.d}</p></div></div>`).join("");
+
+// ----- Persona categories -----
+$("#catList").innerHTML = CATS.map(c=>`<div style="display:flex;gap:10px;padding:7px 0;border-bottom:1px solid var(--border)"><span class="tag" style="flex-shrink:0">${c[0]}</span><span class="small">${c[1]}</span></div>`).join("");
+
+// ----- Boot / shutdown -----
+$("#bootFlow").innerHTML = BOOT.map(s=>`<div class="flowstep"><div class="fi">${s.n}</div><div class="fc"><b>${s.t}</b><p>${s.d}</p></div></div>`).join("");
+$("#shutFlow").innerHTML = SHUT.map(s=>`<div class="flowstep"><div class="fi">${s.n}</div><div class="fc"><b>${s.t}</b><p>${s.d}</p></div></div>`).join("");
+
+// ----- Env table -----
+$("#envTable tbody").innerHTML = ENV.map(r=>`<tr><td class="mono">${r[0]}</td><td>${r[1]==='yes'?'<span class="ok">required</span>':'<span class="small">optional</span>'}</td><td class="mono">${r[2]}</td><td class="small">${r[3]}</td></tr>`).join("");
+
+// ----- ERD -----
+function renderErd(targetId, list){
+  $("#"+targetId).innerHTML = list.map(t=>`<div class="ent"><div class="eh">${t.name}<span class="cnt">${t.note||""}</span></div>${t.rows.map(r=>`<div class="er ${r[2]||''}"><span class="cn">${r[0]}</span><span class="ct">${r[1]}</span></div>`).join("")}</div>`).join("");
+}
+renderErd("erd1",SCHEMA.erd1); renderErd("erd2",SCHEMA.erd2); renderErd("erd3",SCHEMA.erd3); renderErd("erd4",SCHEMA.erd4);
+
+// ----- init -----
+renderDiagram();
+renderLcSteps();
+lcGoto(0);
+requestAnimationFrame(()=>{drawWires(); setTimeout(playFlow,500);});
+window.addEventListener("resize",()=>{clearTimeout(window._rz); window._rz=setTimeout(drawWires,150);});
+</script>
+</body>
+</html>
