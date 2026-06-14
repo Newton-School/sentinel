@@ -189,6 +189,12 @@ export function getMcpConfigPath(opts: McpConfigOptions = {}): string {
   if (process.env.MEMORY_SENSITIVE_RECALL) {
     memoryEnv.MEMORY_SENSITIVE_RECALL = process.env.MEMORY_SENSITIVE_RECALL;
   }
+  // So memory_store can entity-link founder-stated facts (parity with the
+  // in-process ingestion path).
+  if (process.env.MEMORY_ENTITY_GRAPH) memoryEnv.MEMORY_ENTITY_GRAPH = process.env.MEMORY_ENTITY_GRAPH;
+  if (process.env.MEMORY_ENTITY_RESOLVE_MIN) {
+    memoryEnv.MEMORY_ENTITY_RESOLVE_MIN = process.env.MEMORY_ENTITY_RESOLVE_MIN;
+  }
   if (opts.viewer) Object.assign(memoryEnv, viewerScopeToEnv(opts.viewer));
 
   mcpConfig.mcpServers.memory = {

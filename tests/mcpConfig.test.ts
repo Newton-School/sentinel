@@ -550,6 +550,22 @@ describe("memory MCP server registration", () => {
     expect(env.MEMORY_VIEWER_TEAM_IDS).toBe("5");
   });
 
+  it("passes MEMORY_ENTITY_GRAPH into the memory server env when set", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: undefined, METABASE_USERNAME: undefined, METABASE_PASSWORD: undefined,
+        GITHUB_TOKEN: undefined, NOTION_API_KEY: undefined, SLACK_USER_TOKEN: undefined,
+        GOOGLE_CLIENT_ID: undefined, GOOGLE_CLIENT_SECRET: undefined, GOOGLE_REFRESH_TOKEN: undefined,
+        SQLITE_DB_PATH: "./sentinel.db",
+      },
+    }));
+    process.env.MEMORY_ENTITY_GRAPH = "1";
+    const { getMcpConfigPath } = await import("../src/claude/mcpConfig.js");
+    const config = JSON.parse(readFileSync(getMcpConfigPath(), "utf-8"));
+    expect(config.mcpServers.memory.env.MEMORY_ENTITY_GRAPH).toBe("1");
+    delete process.env.MEMORY_ENTITY_GRAPH;
+  });
+
   it("omits viewer env when no viewer is passed (warm-up / pre-scoped)", async () => {
     vi.doMock("../src/config.js", () => ({
       config: {

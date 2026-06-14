@@ -38,6 +38,7 @@ import type { EntityRelation } from "../memory/entitySql.js";
 import type { MemoryCategory, MemoryRow } from "../memory/types.js";
 import { canView, viewerScopeFromEnv } from "../access/scope.js";
 import { entityDigest, orgDigest } from "../memory/digest.js";
+import { isEntityGraphEnabled, linkFactEntities } from "../memory/entityLink.js";
 import { assertEnv } from "./requireEnv.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -294,11 +295,29 @@ server.tool(
         sourceLabel: "Stored on request via Slack",
         confidence: 0.9,
       });
+      // Entity-link the stored fact (parity with the in-process ingestion
+      // path, which links inside memoryStore.insertFact). Best-effort: a
+      // linking failure must never fail the store.
+      let linked = 0;
+      if (isEntityGraphEnabled()) {
+        try {
+          linked = linkFactEntities(db, result.id, {
+            text,
+            category,
+            entities,
+            sourceType: "manual",
+          }).linked;
+        } catch (err) {
+          /* best-effort — entity linking must not fail a store */
+          void err;
+        }
+      }
       return jsonResult({
         id: result.id,
         deduped: result.deduped,
         text,
         category,
+        entitiesLinked: linked,
       });
     })
 );
