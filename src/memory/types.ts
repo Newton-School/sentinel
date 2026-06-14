@@ -43,6 +43,10 @@ export interface MemoryRow {
   contentHash: string;
   status: MemoryStatus;
   supersededBy: number | null;
+  /** Company brain: the single entity this fact is ABOUT (governance subject). */
+  subjectEntityId?: number | null;
+  /** Company brain: explicit team scope for team-visibility rows. */
+  scopeTeamId?: number | null;
   createdAt: string;
   updatedAt: string;
 }

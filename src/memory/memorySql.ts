@@ -53,6 +53,8 @@ interface MemoryDbRow {
   content_hash: string;
   status: MemoryRow["status"];
   superseded_by: number | null;
+  subject_entity_id: number | null;
+  scope_team_id: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -77,6 +79,8 @@ function mapMemoryRow(row: MemoryDbRow): MemoryRow {
     contentHash: row.content_hash,
     status: row.status,
     supersededBy: row.superseded_by,
+    subjectEntityId: row.subject_entity_id ?? null,
+    scopeTeamId: row.scope_team_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
