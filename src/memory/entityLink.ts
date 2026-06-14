@@ -108,8 +108,13 @@ export function linkFactEntities(
     type: EntityType;
     excluded: boolean;
     alias?: string;
+    /** True unless resolved via a fuzzy (least-certain) match. */
+    cleanForSubject: boolean;
   }
   const resolvedById = new Map<number, Resolved>();
+  // Maps a normalized entity name to the entity it resolved to, so an
+  // extractor-declared `subject` name can be located among the resolved set.
+  const nameToId = new Map<string, number>();
 
   for (const rawName of names) {
     const hint = guessEntityType(rawName);
@@ -136,6 +141,8 @@ export function linkFactEntities(
       continue; // ambiguous / ungated → record nothing
     }
 
+    nameToId.set(rawName.toLowerCase().replace(/\s+/g, " ").trim(), entityId);
+
     const prev = resolvedById.get(entityId);
     if (prev === undefined || decision.confidence > prev.conf) {
       resolvedById.set(entityId, {
@@ -144,14 +151,33 @@ export function linkFactEntities(
         type: entityType,
         excluded: isEntityExcluded(db, entityId),
         alias: decision.match === "fuzzy" ? decision.newAlias : undefined,
+        cleanForSubject: decision.match !== "fuzzy",
       });
     }
   }
 
-  // The governance subject = highest-confidence resolved entity clearing the floor.
+  // The governance subject. Prefer an extractor-DECLARED subject when it
+  // resolved cleanly (not fuzzy) — this is authoritative even for a freshly
+  // created entity below the confidence floor, since the floor only guards
+  // against fuzzy mis-attribution, not entity novelty. Without it, the
+  // confidence-max heuristic mis-attributes a correction ("owned by NEW, not
+  // OLD") to the pre-existing OLD entity, which always resolves higher.
   let subject: Resolved | null = null;
-  for (const r of resolvedById.values()) {
-    if (r.conf >= minSubject && (!subject || r.conf > subject.conf)) subject = r;
+  if (fact.subject) {
+    const declaredId = nameToId.get(
+      fact.subject.toLowerCase().replace(/\s+/g, " ").trim()
+    );
+    const declared = declaredId !== undefined ? resolvedById.get(declaredId) : undefined;
+    // Excluded declared subjects are still selected here so the downstream
+    // text-level-forget check fires for them (a fact about a forgotten entity).
+    if (declared && declared.cleanForSubject) subject = declared;
+  }
+  // Fallback (no declared subject, or it didn't resolve cleanly): highest-
+  // confidence resolved entity clearing the attribution floor — unchanged.
+  if (!subject) {
+    for (const r of resolvedById.values()) {
+      if (r.conf >= minSubject && (!subject || r.conf > subject.conf)) subject = r;
+    }
   }
 
   // Right-to-be-forgotten (text level): if the fact is ABOUT an excluded entity

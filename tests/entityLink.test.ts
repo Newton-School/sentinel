@@ -133,6 +133,47 @@ describe("entityLink.linkFactEntities", () => {
     closeDb();
   });
 
+  it("honors an extractor-declared subject over a higher-confidence pre-existing mention", async () => {
+    const { createEntity, getEntityById, getEdges } = await import("../src/memory/entitySql.js");
+    const { linkFactEntities } = await import("../src/memory/entityLink.js");
+    // The OLD/negated owner already exists → resolves at 0.9; the NEW owner is
+    // freshly created at 0.5. Without a declared subject the confidence-max
+    // heuristic mis-picks the pre-existing entity.
+    createEntity(db, { type: "person", canonicalName: "Vikram Singh" });
+    createEntity(db, { type: "project", canonicalName: "mobile app revamp" });
+    const text = "the mobile app revamp is now owned by Karthik Reddy, not Vikram Singh";
+    const m = insertMemory(db, text, "owner", ["Karthik Reddy", "Vikram Singh", "mobile app revamp"]);
+    const res = linkFactEntities(db, m.id, {
+      text,
+      category: "owner",
+      entities: ["Karthik Reddy", "Vikram Singh", "mobile app revamp"],
+      subject: "Karthik Reddy",
+      sourceType: "manual",
+    });
+
+    expect(getEntityById(db, res.subjectEntityId!)?.canonicalName).toBe("Karthik Reddy");
+    const owns = getEdges(db, { relation: "owns", status: "active" });
+    expect(owns).toHaveLength(1);
+    expect(getEntityById(db, owns[0].srcId)?.canonicalName).toBe("Karthik Reddy");
+    closeDb();
+  });
+
+  it("falls back to the confidence-max heuristic when the declared subject doesn't resolve", async () => {
+    const { createEntity, getEntityById } = await import("../src/memory/entitySql.js");
+    const { linkFactEntities } = await import("../src/memory/entityLink.js");
+    createEntity(db, { type: "person", canonicalName: "Rahul Sharma" });
+    const m = insertMemory(db, "Rahul Sharma owns placements", "owner", ["Rahul Sharma"]);
+    const res = linkFactEntities(db, m.id, {
+      text: "Rahul Sharma owns placements",
+      category: "owner",
+      entities: ["Rahul Sharma"],
+      subject: "Someone Not Mentioned", // doesn't resolve → fallback
+      sourceType: "manual",
+    });
+    expect(getEntityById(db, res.subjectEntityId!)?.canonicalName).toBe("Rahul Sharma");
+    closeDb();
+  });
+
   it("returns linked=0 for a fact with no entities", async () => {
     const { linkFactEntities } = await import("../src/memory/entityLink.js");
     const m = insertMemory(db, "Some general statement", "fact", []);

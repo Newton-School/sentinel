@@ -70,6 +70,7 @@ export function extractFromConversation(opts: ConversationHookOptions): void {
         text: fact.text,
         category: fact.category,
         entities: fact.entities,
+        subject: fact.subject,
         sourceType: "conversation",
         sourceRef: `slack:${opts.channelId}:${opts.threadTs}`,
         sourceLabel: dateLabel,

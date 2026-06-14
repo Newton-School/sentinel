@@ -101,6 +101,14 @@ export interface NewFact {
   text: string;
   category: MemoryCategory;
   entities?: string[];
+  /**
+   * Company brain: the canonical name of the ONE entity the fact is primarily
+   * about (the role-holder for ownership facts). When set and it resolves
+   * cleanly, `linkFactEntities` uses it as the governance subject instead of
+   * guessing by resolution confidence — which otherwise mis-attributes a
+   * correction ("owned by NEW, not OLD") to the pre-existing OLD entity.
+   */
+  subject?: string;
   sourceType: MemorySourceType;
   sourceRef?: string;
   sourceLabel?: string;

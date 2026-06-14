@@ -49,6 +49,7 @@ export const extractedFactSchema = z.object({
     "summary",
   ]),
   entities: z.array(z.string().max(60)).max(8).default([]),
+  subject: z.string().max(60).optional(),
   confidence: z.number().min(0).max(1),
   evidence_quote: z.string().min(5),
   sensitivity: z.enum(["normal", "sensitive"]).default("normal"),
@@ -85,6 +86,7 @@ const EXTRACTION_JSON_SCHEMA: Record<string, unknown> = {
             ],
           },
           entities: { type: "array", items: { type: "string" } },
+          subject: { type: "string" },
           confidence: { type: "number" },
           evidence_quote: { type: "string" },
           sensitivity: { type: "string", enum: ["normal", "sensitive"] },
@@ -140,6 +142,7 @@ export function buildExtractionSystemPrompt(input: {
     "Every fact needs a verbatim evidence_quote copied character-for-character from the content.",
     "Resolve pronouns to the people or things they refer to, and resolve relative dates to absolute dates using today's date.",
     'Populate "entities" with the canonical names of EVERY person, team, project, product, or company the fact is about (e.g. ["Priya Nair", "placements team"]). Use [] only when the fact names none.',
+    'Set "subject" to the canonical name of the ONE entity the fact is primarily ABOUT — for an ownership/role fact, the entity that HOLDS the role. Critically, for a correction like "the project is now owned by Karthik, not Vikram", the subject is the NEW holder "Karthik" (never the negated/former one). The subject MUST also appear in "entities". Omit "subject" when no single entity is the focus.',
     "Translate Hinglish to plain business English, including both synonym forms where relevant.",
     'Return {"facts":[]} when nothing qualifies.',
   ];
