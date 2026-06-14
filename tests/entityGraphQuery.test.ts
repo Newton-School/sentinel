@@ -67,6 +67,21 @@ describe("getRelatedEntities", () => {
     closeDb();
   });
 
+  it("displays a freshly-derived base-confidence (0.5) edge after a sub-second decay tick", async () => {
+    // Regression: with the threshold == the base confidence, any real-time
+    // decay (querying milliseconds after the edge was written) pushed a fresh
+    // edge just below the cutoff, so org_lookup/team_roster returned nothing.
+    const { createEntity, upsertEdge, getRelatedEntities } = await import("../src/memory/entitySql.js");
+    const person = createEntity(db, { type: "person", canonicalName: "Rahul Sharma" });
+    const team = createEntity(db, { type: "team", canonicalName: "Placements" });
+    const writtenAt = new Date("2026-06-14T00:00:00.000Z");
+    upsertEdge(db, { srcId: person.id, dstId: team.id, relation: "manages", confidence: 0.5, now: writtenAt });
+    // Queried 500ms later — a tiny but non-zero decay.
+    const later = new Date(writtenAt.getTime() + 500);
+    expect(getRelatedEntities(db, person.id, "manages", later)).toHaveLength(1);
+    closeDb();
+  });
+
   it("decays a stale edge below the threshold so it drops out", async () => {
     const { createEntity, upsertEdge, getRelatedEntities } = await import("../src/memory/entitySql.js");
     const person = createEntity(db, { type: "person", canonicalName: "Rahul Sharma" });
