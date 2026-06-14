@@ -13,7 +13,7 @@
  */
 
 import type Database from "better-sqlite3";
-import { normalizeForHash } from "./textMatch.js";
+import { normalizeForHash, tokenSet } from "./textMatch.js";
 import type {
   EntityCandidate,
   EntityType,
@@ -224,6 +224,53 @@ export function getResolutionCandidates(
       email: e.email,
     };
   });
+}
+
+export interface MentionedEntity {
+  entityId: number;
+  name: string;
+  type: EntityType;
+}
+
+/**
+ * Finds active entities mentioned in a free-text query: an entity is mentioned
+ * when ALL tokens of its canonical name (or an alias) appear in the query.
+ * Single-token names must be ≥5 chars to qualify, filtering generic words
+ * ("team", "ops") that would otherwise match every query. Ranked by match
+ * span (longer names first), then confidence.
+ */
+export function resolveQueryEntities(
+  db: Database.Database,
+  query: string,
+  limit = 3
+): MentionedEntity[] {
+  const qTokens = tokenSet(normalizeForHash(query));
+  if (qTokens.size === 0) return [];
+
+  const candidates = getResolutionCandidates(db, { rawName: query }, 100);
+
+  const qualifies = (norm: string): number => {
+    const t = [...tokenSet(norm)];
+    if (t.length === 0) return 0;
+    if (!t.every((tok) => qTokens.has(tok))) return 0;
+    if (t.length === 1 && t[0].length < 5) return 0; // drop generic single tokens
+    return t.length; // span = match strength
+  };
+
+  const scored = candidates
+    .map((c) => {
+      const nameSpan = qualifies(c.normalizedName);
+      const aliasSpan = Math.max(0, ...c.aliases.map((a) => qualifies(a)), 0);
+      return { c, span: Math.max(nameSpan, aliasSpan) };
+    })
+    .filter((s) => s.span > 0)
+    .sort((a, b) => b.span - a.span);
+
+  return scored.slice(0, limit).map((s) => ({
+    entityId: s.c.id,
+    name: s.c.canonicalName,
+    type: s.c.type,
+  }));
 }
 
 /**
