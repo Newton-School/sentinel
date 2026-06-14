@@ -1,24 +1,34 @@
 /**
  * Memory ingestion poll loop (meet-bot watcher.ts pattern): every 5 minutes,
- * pull Meet transcripts and recent internal Gmail through the extraction
- * pipeline. Gated on the Google credentials AND ANTHROPIC_API_KEY — without
- * either it warns and returns a no-op stop, exactly like the Meet watcher.
+ * pull Meet transcripts, recent internal Gmail, and designated Slack channels
+ * through the extraction pipeline. Requires ANTHROPIC_API_KEY; the Google
+ * sources additionally require the Google credentials, and Slack ingestion is
+ * opt-in (see below). Starts only if at least one source is runnable.
  *
- * Kill switches (MAX_CONCURRENT_JOINERS precedent — read straight from the
- * env on every tick, no config.ts change, so they can be flipped without a
- * rebuild): MEMORY_INGEST_MEET=0 / MEMORY_INGEST_GMAIL=0 disable one source.
+ * Kill switches (read straight from the env on every tick, no config.ts change,
+ * so they can be flipped without a rebuild):
+ *   - MEMORY_INGEST_MEET=0 / MEMORY_INGEST_GMAIL=0 disable a Google source.
+ *   - MEMORY_INGEST_SLACK=1 ENABLES Slack-channel ingestion (OFF by default —
+ *     Slack content is untrusted multi-author input); MEMORY_SLACK_CHANNELS is
+ *     the channel allowlist (empty = nothing).
  *
  * Each source runs in its own try/catch so one failing can never block the
- * other, and an overlapping-tick guard skips a tick while the previous one is
+ * others, and an overlapping-tick guard skips a tick while the previous one is
  * still running (LLM calls can be slow).
  */
 
 import { google } from "googleapis";
+import { WebClient } from "@slack/web-api";
 import { config } from "../config.js";
 import { createLogger } from "../logging/logger.js";
 import { createMeetClient } from "../google/meetClient.js";
 import { runMeetIngest } from "./meetIngest.js";
 import { runGmailIngest, resolveInternalDomains } from "./gmailIngest.js";
+import {
+  runSlackIngest,
+  resolveIngestChannels,
+  type SlackIngestClient,
+} from "./slackIngest.js";
 
 const log = createLogger("ingest-watcher");
 
@@ -29,32 +39,52 @@ export const INGEST_INTERVAL_MS = 5 * 60 * 1000; // 5 min
  * interval; an in-flight tick is allowed to finish (it only writes SQLite).
  */
 export function startIngestWatcher(): () => void {
-  const hasGoogle =
-    config.GOOGLE_CLIENT_ID &&
-    config.GOOGLE_CLIENT_SECRET &&
-    config.GOOGLE_REFRESH_TOKEN;
+  const hasGoogle = Boolean(
+    config.GOOGLE_CLIENT_ID && config.GOOGLE_CLIENT_SECRET && config.GOOGLE_REFRESH_TOKEN
+  );
+  const slackWanted = process.env.MEMORY_INGEST_SLACK === "1";
 
-  if (!hasGoogle || !config.ANTHROPIC_API_KEY) {
+  if (!config.ANTHROPIC_API_KEY || (!hasGoogle && !slackWanted)) {
     log.warn(
-      "Google credentials or ANTHROPIC_API_KEY not set — memory ingest watcher disabled"
+      "No ingestable source (Google creds / Slack) with ANTHROPIC_API_KEY — ingest watcher disabled"
     );
     return () => {};
   }
   const apiKey = config.ANTHROPIC_API_KEY;
 
-  // Build both clients once; tokens are refreshed/cached internally.
-  const meetClient = createMeetClient({
-    clientId: config.GOOGLE_CLIENT_ID!,
-    clientSecret: config.GOOGLE_CLIENT_SECRET!,
-    refreshToken: config.GOOGLE_REFRESH_TOKEN!,
-  });
+  // Google clients (Meet + Gmail) — built only when credentials are present.
+  let meetClient: ReturnType<typeof createMeetClient> | null = null;
+  let gmail: ReturnType<typeof google.gmail> | null = null;
+  if (hasGoogle) {
+    meetClient = createMeetClient({
+      clientId: config.GOOGLE_CLIENT_ID!,
+      clientSecret: config.GOOGLE_CLIENT_SECRET!,
+      refreshToken: config.GOOGLE_REFRESH_TOKEN!,
+    });
+    const auth = new google.auth.OAuth2(config.GOOGLE_CLIENT_ID!, config.GOOGLE_CLIENT_SECRET!);
+    auth.setCredentials({ refresh_token: config.GOOGLE_REFRESH_TOKEN! });
+    gmail = google.gmail({ version: "v1", auth });
+  }
 
-  const auth = new google.auth.OAuth2(
-    config.GOOGLE_CLIENT_ID!,
-    config.GOOGLE_CLIENT_SECRET!
-  );
-  auth.setCredentials({ refresh_token: config.GOOGLE_REFRESH_TOKEN! });
-  const gmail = google.gmail({ version: "v1", auth });
+  // Slack history client (bot token) — used only when MEMORY_INGEST_SLACK=1.
+  const web = new WebClient(config.SLACK_BOT_TOKEN);
+  const slackClient: SlackIngestClient = {
+    async fetchHistory(channelId, oldestTs, limit) {
+      const res = await web.conversations.history({
+        channel: channelId,
+        oldest: oldestTs,
+        limit,
+        inclusive: false,
+      });
+      return (res.messages ?? []).map((m) => ({
+        ts: m.ts ?? "0",
+        user: m.user,
+        text: m.text,
+        subtype: m.subtype,
+        bot_id: m.bot_id,
+      }));
+    },
+  };
 
   // Overlapping-tick guard: LLM-heavy ticks can outlast the interval.
   let running = false;
@@ -66,30 +96,43 @@ export function startIngestWatcher(): () => void {
     }
     running = true;
     try {
-      // Sequential, each in its own try/catch: a Meet failure must not block
-      // Gmail (and vice versa), and we never want both hitting the LLM budget
-      // concurrently.
-      if (process.env.MEMORY_INGEST_MEET === "0") {
-        log.info("Meet ingestion disabled via MEMORY_INGEST_MEET=0");
-      } else {
-        try {
-          await runMeetIngest({ meetClient, apiKey });
-        } catch (err) {
-          log.error({ err }, "Meet ingest tick failed");
+      // Sequential, each in its own try/catch so a failure in one source never
+      // blocks another, and we never hit the LLM budget concurrently.
+      if (hasGoogle && meetClient) {
+        if (process.env.MEMORY_INGEST_MEET === "0") {
+          log.info("Meet ingestion disabled via MEMORY_INGEST_MEET=0");
+        } else {
+          try {
+            await runMeetIngest({ meetClient, apiKey });
+          } catch (err) {
+            log.error({ err }, "Meet ingest tick failed");
+          }
         }
       }
 
-      if (process.env.MEMORY_INGEST_GMAIL === "0") {
-        log.info("Gmail ingestion disabled via MEMORY_INGEST_GMAIL=0");
-      } else {
-        try {
-          await runGmailIngest({
-            gmail,
-            apiKey,
-            internalDomains: resolveInternalDomains(),
-          });
-        } catch (err) {
-          log.error({ err }, "Gmail ingest tick failed");
+      if (hasGoogle && gmail) {
+        if (process.env.MEMORY_INGEST_GMAIL === "0") {
+          log.info("Gmail ingestion disabled via MEMORY_INGEST_GMAIL=0");
+        } else {
+          try {
+            await runGmailIngest({ gmail, apiKey, internalDomains: resolveInternalDomains() });
+          } catch (err) {
+            log.error({ err }, "Gmail ingest tick failed");
+          }
+        }
+      }
+
+      // Slack: opt-in + allowlist (default OFF / empty → nothing ingested).
+      if (process.env.MEMORY_INGEST_SLACK === "1") {
+        const channels = resolveIngestChannels();
+        if (channels.length === 0) {
+          log.info("MEMORY_INGEST_SLACK=1 but MEMORY_SLACK_CHANNELS empty — nothing to ingest");
+        } else {
+          try {
+            await runSlackIngest({ slack: slackClient, apiKey, channels });
+          } catch (err) {
+            log.error({ err }, "Slack ingest tick failed");
+          }
         }
       }
     } finally {
