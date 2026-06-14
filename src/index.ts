@@ -17,6 +17,7 @@ import { startHealthServer, type HealthStatus } from "./health/server.js";
 import { record, renderPrometheus } from "./metrics/registry.js";
 import { startMeetWatcher } from "./meet-bot/watcher.js";
 import { startIngestWatcher } from "./memory/ingestWatcher.js";
+import { startConsolidationWatcher } from "./memory/consolidationWatcher.js";
 import { createGracefulShutdown } from "./shutdown.js";
 import type { SlackEventEnvelope } from "./types/contracts.js";
 import type http from "node:http";
@@ -234,6 +235,7 @@ const startTime = Date.now();
 let slackApp: ReturnType<typeof createSlackApp> | null = null;
 let stopWatcher: (() => void) | null = null;
 let stopIngest: (() => void) | null = null;
+let stopConsolidation: (() => void) | null = null;
 let healthServer: http.Server | null = null;
 
 async function main(): Promise<void> {
@@ -290,6 +292,9 @@ async function main(): Promise<void> {
   // Start memory ingest watcher (Meet transcripts + internal Gmail → memory)
   stopIngest = startIngestWatcher();
 
+  // Start consolidation watcher (rolls entity facts into dossiers).
+  stopConsolidation = startConsolidationWatcher();
+
   // Start Slack app
   const app = createSlackApp(handleEvent);
   slackApp = app;
@@ -311,6 +316,7 @@ const shutdown = createGracefulShutdown({
   stopWatcher: () => {
     stopWatcher?.();
     stopIngest?.();
+    stopConsolidation?.();
   },
   stopSlackApp: async () => {
     if (slackApp) await slackApp.stop();
