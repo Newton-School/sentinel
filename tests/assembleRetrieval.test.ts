@@ -94,6 +94,6 @@ describe("assembleRetrieval", () => {
     const { store, scope } = await load();
     // A query that sanitizes to empty still yields a well-formed empty bundle.
     const bundle = store.assembleRetrieval("   ", "U1", founder(scope));
-    expect(bundle).toEqual({ queryFacts: [], entityFacts: [], mentionedEntities: [] });
+    expect(bundle).toEqual({ queryFacts: [], entityFacts: [], mentionedEntities: [], dossiers: [] });
   });
 });

@@ -11,10 +11,16 @@
  * Pure and dependency-light (types only) — testable like rank.ts.
  */
 
-import type { RankedMemory, RetrievalBundle } from "../memory/types.js";
+import type {
+  EntityDossierRef,
+  RankedMemory,
+  RetrievalBundle,
+} from "../memory/types.js";
 
 export interface TierBudget {
-  /** Char cap for entity-linked facts. */
+  /** Char cap for consolidated entity dossiers. */
+  dossiers: number;
+  /** Char cap for entity-linked raw facts. */
   entityFacts: number;
   /** Char cap for general query facts. */
   queryFacts: number;
@@ -22,14 +28,16 @@ export interface TierBudget {
   total: number;
 }
 
-/** Modest growth from the old flat 2000-char cap (denser, tiered context). */
+/** Tiered budget (denser, condensed dossiers first), total ~3000 chars. */
 export const DEFAULT_TIER_BUDGET: TierBudget = {
-  entityFacts: 1400,
-  queryFacts: 1600,
+  dossiers: 1200,
+  entityFacts: 800,
+  queryFacts: 1000,
   total: 3000,
 };
 
 export interface InjectionPlan {
+  dossierBlocks: string[];
   entityLines: string[];
   queryLines: string[];
   usedChars: number;
@@ -41,33 +49,46 @@ export function renderMemoryLine(m: RankedMemory): string {
   return `- [${m.sourceType}, ${date}] ${m.text} (${m.category})`;
 }
 
-function fill(facts: RankedMemory[], cap: number): { lines: string[]; used: number } {
-  const lines: string[] = [];
+/** Renders a dossier as a single condensed line: `- [dossier: Name — updated date] body`. */
+export function renderDossier(d: EntityDossierRef): string {
+  const date = d.builtAt.slice(0, 10);
+  const body = d.profileMd.replace(/\s*\n\s*/g, " ").trim();
+  return `- [dossier: ${d.name} — updated ${date}] ${body}`;
+}
+
+function fillLines(lines: string[], cap: number): { kept: string[]; used: number } {
+  const kept: string[] = [];
   let used = 0;
-  for (const f of facts) {
-    const line = renderMemoryLine(f);
-    if (used + line.length > cap) continue; // drop this line, try the next (rank order)
-    lines.push(line);
+  for (const line of lines) {
+    if (used + line.length > cap) continue; // drop whole line, try next (rank order)
+    kept.push(line);
     used += line.length;
   }
-  return { lines, used };
+  return { kept, used };
 }
 
 /**
- * Allocates lines across tiers. Entity facts fill first (capped at
- * `entityFacts`); the query tier then gets the rest of the `total` budget,
- * absorbing any unused entity headroom.
+ * Allocates lines across tiers in priority order — dossiers (most condensed),
+ * then entity-linked facts, then general query facts — each capped, with each
+ * tier's unused headroom rolling into the next via the shared `total` bound.
  */
 export function allocateInjection(
   bundle: RetrievalBundle,
   budget: TierBudget = DEFAULT_TIER_BUDGET
 ): InjectionPlan {
-  const entity = fill(bundle.entityFacts, Math.min(budget.entityFacts, budget.total));
-  const queryCap = Math.max(0, budget.total - entity.used);
-  const query = fill(bundle.queryFacts, queryCap);
+  const dossierLines = (bundle.dossiers ?? []).map(renderDossier);
+  const dossier = fillLines(dossierLines, Math.min(budget.dossiers, budget.total));
+
+  const entityCap = Math.min(budget.entityFacts, budget.total - dossier.used);
+  const entity = fillLines(bundle.entityFacts.map(renderMemoryLine), Math.max(0, entityCap));
+
+  const queryCap = Math.max(0, budget.total - dossier.used - entity.used);
+  const query = fillLines(bundle.queryFacts.map(renderMemoryLine), queryCap);
+
   return {
-    entityLines: entity.lines,
-    queryLines: query.lines,
-    usedChars: entity.used + query.used,
+    dossierBlocks: dossier.kept,
+    entityLines: entity.kept,
+    queryLines: query.kept,
+    usedChars: dossier.used + entity.used + query.used,
   };
 }
