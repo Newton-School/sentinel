@@ -51,10 +51,17 @@ export interface MemoryMetricsSnapshot {
   entitiesResolved: Record<string, number>;
   /** Total entity-resolution attempts across all outcomes. */
   entitiesResolvedTotal: number;
+  /** Embedding outcomes keyed by result (ok/error). */
+  embeddings: Record<string, number>;
+  /** Total embedding attempts across all results. */
+  embeddingsTotal: number;
 }
 
 /** A single entity-resolution outcome (see entityLink.linkFactEntities). */
 export type EntityResolutionOutcome = "matched" | "created" | "ambiguous";
+
+/** A single embedding outcome (see embeddingBackfill). */
+export type EmbeddingResult = "ok" | "error";
 
 export interface MetricsSnapshot {
   totalRequests: number;
@@ -83,6 +90,7 @@ interface Counters {
   memoryInjected: number;
   memoryRetrievalEmpty: number;
   memoryEntitiesResolved: Map<EntityResolutionOutcome, number>;
+  memoryEmbeddings: Map<EmbeddingResult, number>;
 }
 
 function freshCounters(): Counters {
@@ -100,6 +108,7 @@ function freshCounters(): Counters {
     memoryInjected: 0,
     memoryRetrievalEmpty: 0,
     memoryEntitiesResolved: new Map(),
+    memoryEmbeddings: new Map(),
   };
 }
 
@@ -164,6 +173,11 @@ export function recordEntityResolution(outcome: EntityResolutionOutcome): void {
   );
 }
 
+/** Record one embedding attempt and its result (company brain). */
+export function recordEmbedding(result: EmbeddingResult): void {
+  counters.memoryEmbeddings.set(result, (counters.memoryEmbeddings.get(result) ?? 0) + 1);
+}
+
 /** Read a plain-object copy of the current counters. */
 export function snapshot(): MetricsSnapshot {
   const byType: Record<string, number> = {};
@@ -183,6 +197,13 @@ export function snapshot(): MetricsSnapshot {
     entitiesResolvedTotal += count;
   }
 
+  const embeddings: Record<string, number> = {};
+  let embeddingsTotal = 0;
+  for (const [result, count] of counters.memoryEmbeddings) {
+    embeddings[result] = count;
+    embeddingsTotal += count;
+  }
+
   return {
     totalRequests: counters.totalRequests,
     totalErrors: counters.totalErrors,
@@ -200,6 +221,8 @@ export function snapshot(): MetricsSnapshot {
       retrievalEmpty: counters.memoryRetrievalEmpty,
       entitiesResolved,
       entitiesResolvedTotal,
+      embeddings,
+      embeddingsTotal,
     },
   };
 }
@@ -315,6 +338,16 @@ export function renderPrometheus(): string {
     "counter",
     "Entity-resolution attempts during fact linking",
     [{ value: s.memory.entitiesResolvedTotal }, ...byOutcomeSamples]
+  );
+
+  const byEmbedResult = Object.entries(s.memory.embeddings).map(
+    ([result, value]) => ({ labels: `result="${result}"`, value })
+  );
+  metric(
+    "sentinel_memory_embeddings_total",
+    "counter",
+    "Embedding attempts during backfill (ok/error)",
+    [{ value: s.memory.embeddingsTotal }, ...byEmbedResult]
   );
 
   // Trailing newline per Prometheus convention.

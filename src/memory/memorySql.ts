@@ -293,6 +293,38 @@ export function supersedeMemory(
   return run();
 }
 
+/**
+ * Sets a row's embedding BLOB, but only when it's currently NULL — idempotent
+ * and dedup-safe (a deduped row keeps its existing vector). Not an FTS column,
+ * so the FTS triggers don't fire.
+ */
+export function setEmbedding(db: Database.Database, id: number, embedding: Buffer): void {
+  db.prepare(`UPDATE memories SET embedding = ? WHERE id = ? AND embedding IS NULL`).run(
+    embedding,
+    id
+  );
+}
+
+/**
+ * Active rows still needing an embedding, newest first. Excludes
+ * `sensitivity='sensitive'` rows — those are NEVER sent to the external
+ * embedding API (privacy), so they must not be returned here (else they'd be
+ * re-fetched forever).
+ */
+export function memoriesMissingEmbedding(
+  db: Database.Database,
+  limit = 200
+): Array<{ id: number; text: string }> {
+  return db
+    .prepare(
+      `SELECT id, text FROM memories
+       WHERE status = 'active' AND embedding IS NULL AND sensitivity != 'sensitive'
+       ORDER BY updated_at DESC, id DESC
+       LIMIT ?`
+    )
+    .all(limit) as Array<{ id: number; text: string }>;
+}
+
 /** Loads active memory rows by id (entity-linked-fact retrieval). */
 export function getMemoriesByIds(db: Database.Database, ids: number[]): MemoryRow[] {
   if (ids.length === 0) return [];

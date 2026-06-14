@@ -14,45 +14,63 @@ import { config } from "../config.js";
 import { createLogger } from "../logging/logger.js";
 import { getDb } from "../state/db.js";
 import { runConsolidation } from "./consolidate.js";
+import { backfillEmbeddings, isEmbeddingsEnabled } from "./embeddingBackfill.js";
 
 const log = createLogger("consolidation-watcher");
 
 export const CONSOLIDATION_INTERVAL_MS = 30 * 60 * 1000; // 30 min
 
 /**
- * Start the consolidation poll loop. Returns a `stop()` that clears the
- * interval; an in-flight tick finishes (it only calls the LLM + writes SQLite).
+ * Memory-maintenance poll loop: rebuilds due entity dossiers (consolidation)
+ * and embeds missing rows (hybrid retrieval). Each step has its OWN gate/key
+ * and runs in its own try/catch, so one being off or failing never blocks the
+ * other. Starts only if at least one step is enabled. Returns a `stop()`.
  */
 export function startConsolidationWatcher(): () => void {
-  if (!config.ANTHROPIC_API_KEY) {
-    log.warn("ANTHROPIC_API_KEY not set — consolidation watcher disabled");
+  const hasAnthropic = Boolean(config.ANTHROPIC_API_KEY);
+  if (!hasAnthropic && !isEmbeddingsEnabled()) {
+    log.warn("No ANTHROPIC_API_KEY and embeddings disabled — maintenance watcher disabled");
     return () => {};
   }
-  const apiKey = config.ANTHROPIC_API_KEY;
 
   let running = false;
   async function runOnce(): Promise<void> {
-    if (process.env.MEMORY_CONSOLIDATION === "0") return;
     if (running) {
-      log.warn("Previous consolidation tick still running — skipping this tick");
+      log.warn("Previous maintenance tick still running — skipping this tick");
       return;
     }
     running = true;
     try {
-      await runConsolidation(getDb(), { apiKey });
-    } catch (err) {
-      log.error({ err }, "Consolidation tick failed");
+      // Consolidation (gated on the Anthropic key + its kill switch).
+      if (config.ANTHROPIC_API_KEY && process.env.MEMORY_CONSOLIDATION !== "0") {
+        try {
+          await runConsolidation(getDb(), { apiKey: config.ANTHROPIC_API_KEY });
+        } catch (err) {
+          log.error({ err }, "Consolidation tick failed");
+        }
+      }
+      // Embedding backfill (gated on the embedding key + MEMORY_EMBEDDINGS).
+      if (isEmbeddingsEnabled()) {
+        try {
+          await backfillEmbeddings(getDb(), {
+            apiKey: config.MEMORY_EMBEDDING_API_KEY,
+            model: config.MEMORY_EMBEDDING_MODEL,
+          });
+        } catch (err) {
+          log.error({ err }, "Embedding backfill tick failed");
+        }
+      }
     } finally {
       running = false;
     }
   }
 
-  log.info({ intervalMs: CONSOLIDATION_INTERVAL_MS }, "Starting consolidation watcher");
+  log.info({ intervalMs: CONSOLIDATION_INTERVAL_MS }, "Starting memory-maintenance watcher");
   void runOnce();
   const intervalId = setInterval(() => void runOnce(), CONSOLIDATION_INTERVAL_MS);
 
   return function stop(): void {
     clearInterval(intervalId);
-    log.info("Consolidation watcher stopped");
+    log.info("Memory-maintenance watcher stopped");
   };
 }
