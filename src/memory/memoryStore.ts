@@ -21,6 +21,7 @@ import {
   searchCandidates,
 } from "./memorySql.js";
 import { rankMemories, sanitizeFtsQuery } from "./rank.js";
+import { isEntityGraphEnabled, linkFactEntities } from "./entityLink.js";
 import type {
   InsertResult,
   MemoryRow,
@@ -71,11 +72,23 @@ export function searchMemories(
 // Thin getDb-bound wrappers (used by the extraction/ingestion PRs).
 
 export function insertFact(fact: NewFact): InsertResult {
-  const result = sqlInsertFact(getDb(), fact);
+  const db = getDb();
+  const result = sqlInsertFact(db, fact);
   // One "stored" event whether freshly inserted or dedup-reinforced. The
   // memory MCP server (separate process) inserts via memorySql directly and
   // does NOT report metrics — see src/metrics/registry.ts.
   recordMemoryFactStored(fact.sourceType);
+
+  // Resolve & link the fact's entities into the company-brain graph. Gated on
+  // a runtime kill switch (ships inert) and best-effort: a linking failure
+  // must never fail a fact insert or, transitively, a Slack reply.
+  if (isEntityGraphEnabled()) {
+    try {
+      linkFactEntities(db, result.id, fact);
+    } catch (err) {
+      log.warn({ err }, "Entity linking failed (non-fatal)");
+    }
+  }
   return result;
 }
 
