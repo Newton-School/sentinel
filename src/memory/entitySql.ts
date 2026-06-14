@@ -343,6 +343,124 @@ export function linkMemoryEntity(db: Database.Database, link: LinkMemoryEntityIn
   );
 }
 
+export interface EntityProfileRow {
+  entityId: number;
+  profileMd: string;
+  sourceFactIds: number[];
+  factCount: number;
+  version: number;
+  model: string;
+  builtAt: string;
+  updatedAt: string;
+}
+
+/** Count of distinct ACTIVE memories linked to an entity. */
+export function getEntityActiveFactCount(db: Database.Database, entityId: number): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(DISTINCT me.memory_id) AS n
+       FROM memory_entities me
+       JOIN memories m ON m.id = me.memory_id
+       WHERE me.entity_id = ? AND m.status = 'active'`
+    )
+    .get(entityId) as { n: number };
+  return row.n;
+}
+
+export function getEntityProfile(db: Database.Database, entityId: number): EntityProfileRow | null {
+  const row = db.prepare(`SELECT * FROM entity_profiles WHERE entity_id = ?`).get(entityId) as
+    | {
+        entity_id: number;
+        profile_md: string;
+        source_fact_ids: string;
+        fact_count: number;
+        version: number;
+        model: string;
+        built_at: string;
+        updated_at: string;
+      }
+    | undefined;
+  if (!row) return null;
+  let sourceFactIds: number[] = [];
+  try {
+    const v = JSON.parse(row.source_fact_ids);
+    if (Array.isArray(v)) sourceFactIds = v.filter((x) => typeof x === "number");
+  } catch {
+    /* tolerate malformed */
+  }
+  return {
+    entityId: row.entity_id,
+    profileMd: row.profile_md,
+    sourceFactIds,
+    factCount: row.fact_count,
+    version: row.version,
+    model: row.model,
+    builtAt: row.built_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/** The fact count at the last consolidation, for delta-based due detection. */
+export function getProfileCursor(db: Database.Database, entityId: number): number {
+  const row = db
+    .prepare(`SELECT last_fact_count FROM entity_profile_cursors WHERE entity_id = ?`)
+    .get(entityId) as { last_fact_count: number } | undefined;
+  return row?.last_fact_count ?? 0;
+}
+
+export interface UpsertProfileInput {
+  entityId: number;
+  profileMd: string;
+  sourceFactIds: number[];
+  /** Total active linked fact count at build time (drives the rebuild delta). */
+  factCount: number;
+  model: string;
+  now?: Date;
+}
+
+/**
+ * Upserts an entity's dossier and refreshes its consolidation cursor in one
+ * transaction. On rebuild, version increments and built_at/updated_at advance.
+ */
+export function upsertEntityProfile(db: Database.Database, input: UpsertProfileInput): number {
+  const ts = (input.now ?? new Date()).toISOString();
+  const run = db.transaction((): number => {
+    const row = db
+      .prepare(
+        `INSERT INTO entity_profiles (
+           entity_id, profile_md, source_fact_ids, fact_count, version, model, built_at, updated_at
+         ) VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+         ON CONFLICT(entity_id) DO UPDATE SET
+           profile_md = excluded.profile_md,
+           source_fact_ids = excluded.source_fact_ids,
+           fact_count = excluded.fact_count,
+           version = entity_profiles.version + 1,
+           model = excluded.model,
+           built_at = excluded.built_at,
+           updated_at = excluded.updated_at
+         RETURNING version`
+      )
+      .get(
+        input.entityId,
+        input.profileMd,
+        JSON.stringify(input.sourceFactIds),
+        input.factCount,
+        input.model,
+        ts,
+        ts
+      ) as { version: number };
+
+    db.prepare(
+      `INSERT INTO entity_profile_cursors (entity_id, last_fact_count)
+       VALUES (?, ?)
+       ON CONFLICT(entity_id) DO UPDATE SET last_fact_count = excluded.last_fact_count`
+    ).run(input.entityId, input.factCount);
+
+    return row.version;
+  });
+  return run();
+}
+
 /** Sets the per-fact governance subject (the one entity a fact is ABOUT). */
 export function setMemorySubject(
   db: Database.Database,

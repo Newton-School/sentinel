@@ -31,7 +31,11 @@ import {
 const log = createLogger("anthropic-client");
 
 const MESSAGES_URL = "https://api.anthropic.com/v1/messages";
-const MODEL = "claude-haiku-4-5";
+/** Default extraction model. */
+export const HAIKU_MODEL = "claude-haiku-4-5";
+/** Higher-quality model for consolidation of high-value (root) entities. */
+export const SONNET_MODEL = "claude-sonnet-4-6";
+const MODEL = HAIKU_MODEL;
 const DEFAULT_MAX_TOKENS = 1024;
 const TIMEOUT_MS = 20_000;
 const RETRIES = 2;
@@ -74,6 +78,8 @@ export interface ExtractJsonOptions {
   user: string;
   /** Plain JSON Schema object for structured outputs. */
   schema: Record<string, unknown>;
+  /** Model id override (defaults to Haiku). Use SONNET_MODEL for richer synthesis. */
+  model?: string;
   maxTokens?: number;
   /** API key. Without one the call is a logged no-op returning null. */
   apiKey?: string;
@@ -96,7 +102,7 @@ function postBody(
   withStructuredOutput: boolean
 ): MessagesApiBody {
   const body: MessagesApiBody = {
-    model: MODEL,
+    model: opts.model ?? MODEL,
     max_tokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS,
     system: withStructuredOutput
       ? opts.system
