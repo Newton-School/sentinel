@@ -139,6 +139,7 @@ export function buildExtractionSystemPrompt(input: {
     "",
     "Every fact needs a verbatim evidence_quote copied character-for-character from the content.",
     "Resolve pronouns to the people or things they refer to, and resolve relative dates to absolute dates using today's date.",
+    'Populate "entities" with the canonical names of EVERY person, team, project, product, or company the fact is about (e.g. ["Priya Nair", "placements team"]). Use [] only when the fact names none.',
     "Translate Hinglish to plain business English, including both synonym forms where relevant.",
     'Return {"facts":[]} when nothing qualifies.',
   ];

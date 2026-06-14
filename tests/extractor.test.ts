@@ -108,6 +108,8 @@ describe("extractor.buildExtractionSystemPrompt", () => {
     expect(prompt).toMatch(/medical/i);
     // Verbatim evidence requirement.
     expect(prompt).toMatch(/verbatim evidence_quote/i);
+    // Entities-population requirement (so the company-brain graph can link).
+    expect(prompt).toMatch(/Populate "entities"/);
     // Pronoun / relative-date resolution with today's date provided.
     expect(prompt).toMatch(/pronouns/i);
     expect(prompt).toContain(new Date().toISOString().slice(0, 10));
