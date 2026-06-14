@@ -36,16 +36,19 @@ function main(): void {
   let totalScanned = 0;
   let totalLinked = 0;
   let batches = 0;
-  // Each pass only sees rows still missing links, so once a pass scans 0 the
-  // backfill is complete.
+  let afterId = 0;
+  // Page by the id cursor so the drain advances past facts that don't resolve
+  // to a link (otherwise they'd be re-scanned forever). Done when a page is
+  // empty.
   for (; batches < maxBatches; batches++) {
-    const { scanned, linked } = backfillEntityLinks(db, { limit: batch });
+    const { scanned, linked, maxId } = backfillEntityLinks(db, { limit: batch, afterId });
     totalScanned += scanned;
     totalLinked += linked;
     process.stdout.write(
       `batch ${batches + 1}: scanned=${scanned} linked=${linked}\n`
     );
     if (scanned === 0) break;
+    afterId = maxId;
   }
 
   process.stdout.write(
