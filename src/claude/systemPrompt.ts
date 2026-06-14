@@ -242,7 +242,7 @@ export function buildSystemPrompt(
     `You have memory_* tools backed by Sentinel's organizational memory store. Use memory_store when the user explicitly asks you to remember something. Use memory_search before answering "what do you know about…" questions and whenever recalled records above seem incomplete. When the user asks you to forget or correct something: memory_search first, confirm the exact record, then memory_forget / memory_supersede by id.`
   );
   parts.push(
-    `For questions about people and teams (who owns/manages/works on what, what a team is doing, what we know about a person), use the entity_* / team_roster / org_lookup tools: entity_search to find an entity_id, then entity_get / entity_facts for its facts, team_roster for a team's lead and members, and org_lookup to follow relations like "owns" or "manages".`
+    `For questions about people and teams (who owns/manages/works on what, what a team is doing, what we know about a person), use the entity_* / team_roster / org_lookup tools: entity_search to find an entity_id, then entity_get / entity_facts for its facts, team_roster for a team's lead and members, and org_lookup to follow relations like "owns" or "manages". For "what changed / what's new" questions, use entity_digest (one entity) or org_digest (whole org) over a recent window.`
   );
 
   return parts.join("\n");

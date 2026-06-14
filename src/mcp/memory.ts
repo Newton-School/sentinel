@@ -37,7 +37,10 @@ import { rankMemories, sanitizeFtsQuery } from "../memory/rank.js";
 import type { EntityRelation } from "../memory/entitySql.js";
 import type { MemoryCategory, MemoryRow } from "../memory/types.js";
 import { canView, viewerScopeFromEnv } from "../access/scope.js";
+import { entityDigest, orgDigest } from "../memory/digest.js";
 import { assertEnv } from "./requireEnv.js";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Validate required env up front so a misconfigured server fails with a clear
 // named message instead of opening a database at path `undefined`.
@@ -501,6 +504,34 @@ server.tool(
         })),
       });
     })
+);
+
+// Tool: "what changed about this entity recently"
+server.tool(
+  "entity_digest",
+  "Summarize what changed about a person/team recently — the facts linked to the entity within the last N days (newest first). Use for \"what's new with <entity> this week\". Excludes sensitive facts.",
+  {
+    entity_id: z.number().describe("Entity id (from entity_search)"),
+    days: z.number().default(7).describe("Look-back window in days (default: 7)"),
+  },
+  async ({ entity_id, days }) =>
+    guardedEntity(() => {
+      const d = entityDigest(db, entity_id, Date.now() - days * DAY_MS, viewer ?? undefined);
+      if (!d) return textResult(`entity ${entity_id} not found`);
+      return jsonResult(d);
+    })
+);
+
+// Tool: "what changed across the org recently"
+server.tool(
+  "org_digest",
+  "Summarize what changed across the whole org recently — active facts created within the last N days (newest first), annotated with their subject entity. Use for \"what's new this week\". Excludes sensitive facts.",
+  {
+    days: z.number().default(7).describe("Look-back window in days (default: 7)"),
+    limit: z.number().default(30).describe("Maximum facts (default: 30)"),
+  },
+  async ({ days, limit }) =>
+    guardedEntity(() => jsonResult(orgDigest(db, Date.now() - days * DAY_MS, viewer ?? undefined, limit)))
 );
 
 // Tool: right-to-be-forgotten for an entity
