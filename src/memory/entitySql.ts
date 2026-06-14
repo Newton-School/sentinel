@@ -462,21 +462,74 @@ export function upsertEntityProfile(db: Database.Database, input: UpsertProfileI
 }
 
 /**
- * Right-to-be-forgotten: redacts (forgets) all ACTIVE memories whose governance
- * subject is `entityId`. Returns the count forgotten. Pair with
- * {@link addEntityExclusion} so future facts about the entity are dropped.
+ * Right-to-be-forgotten: redacts (forgets) every ACTIVE memory tied to
+ * `entityId`. Returns the count forgotten. Pair with {@link addEntityExclusion}
+ * so future facts about the entity are dropped.
+ *
+ * Subject-attribution alone is NOT enough: a fact can name a person in its text
+ * yet carry no `subject_entity_id` (resolution never cleared the floor) and no
+ * join-table link, leaving the forgotten name FTS-searchable. So three sources
+ * are unioned:
+ *  1. governance subject (`subject_entity_id`),
+ *  2. any `memory_entities` link (subject/owner/mention/about),
+ *  3. the entity's canonical name or an alias appearing verbatim in the fact
+ *     text (normalized substring).
+ *
+ * (3) is gated to phrases of ≥2 tokens so a generic single-token entity name
+ * ("Drive", "App") can't collide with unrelated facts. Forgetting is reversible
+ * (a `forgotten` tombstone, not a delete), so over-redacting an incidental
+ * mention is the safe failure mode — it under-shares, never widens exposure.
  */
 export function forgetEntityMemories(
   db: Database.Database,
   entityId: number,
   now: Date = new Date()
 ): number {
+  const ids = new Set<number>();
+
+  // (1) governance subject
+  for (const r of db
+    .prepare(`SELECT id FROM memories WHERE subject_entity_id = ? AND status = 'active'`)
+    .all(entityId) as Array<{ id: number }>) {
+    ids.add(r.id);
+  }
+
+  // (2) any join-table link to this entity
+  for (const r of db
+    .prepare(
+      `SELECT m.id AS id FROM memories m
+       JOIN memory_entities me ON me.memory_id = m.id
+       WHERE me.entity_id = ? AND m.status = 'active'`
+    )
+    .all(entityId) as Array<{ id: number }>) {
+    ids.add(r.id);
+  }
+
+  // (3) name/alias appearing verbatim in active fact text (the keyword leak).
+  const entity = getEntityById(db, entityId);
+  if (entity) {
+    const phrases = [entity.canonicalName, ...entity.aliases]
+      .map((p) => normalizeForHash(p))
+      .filter((p) => p.split(" ").filter(Boolean).length >= 2);
+    if (phrases.length > 0) {
+      for (const r of db
+        .prepare(`SELECT id, text FROM memories WHERE status = 'active'`)
+        .all() as Array<{ id: number; text: string }>) {
+        const norm = normalizeForHash(r.text);
+        if (phrases.some((p) => norm.includes(p))) ids.add(r.id);
+      }
+    }
+  }
+
+  if (ids.size === 0) return 0;
+  const list = [...ids];
+  const placeholders = list.map(() => "?").join(",");
   return db
     .prepare(
       `UPDATE memories SET status = 'forgotten', updated_at = ?
-       WHERE subject_entity_id = ? AND status = 'active'`
+       WHERE id IN (${placeholders}) AND status = 'active'`
     )
-    .run(now.toISOString(), entityId).changes;
+    .run(now.toISOString(), ...list).changes;
 }
 
 /** Records (or refreshes) a do-not-store exclusion for an entity. */

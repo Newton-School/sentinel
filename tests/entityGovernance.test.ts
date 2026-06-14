@@ -56,6 +56,36 @@ describe("entity exclusions (right-to-be-forgotten)", () => {
     expect(entitySql.isEntityExcluded(db, person.id)).toBe(true);
   });
 
+  it("forgetEntityMemories ALSO redacts active facts that name the entity in text but were never subject-linked (closes the keyword-search leak)", async () => {
+    const { db, entitySql } = ctx;
+    const person = entitySql.createEntity(db, { type: "person", canonicalName: "Priya Nair" });
+    // (a) subject-linked — caught by the original behavior
+    const linked = insertMemory(db, "Priya Nair owns the admissions funnel", { subject: person.id });
+    // (b) NOT subject-linked, NOT in memory_entities — only her name in the text.
+    //     This is the leak: forgetting the entity left this active + FTS-searchable.
+    const orphan = insertMemory(db, "Priya Nair is now mentoring the new admissions cohort");
+    // (c) a fact about a different person — must stay active
+    const other = insertMemory(db, "Rahul Sharma leads the placements team");
+
+    const count = entitySql.forgetEntityMemories(db, person.id);
+
+    const status = (id: number) => (db.prepare("SELECT status FROM memories WHERE id=?").get(id) as { status: string }).status;
+    expect(status(linked)).toBe("forgotten");
+    expect(status(orphan)).toBe("forgotten"); // the keyword-search leak this fix closes
+    expect(status(other)).toBe("active");
+    expect(count).toBe(2);
+  });
+
+  it("does NOT text-redact on a generic single-token entity name (avoids collisions)", async () => {
+    const { db, entitySql } = ctx;
+    const generic = entitySql.createEntity(db, { type: "project", canonicalName: "Drive" });
+    const unrelated = insertMemory(db, "The referral drive starts next week");
+    const count = entitySql.forgetEntityMemories(db, generic.id);
+    const status = (db.prepare("SELECT status FROM memories WHERE id=?").get(unrelated) as { status: string }).status;
+    expect(status).toBe("active"); // single generic token must not over-match
+    expect(count).toBe(0);
+  });
+
   it("linkFactEntities skips an excluded entity (no link, no subject)", async () => {
     const { db, entitySql, entityLink } = ctx;
     const person = entitySql.createEntity(db, { type: "person", canonicalName: "Rahul Sharma" });
