@@ -530,6 +530,40 @@ describe("memory MCP server registration", () => {
     expect(dbPath).toBe(resolve("./sentinel.db"));
   });
 
+  it("embeds the per-request viewer scope in the memory server env", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: undefined, METABASE_USERNAME: undefined, METABASE_PASSWORD: undefined,
+        GITHUB_TOKEN: undefined, NOTION_API_KEY: undefined, SLACK_USER_TOKEN: undefined,
+        GOOGLE_CLIENT_ID: undefined, GOOGLE_CLIENT_SECRET: undefined, GOOGLE_REFRESH_TOKEN: undefined,
+        SQLITE_DB_PATH: "./sentinel.db",
+      },
+    }));
+    const { getMcpConfigPath } = await import("../src/claude/mcpConfig.js");
+    const { buildViewerScope } = await import("../src/access/scope.js");
+    const viewer = buildViewerScope("U1", { founderUserIds: ["U1"], teamIds: [5] });
+    const configPath = getMcpConfigPath({ viewer });
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+    const env = config.mcpServers.memory.env;
+    expect(env.MEMORY_VIEWER_ROLE).toBe("founder");
+    expect(env.MEMORY_VIEWER_USER_ID).toBe("U1");
+    expect(env.MEMORY_VIEWER_TEAM_IDS).toBe("5");
+  });
+
+  it("omits viewer env when no viewer is passed (warm-up / pre-scoped)", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: undefined, METABASE_USERNAME: undefined, METABASE_PASSWORD: undefined,
+        GITHUB_TOKEN: undefined, NOTION_API_KEY: undefined, SLACK_USER_TOKEN: undefined,
+        GOOGLE_CLIENT_ID: undefined, GOOGLE_CLIENT_SECRET: undefined, GOOGLE_REFRESH_TOKEN: undefined,
+        SQLITE_DB_PATH: "./sentinel.db",
+      },
+    }));
+    const { getMcpConfigPath } = await import("../src/claude/mcpConfig.js");
+    const config = JSON.parse(readFileSync(getMcpConfigPath(), "utf-8"));
+    expect(config.mcpServers.memory.env).not.toHaveProperty("MEMORY_VIEWER_ROLE");
+  });
+
   it("never reports Memory in getUnavailableSources (it is never unavailable)", async () => {
     vi.doMock("../src/config.js", () => ({
       config: {

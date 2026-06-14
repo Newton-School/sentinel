@@ -98,10 +98,12 @@ async function handleEvent(
     // entity-aware bundle (query facts + facts about entities named in the
     // query); otherwise the flat keyword recall. Best-effort: a memory failure
     // must NEVER fail the reply.
+    // The asker's scope — used for recall filtering AND threaded into the
+    // memory MCP server (so canView applies at the MCP edge too).
+    const viewer = currentViewerScope(envelope.userId);
     let memories: RankedMemory[] = [];
     let bundle: RetrievalBundle | undefined;
     try {
-      const viewer = currentViewerScope(envelope.userId);
       if (isEntityGraphEnabled()) {
         // Hybrid recall: embed the query for the semantic pass when enabled
         // (best-effort — a null vector falls back to BM25-only inside).
@@ -134,7 +136,7 @@ async function handleEvent(
       "Processing request"
     );
 
-    const response = await runClaude(systemPrompt, envelope.text, threadContext);
+    const response = await runClaude(systemPrompt, envelope.text, threadContext, viewer);
 
     // Post response (convert Markdown to Slack mrkdwn)
     const slackText = markdownToSlackMrkdwn(response.text);
