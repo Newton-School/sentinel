@@ -461,6 +461,47 @@ export function upsertEntityProfile(db: Database.Database, input: UpsertProfileI
   return run();
 }
 
+/**
+ * Right-to-be-forgotten: redacts (forgets) all ACTIVE memories whose governance
+ * subject is `entityId`. Returns the count forgotten. Pair with
+ * {@link addEntityExclusion} so future facts about the entity are dropped.
+ */
+export function forgetEntityMemories(
+  db: Database.Database,
+  entityId: number,
+  now: Date = new Date()
+): number {
+  return db
+    .prepare(
+      `UPDATE memories SET status = 'forgotten', updated_at = ?
+       WHERE subject_entity_id = ? AND status = 'active'`
+    )
+    .run(now.toISOString(), entityId).changes;
+}
+
+/** Records (or refreshes) a do-not-store exclusion for an entity. */
+export function addEntityExclusion(
+  db: Database.Database,
+  entityId: number,
+  reason?: string,
+  createdBy?: string,
+  now: Date = new Date()
+): void {
+  db.prepare(
+    `INSERT INTO entity_exclusions (entity_id, reason, created_by, created_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(entity_id) DO UPDATE SET
+       reason = excluded.reason, created_by = excluded.created_by, created_at = excluded.created_at`
+  ).run(entityId, reason ?? null, createdBy ?? null, now.toISOString());
+}
+
+/** True when the entity is on the do-not-store exclusion list. */
+export function isEntityExcluded(db: Database.Database, entityId: number): boolean {
+  return (
+    db.prepare(`SELECT 1 FROM entity_exclusions WHERE entity_id = ?`).get(entityId) !== undefined
+  );
+}
+
 /** Sets the per-fact governance subject (the one entity a fact is ABOUT). */
 export function setMemorySubject(
   db: Database.Database,

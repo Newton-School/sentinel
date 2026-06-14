@@ -27,6 +27,7 @@ import {
   addAlias,
   createEntity,
   getResolutionCandidates,
+  isEntityExcluded,
   linkMemoryEntity,
   setMemorySubject,
   upsertEdge,
@@ -112,6 +113,9 @@ export function linkFactEntities(
       recordEntityResolution("ambiguous");
       continue; // ambiguous / ungated → record nothing
     }
+
+    // Right-to-be-forgotten: never attribute a fact to an excluded entity.
+    if (isEntityExcluded(db, entityId)) continue;
 
     if (decision.match === "fuzzy" && decision.newAlias) {
       addAlias(db, entityId, decision.newAlias, now);

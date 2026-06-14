@@ -78,6 +78,22 @@ function candidateVisible(c: MemoryRow, viewer: ViewerScope | string): boolean {
 }
 
 /**
+ * Sensitive facts (HR/comp/legal/medical) are excluded from AMBIENT recall —
+ * the system-prompt injection that happens on every query — unless
+ * MEMORY_SENSITIVE_RECALL=on. Founders can still retrieve them deliberately via
+ * the memory_search MCP tool's include_sensitive flag (audited, separate path).
+ */
+function ambientAllowsSensitive(): boolean {
+  return process.env.MEMORY_SENSITIVE_RECALL === "on";
+}
+
+/** Combined recall filter: ACL scope AND the ambient sensitivity gate. */
+function recallVisible(c: MemoryRow, viewer: ViewerScope | string): boolean {
+  if (!ambientAllowsSensitive() && c.sensitivity === "sensitive") return false;
+  return candidateVisible(c, viewer);
+}
+
+/**
  * Retrieves the top-k organizational memories relevant to `query`, filtered
  * to what `viewer` may see via the canView ACL seam. A legacy string viewer
  * (the default) preserves the pre-brain exact-visibility filter.
@@ -102,7 +118,7 @@ export function searchMemories(
     const ftsQuery = sanitizeFtsQuery(query);
     if (ftsQuery) {
       const candidates = searchCandidates(db, ftsQuery).filter((c) =>
-        candidateVisible(c, viewer)
+        recallVisible(c, viewer)
       );
       results = rankMemories(candidates, new Date(), k);
     }
@@ -145,11 +161,11 @@ export function assembleRetrieval(
     // supplied, else BM25-only. Both scope-filtered via canView.
     const ftsQuery = sanitizeFtsQuery(query);
     const ftsCandidates = ftsQuery
-      ? searchCandidates(db, ftsQuery).filter((c) => candidateVisible(c, viewer))
+      ? searchCandidates(db, ftsQuery).filter((c) => recallVisible(c, viewer))
       : [];
     if (queryVec) {
       const semantic = semanticCandidates(db, queryVec).filter((c) =>
-        candidateVisible(c, viewer)
+        recallVisible(c, viewer)
       );
       queryFacts = rankHybrid(fuseCandidates(ftsCandidates, semantic), now, 6);
     } else {
@@ -176,7 +192,7 @@ export function assembleRetrieval(
       }
       const ids = getEntityMemoryIds(db, m.entityId);
       for (const row of getMemoriesByIds(db, ids)) {
-        if (seen.has(row.id) || !candidateVisible(row, viewer)) continue;
+        if (seen.has(row.id) || !recallVisible(row, viewer)) continue;
         seen.add(row.id);
         entityCandidates.push({ ...row, bm: -1 });
       }
