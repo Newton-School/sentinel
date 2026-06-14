@@ -7,6 +7,8 @@ import { fetchThreadContext } from "./slack/threadContext.js";
 import { getOrCreatePersona, getTraits } from "./persona/store.js";
 import { searchMemories, assembleRetrieval, currentViewerScope } from "./memory/memoryStore.js";
 import { isEntityGraphEnabled } from "./memory/entityLink.js";
+import { isEmbeddingsEnabled } from "./memory/embeddingBackfill.js";
+import { embedText } from "./memory/embedder.js";
 import { extractFromConversation } from "./memory/conversationHook.js";
 import { buildSystemPrompt } from "./claude/systemPrompt.js";
 import type { RankedMemory, RetrievalBundle } from "./memory/types.js";
@@ -101,7 +103,17 @@ async function handleEvent(
     try {
       const viewer = currentViewerScope(envelope.userId);
       if (isEntityGraphEnabled()) {
-        bundle = assembleRetrieval(envelope.text, envelope.userId, viewer);
+        // Hybrid recall: embed the query for the semantic pass when enabled
+        // (best-effort — a null vector falls back to BM25-only inside).
+        let queryVec: Float32Array | undefined;
+        if (isEmbeddingsEnabled()) {
+          queryVec =
+            (await embedText(envelope.text, {
+              apiKey: config.MEMORY_EMBEDDING_API_KEY,
+              model: config.MEMORY_EMBEDDING_MODEL,
+            })) ?? undefined;
+        }
+        bundle = assembleRetrieval(envelope.text, envelope.userId, viewer, queryVec);
       } else {
         memories = searchMemories(envelope.text, 6, viewer);
       }

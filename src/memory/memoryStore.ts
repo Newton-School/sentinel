@@ -20,6 +20,7 @@ import {
   recentMemories as sqlRecentMemories,
   searchCandidates,
   getMemoriesByIds,
+  semanticCandidates,
 } from "./memorySql.js";
 import {
   getEntityMemoryIds,
@@ -28,7 +29,7 @@ import {
   type MentionedEntity,
 } from "./entitySql.js";
 import type { EntityDossierRef } from "./types.js";
-import { rankMemories, sanitizeFtsQuery } from "./rank.js";
+import { fuseCandidates, rankHybrid, rankMemories, sanitizeFtsQuery } from "./rank.js";
 import { isEntityGraphEnabled, linkFactEntities } from "./entityLink.js";
 import { config } from "../config.js";
 import { buildViewerScope, canView, type ViewerScope } from "../access/scope.js";
@@ -129,7 +130,8 @@ export function searchMemories(
 export function assembleRetrieval(
   query: string,
   _askerUserId: string,
-  viewer: ViewerScope | string = "founders"
+  viewer: ViewerScope | string = "founders",
+  queryVec?: Float32Array
 ): RetrievalBundle {
   let queryFacts: RankedMemory[] = [];
   let entityFacts: RankedMemory[] = [];
@@ -139,12 +141,19 @@ export function assembleRetrieval(
     const db = getDb();
     const now = new Date();
 
+    // Query-text facts: hybrid (BM25 ⊕ cosine) when a query embedding is
+    // supplied, else BM25-only. Both scope-filtered via canView.
     const ftsQuery = sanitizeFtsQuery(query);
-    if (ftsQuery) {
-      const candidates = searchCandidates(db, ftsQuery).filter((c) =>
+    const ftsCandidates = ftsQuery
+      ? searchCandidates(db, ftsQuery).filter((c) => candidateVisible(c, viewer))
+      : [];
+    if (queryVec) {
+      const semantic = semanticCandidates(db, queryVec).filter((c) =>
         candidateVisible(c, viewer)
       );
-      queryFacts = rankMemories(candidates, now, 6);
+      queryFacts = rankHybrid(fuseCandidates(ftsCandidates, semantic), now, 6);
+    } else {
+      queryFacts = rankMemories(ftsCandidates, now, 6);
     }
 
     mentionedEntities = resolveQueryEntities(db, query, 3);
