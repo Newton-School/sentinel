@@ -293,6 +293,18 @@ export function supersedeMemory(
   return run();
 }
 
+/** Loads active memory rows by id (entity-linked-fact retrieval). */
+export function getMemoriesByIds(db: Database.Database, ids: number[]): MemoryRow[] {
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = db
+    .prepare(
+      `SELECT * FROM memories WHERE status = 'active' AND id IN (${placeholders})`
+    )
+    .all(...ids) as MemoryDbRow[];
+  return rows.map(mapMemoryRow);
+}
+
 /** Most recently created active memories, newest first. */
 export function recentMemories(db: Database.Database, limit = 20): MemoryRow[] {
   const rows = db

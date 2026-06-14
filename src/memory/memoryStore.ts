@@ -19,7 +19,13 @@ import {
   supersedeMemory as sqlSupersedeMemory,
   recentMemories as sqlRecentMemories,
   searchCandidates,
+  getMemoriesByIds,
 } from "./memorySql.js";
+import {
+  getEntityMemoryIds,
+  resolveQueryEntities,
+  type MentionedEntity,
+} from "./entitySql.js";
 import { rankMemories, sanitizeFtsQuery } from "./rank.js";
 import { isEntityGraphEnabled, linkFactEntities } from "./entityLink.js";
 import { config } from "../config.js";
@@ -30,6 +36,7 @@ import type {
   MemoryRow,
   NewFact,
   RankedMemory,
+  RetrievalBundle,
 } from "./types.js";
 
 const log = createLogger("memory-store");
@@ -54,7 +61,7 @@ export function currentViewerScope(userId: string): ViewerScope {
  * original exact-visibility filter (byte-for-byte backward compatible); a
  * ViewerScope routes through the canView ACL predicate.
  */
-function candidateVisible(c: MemoryCandidate, viewer: ViewerScope | string): boolean {
+function candidateVisible(c: MemoryRow, viewer: ViewerScope | string): boolean {
   if (typeof viewer === "string") return c.visibility === viewer;
   return canView(
     {
@@ -104,6 +111,69 @@ export function searchMemories(
   if (results.length === 0) recordMemoryRetrievalEmpty();
   else recordMemoryInjected(results.length);
   return results;
+}
+
+/**
+ * Entity-aware retrieval: assembles a {@link RetrievalBundle} from two sources —
+ * (1) the keyword/text search (today's recall), and (2) facts linked to
+ * entities named in the query, deduped against the text-search results. Both
+ * are scope-filtered via the canView seam.
+ *
+ * Failure-proof like searchMemories: any internal error returns a well-formed
+ * empty bundle — a memory failure must never fail a Slack reply. Each entity
+ * fact is ranked with a constant relevance term (bm = -1, the LIKE-fallback
+ * convention) so recency/category/confidence order them.
+ */
+export function assembleRetrieval(
+  query: string,
+  _askerUserId: string,
+  viewer: ViewerScope | string = "founders"
+): RetrievalBundle {
+  let queryFacts: RankedMemory[] = [];
+  let entityFacts: RankedMemory[] = [];
+  let mentionedEntities: MentionedEntity[] = [];
+  try {
+    const db = getDb();
+    const now = new Date();
+
+    const ftsQuery = sanitizeFtsQuery(query);
+    if (ftsQuery) {
+      const candidates = searchCandidates(db, ftsQuery).filter((c) =>
+        candidateVisible(c, viewer)
+      );
+      queryFacts = rankMemories(candidates, now, 6);
+    }
+
+    mentionedEntities = resolveQueryEntities(db, query, 3);
+    const seen = new Set<number>(queryFacts.map((f) => f.id));
+    const entityCandidates: MemoryCandidate[] = [];
+    for (const m of mentionedEntities) {
+      const ids = getEntityMemoryIds(db, m.entityId);
+      for (const row of getMemoriesByIds(db, ids)) {
+        if (seen.has(row.id) || !candidateVisible(row, viewer)) continue;
+        seen.add(row.id);
+        entityCandidates.push({ ...row, bm: -1 });
+      }
+    }
+    entityFacts = rankMemories(entityCandidates, now, 8);
+  } catch (err) {
+    log.warn({ err }, "Entity-aware retrieval failed (non-fatal) — empty bundle");
+    return { queryFacts: [], entityFacts: [], mentionedEntities: [] };
+  }
+
+  const total = queryFacts.length + entityFacts.length;
+  if (total === 0) recordMemoryRetrievalEmpty();
+  else recordMemoryInjected(total);
+
+  return {
+    queryFacts,
+    entityFacts,
+    mentionedEntities: mentionedEntities.map((m) => ({
+      entityId: m.entityId,
+      name: m.name,
+      type: m.type,
+    })),
+  };
 }
 
 // Thin getDb-bound wrappers (used by the extraction/ingestion PRs).

@@ -61,6 +61,25 @@ export interface RankedMemory extends MemoryCandidate {
   score: number;
 }
 
+/** An entity named in a query (company-brain entity-aware retrieval). */
+export interface MentionedEntityRef {
+  entityId: number;
+  name: string;
+  type: string;
+}
+
+/**
+ * The multi-source result of entity-aware retrieval. `queryFacts` is the
+ * keyword/hybrid text search (today's behaviour); `entityFacts` are facts
+ * linked to entities named in the query, deduped against `queryFacts`.
+ * Per-entity dossiers + asker context are added in Phase C.
+ */
+export interface RetrievalBundle {
+  queryFacts: RankedMemory[];
+  entityFacts: RankedMemory[];
+  mentionedEntities: MentionedEntityRef[];
+}
+
 /** Input shape for inserting a new fact. */
 export interface NewFact {
   /** Fact text; hard-capped at 300 chars (longer text is truncated). */
