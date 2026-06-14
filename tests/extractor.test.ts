@@ -154,6 +154,33 @@ describe("extractor.extractFacts", () => {
     expect(facts[0].sensitivity).toBe("normal");
   });
 
+  it("preserves an extractor-declared subject (the entity the fact is about)", async () => {
+    const { extractFacts } = await importExtractor();
+    const fetchImpl = vi.fn(async () =>
+      llmFacts({
+        facts: [
+          validFact({
+            text: "Priya owns the pricing page revamp.",
+            category: "owner",
+            entities: ["Priya", "pricing page revamp"],
+            subject: "Priya",
+            evidence_quote: "Priya owns the pricing page revamp",
+          }),
+        ],
+      })
+    );
+    const facts = await extractFacts(baseInput(fetchImpl));
+    expect(facts).toHaveLength(1);
+    expect(facts[0].subject).toBe("Priya");
+  });
+
+  it("defaults subject to undefined when the model omits it", async () => {
+    const { extractFacts } = await importExtractor();
+    const fetchImpl = vi.fn(async () => llmFacts({ facts: [validFact()] }));
+    const facts = await extractFacts(baseInput(fetchImpl));
+    expect(facts[0].subject).toBeUndefined();
+  });
+
   it("drops an invalid fact but keeps valid siblings", async () => {
     const { extractFacts } = await importExtractor();
     const fetchImpl = vi.fn(async () =>
