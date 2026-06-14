@@ -17,7 +17,8 @@
  */
 
 import type Database from "better-sqlite3";
-import type { NewFact } from "./types.js";
+import type { MemoryCategory, MemorySourceType, NewFact } from "./types.js";
+import { recordEntityResolution } from "../metrics/registry.js";
 import {
   resolveEntity,
   type EntityType,
@@ -89,7 +90,9 @@ export function linkFactEntities(
     const decision = resolveEntity({ rawName, type: hint }, candidates);
 
     let entityId = decision.entityId;
-    if (entityId === undefined && decision.shouldCreate) {
+    if (entityId !== undefined) {
+      recordEntityResolution("matched");
+    } else if (decision.shouldCreate) {
       entityId = createEntity(db, {
         type: hint,
         canonicalName: rawName,
@@ -97,8 +100,11 @@ export function linkFactEntities(
         sourceRef: fact.sourceRef,
         now,
       }).id;
+      recordEntityResolution("created");
+    } else {
+      recordEntityResolution("ambiguous");
+      continue; // ambiguous / ungated → record nothing
     }
-    if (entityId === undefined) continue; // ambiguous / ungated → record nothing
 
     if (decision.match === "fuzzy" && decision.newAlias) {
       addAlias(db, entityId, decision.newAlias, now);
@@ -120,4 +126,71 @@ export function linkFactEntities(
   if (best) setMemorySubject(db, memoryId, best.id);
 
   return { linked: byEntity.size, subjectEntityId: best?.id ?? null };
+}
+
+interface BackfillRow {
+  id: number;
+  text: string;
+  category: MemoryCategory;
+  entities: string | null;
+  source_type: MemorySourceType;
+  source_ref: string | null;
+}
+
+export interface BackfillResult {
+  /** Active, entity-bearing memories examined this run. */
+  scanned: number;
+  /** Of those, how many produced at least one entity link. */
+  linked: number;
+}
+
+/**
+ * Re-runnable backfill: resolves+links the free-text `entities` of active
+ * memories that have no `memory_entities` links yet. Idempotent (the NOT
+ * EXISTS guard skips already-linked rows) and bounded by `limit` so a large
+ * history backfills over several runs. Used by the one-off backfill script and
+ * safe to re-run after a resolver/merge change to repair attributions.
+ */
+export function backfillEntityLinks(
+  db: Database.Database,
+  opts: { limit?: number; now?: Date } = {}
+): BackfillResult {
+  const limit = opts.limit ?? 500;
+  const now = opts.now ?? new Date();
+  const rows = db
+    .prepare(
+      `SELECT id, text, category, entities, source_type, source_ref
+       FROM memories m
+       WHERE m.status = 'active'
+         AND m.entities IS NOT NULL AND m.entities != '[]'
+         AND NOT EXISTS (SELECT 1 FROM memory_entities me WHERE me.memory_id = m.id)
+       ORDER BY m.id
+       LIMIT ?`
+    )
+    .all(limit) as BackfillRow[];
+
+  let linked = 0;
+  for (const r of rows) {
+    let entities: string[] = [];
+    try {
+      const parsed = JSON.parse(r.entities ?? "[]");
+      if (Array.isArray(parsed)) entities = parsed.filter((x) => typeof x === "string");
+    } catch {
+      continue; // malformed entities JSON — skip this row
+    }
+    const res = linkFactEntities(
+      db,
+      r.id,
+      {
+        text: r.text,
+        category: r.category,
+        entities,
+        sourceType: r.source_type,
+        sourceRef: r.source_ref ?? undefined,
+      },
+      now
+    );
+    if (res.linked > 0) linked++;
+  }
+  return { scanned: rows.length, linked };
 }
