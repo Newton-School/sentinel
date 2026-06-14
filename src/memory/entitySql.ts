@@ -640,6 +640,41 @@ export function upsertEdge(db: Database.Database, edge: UpsertEdgeInput): { id: 
   return { id: row.id, created: existing === undefined };
 }
 
+/**
+ * Withdraws one fact's support for an edge. Decrements `evidence_count`; when it
+ * reaches zero the edge has no surviving evidence, so it is retired
+ * (`status='superseded'`) and drops out of the active-only org queries. The
+ * inverse of {@link upsertEdge}'s increment — used when a fact is superseded or
+ * forgotten so a corrected ownership/role doesn't keep pointing at stale data.
+ * Returns 1 if an active edge was touched, else 0.
+ */
+export function retractEdge(
+  db: Database.Database,
+  srcId: number,
+  dstId: number,
+  relation: EntityRelation,
+  now: Date = new Date()
+): number {
+  const existing = db
+    .prepare(
+      `SELECT id, evidence_count FROM entity_edges
+       WHERE src_id = ? AND dst_id = ? AND relation = ? AND status = 'active'`
+    )
+    .get(srcId, dstId, relation) as { id: number; evidence_count: number } | undefined;
+  if (!existing) return 0;
+
+  if (existing.evidence_count <= 1) {
+    db.prepare(
+      `UPDATE entity_edges SET evidence_count = 0, status = 'superseded', updated_at = ? WHERE id = ?`
+    ).run(now.toISOString(), existing.id);
+  } else {
+    db.prepare(
+      `UPDATE entity_edges SET evidence_count = evidence_count - 1, updated_at = ? WHERE id = ?`
+    ).run(now.toISOString(), existing.id);
+  }
+  return 1;
+}
+
 interface EdgeDbRow {
   id: number;
   src_id: number;
