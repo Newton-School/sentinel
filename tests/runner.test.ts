@@ -381,10 +381,10 @@ describe("runClaude", () => {
       const promise = runClaude("sys", "msg");
       // Attach a rejection handler immediately so the rejection isn't
       // treated as unhandled when timers fire.
-      const assertion = expect(promise).rejects.toThrow(/timed out after 120000ms/);
+      const assertion = expect(promise).rejects.toThrow(/timed out after 180000ms/);
 
-      // Advance past the 120s timeout.
-      vi.advanceTimersByTime(120_000);
+      // Advance past the 180s timeout.
+      vi.advanceTimersByTime(180_000);
       await flush();
 
       expect(child.kill).toHaveBeenCalledWith("SIGTERM");
@@ -394,7 +394,7 @@ describe("runClaude", () => {
 
     it("clears the timeout timer on early close so kill is never fired on the exited process", async () => {
       // runner.ts clears the timeout timer in the close/error handlers, so once
-      // the process exits normally the still-pending 120s timer must NOT fire
+      // the process exits normally the still-pending 180s timer must NOT fire
       // (firing it would kill an already-dead PID and keep a dangling timer
       // holding the event loop open).
       vi.useFakeTimers();
@@ -409,7 +409,7 @@ describe("runClaude", () => {
       expect(child.kill).not.toHaveBeenCalled();
 
       // Advancing past the timeout must remain a no-op: the timer was cleared.
-      vi.advanceTimersByTime(120_000);
+      vi.advanceTimersByTime(180_000);
       await flush();
       expect(child.kill).not.toHaveBeenCalled();
     });
@@ -423,7 +423,7 @@ describe("runClaude", () => {
       child.emit("error", new Error("spawn boom"));
       await assertion;
 
-      vi.advanceTimersByTime(120_000);
+      vi.advanceTimersByTime(180_000);
       await flush();
       expect(child.kill).not.toHaveBeenCalled();
     });

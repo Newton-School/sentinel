@@ -7,7 +7,7 @@ import type { ClaudeResponse } from "../types/contracts.js";
 
 const log = createLogger("claude-runner");
 
-const TIMEOUT_MS = 120_000; // 2 minutes
+const TIMEOUT_MS = 180_000; // 3 minutes (headroom for multi-tool investigations)
 
 /**
  * Telemetry parsed out of the CLI's `--output-format json` payload. Everything

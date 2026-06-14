@@ -48,6 +48,11 @@ async function handleEvent(
   // Wall-clock start for the error-path metric (the success path uses the
   // CLI-measured response.durationMs instead).
   const requestStart = Date.now();
+  // Hoisted so the post-reply fact extraction in `finally` runs whether or not
+  // the answer succeeded — a timed-out/failed answer must still capture durable
+  // facts from the user's message.
+  let memories: RankedMemory[] = [];
+  let responseText = "";
   try {
     // Add :eyes: reaction
     try {
@@ -102,7 +107,6 @@ async function handleEvent(
     // The asker's scope — used for recall filtering AND threaded into the
     // memory MCP server (so canView applies at the MCP edge too).
     const viewer = currentViewerScope(envelope.userId);
-    let memories: RankedMemory[] = [];
     let bundle: RetrievalBundle | undefined;
     try {
       if (isEntityGraphEnabled()) {
@@ -138,6 +142,7 @@ async function handleEvent(
     );
 
     const response = await runClaude(systemPrompt, envelope.text, threadContext, viewer);
+    responseText = response.text ?? "";
 
     // Post response (convert Markdown to Slack mrkdwn; never post an empty
     // message — an empty/looped Claude result falls back to a notice).
@@ -173,17 +178,6 @@ async function handleEvent(
       queryText: envelope.text,
       responseText: response.text,
       responseDurationMs: response.durationMs,
-    });
-
-    // Fire-and-forget fact extraction from this exchange. User-turn-grounded:
-    // only `envelope.text` can evidence a fact; the bot's reply is context
-    // only. Never awaited, never throws — see conversationHook.ts.
-    extractFromConversation({
-      queryText: envelope.text,
-      responseText: response.text,
-      channelId: envelope.channelId,
-      threadTs: envelope.threadTs,
-      injectedMemories: memories.map((m) => m.text),
     });
 
     // Record ops metrics for /metrics (token/cost only present when the CLI
@@ -240,6 +234,17 @@ async function handleEvent(
       // Best effort error reporting
     }
   } finally {
+    // Fire-and-forget fact extraction from this exchange — runs on BOTH the
+    // success and failure paths (a timed-out answer must still capture durable
+    // facts). User-turn-grounded: only `envelope.text` can evidence a fact; the
+    // bot's reply is disambiguation context only. Never awaited, never throws.
+    extractFromConversation({
+      queryText: envelope.text,
+      responseText,
+      channelId: envelope.channelId,
+      threadTs: envelope.threadTs,
+      injectedMemories: memories.map((m) => m.text),
+    });
     activeRequests--;
   }
 }
