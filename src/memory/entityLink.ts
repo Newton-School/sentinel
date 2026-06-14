@@ -34,6 +34,7 @@ import {
   type MemoryEntityRole,
 } from "./entitySql.js";
 import { proposeEdgesForFact } from "./orgInfer.js";
+import { forgetMemory } from "./memorySql.js";
 
 /** Default confidence floor for setting subject_entity_id (privacy-safe). */
 export const DEFAULT_RESOLVE_MIN = 0.8;
@@ -76,6 +77,8 @@ export interface LinkResult {
   linked: number;
   /** The chosen governance subject, or null when none cleared the floor. */
   subjectEntityId: number | null;
+  /** True when the fact was forgotten because its subject is an excluded entity. */
+  forgotten?: boolean;
 }
 
 /**
@@ -94,11 +97,16 @@ export function linkFactEntities(
   const subjectRole: MemoryEntityRole = fact.category === "owner" ? "owner" : "subject";
   const minSubject = resolveMin();
 
-  // Dedupe resolved entities by id, keeping the highest decision confidence;
-  // track each entity's type so org-edge inference can reason about it.
-  const byEntity = new Map<number, number>();
-  const typeById = new Map<number, EntityType>();
-  let best: { id: number; conf: number } | null = null;
+  // Resolve every named entity FIRST (tracking exclusion), so we can tell
+  // whether the fact's PRIMARY subject is a forgotten entity before linking.
+  interface Resolved {
+    id: number;
+    conf: number;
+    type: EntityType;
+    excluded: boolean;
+    alias?: string;
+  }
+  const resolvedById = new Map<number, Resolved>();
 
   for (const rawName of names) {
     const hint = guessEntityType(rawName);
@@ -125,40 +133,55 @@ export function linkFactEntities(
       continue; // ambiguous / ungated → record nothing
     }
 
-    // Right-to-be-forgotten: never attribute a fact to an excluded entity.
-    if (isEntityExcluded(db, entityId)) continue;
-
-    if (decision.match === "fuzzy" && decision.newAlias) {
-      addAlias(db, entityId, decision.newAlias, now);
-    }
-
-    typeById.set(entityId, entityType);
-    const prev = byEntity.get(entityId);
-    if (prev === undefined || decision.confidence > prev) {
-      byEntity.set(entityId, decision.confidence);
-    }
-    if (decision.confidence >= minSubject && (!best || decision.confidence > best.conf)) {
-      best = { id: entityId, conf: decision.confidence };
+    const prev = resolvedById.get(entityId);
+    if (prev === undefined || decision.confidence > prev.conf) {
+      resolvedById.set(entityId, {
+        id: entityId,
+        conf: decision.confidence,
+        type: entityType,
+        excluded: isEntityExcluded(db, entityId),
+        alias: decision.match === "fuzzy" ? decision.newAlias : undefined,
+      });
     }
   }
 
-  for (const [entityId, conf] of byEntity) {
-    const role: MemoryEntityRole = best && entityId === best.id ? subjectRole : "mention";
-    linkMemoryEntity(db, { memoryId, entityId, role, confidence: conf, now });
+  // The governance subject = highest-confidence resolved entity clearing the floor.
+  let subject: Resolved | null = null;
+  for (const r of resolvedById.values()) {
+    if (r.conf >= minSubject && (!subject || r.conf > subject.conf)) subject = r;
   }
-  if (best) setMemorySubject(db, memoryId, best.id);
 
-  // Derive org-graph edges from this fact (high-precision: owner facts with a
-  // confident subject only). Each fact contributes its signals exactly once —
-  // at insert OR via backfill (the backfill's NOT-EXISTS guard prevents both),
-  // so edge confidence never double-counts.
-  if (best) {
-    const others = [...byEntity.keys()]
-      .filter((id) => id !== best!.id)
-      .map((id) => ({ id, type: typeById.get(id) ?? "other" as EntityType }));
+  // Right-to-be-forgotten (text level): if the fact is ABOUT an excluded entity
+  // (it is that entity's subject), forget the whole fact — otherwise its text
+  // would stay keyword-searchable even though the entity was forgotten.
+  if (subject && subject.excluded) {
+    forgetMemory(db, memoryId, now);
+    return { linked: 0, subjectEntityId: null, forgotten: true };
+  }
+
+  // Link only NON-excluded entities. An excluded entity that is merely a minor
+  // mention (not the subject) is skipped, but the fact itself stays.
+  let linked = 0;
+  for (const r of resolvedById.values()) {
+    if (r.excluded) continue;
+    if (r.alias) addAlias(db, r.id, r.alias, now);
+    const role: MemoryEntityRole = subject && r.id === subject.id ? subjectRole : "mention";
+    linkMemoryEntity(db, { memoryId, entityId: r.id, role, confidence: r.conf, now });
+    linked++;
+  }
+  if (subject) setMemorySubject(db, memoryId, subject.id);
+
+  // Derive org-graph edges (subject is guaranteed non-excluded here). Each fact
+  // contributes its signals exactly once (insert OR backfill), so edge
+  // confidence never double-counts.
+  if (subject) {
+    const subjectId = subject.id;
+    const others = [...resolvedById.values()]
+      .filter((r) => r.id !== subjectId && !r.excluded)
+      .map((r) => ({ id: r.id, type: r.type }));
     const proposed = proposeEdgesForFact({
       category: fact.category,
-      subject: { id: best.id, type: typeById.get(best.id) ?? "person" },
+      subject: { id: subjectId, type: subject.type },
       others,
       assertedAt: fact.assertedAt,
     });
@@ -175,7 +198,7 @@ export function linkFactEntities(
     }
   }
 
-  return { linked: byEntity.size, subjectEntityId: best?.id ?? null };
+  return { linked, subjectEntityId: subject?.id ?? null };
 }
 
 interface BackfillRow {

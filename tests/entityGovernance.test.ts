@@ -69,6 +69,39 @@ describe("entity exclusions (right-to-be-forgotten)", () => {
     expect(res.subjectEntityId).toBeNull();
     expect(entitySql.getMemoryEntities(db, m)).toHaveLength(0);
   });
+
+  it("FORGETS a fact whose subject is an excluded entity (text-level forget)", async () => {
+    const { db, entitySql, entityLink } = ctx;
+    const person = entitySql.createEntity(db, { type: "person", canonicalName: "Rahul Sharma" });
+    entitySql.addEntityExclusion(db, person.id, "forgotten", "U1");
+    const m = insertMemory(db, "Rahul Sharma now owns the pricing project");
+    const res = entityLink.linkFactEntities(db, m, {
+      text: "Rahul Sharma now owns the pricing project", category: "owner",
+      entities: ["Rahul Sharma", "pricing project"], sourceType: "manual",
+    });
+    expect(res.forgotten).toBe(true);
+    const status = (db.prepare("SELECT status FROM memories WHERE id=?").get(m) as { status: string }).status;
+    expect(status).toBe("forgotten"); // its text would otherwise stay keyword-searchable
+  });
+
+  it("KEEPS a fact that only mentions an excluded entity (not its subject)", async () => {
+    const { db, entitySql, entityLink } = ctx;
+    const team = entitySql.createEntity(db, { type: "team", canonicalName: "Placements Team" });
+    const excluded = entitySql.createEntity(db, { type: "person", canonicalName: "Priya Nair" });
+    entitySql.addEntityExclusion(db, excluded.id, "forgotten", "U1");
+    const m = insertMemory(db, "The placements team shipped the new dashboard, thanks to Priya Nair");
+    const res = entityLink.linkFactEntities(db, m, {
+      text: "The placements team shipped the new dashboard, thanks to Priya Nair",
+      category: "owner", entities: ["Placements Team", "Priya Nair"], sourceType: "manual",
+    });
+    expect(res.forgotten).toBeUndefined(); // subject is the team, not the excluded person
+    const status = (db.prepare("SELECT status FROM memories WHERE id=?").get(m) as { status: string }).status;
+    expect(status).toBe("active");
+    // the excluded person is NOT linked, but the team is
+    const linkedNames = entitySql.getMemoryEntities(db, m).map((l) => l.entityId);
+    expect(linkedNames).toContain(team.id);
+    expect(linkedNames).not.toContain(excluded.id);
+  });
 });
 
 describe("ambient sensitive-recall gating", () => {
