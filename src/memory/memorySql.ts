@@ -366,6 +366,23 @@ export function getMemoriesByIds(db: Database.Database, ids: number[]): MemoryRo
   return rows.map(mapMemoryRow);
 }
 
+/** Active memories created on/after `sinceIso`, newest first (for digests). */
+export function recentFactsSince(
+  db: Database.Database,
+  sinceIso: string,
+  limit = 50
+): MemoryRow[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM memories
+       WHERE status = 'active' AND created_at >= ?
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`
+    )
+    .all(sinceIso, limit) as MemoryDbRow[];
+  return rows.map(mapMemoryRow);
+}
+
 /** Most recently created active memories, newest first. */
 export function recentMemories(db: Database.Database, limit = 20): MemoryRow[] {
   const rows = db
