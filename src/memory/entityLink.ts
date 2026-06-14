@@ -29,8 +29,10 @@ import {
   getResolutionCandidates,
   linkMemoryEntity,
   setMemorySubject,
+  upsertEdge,
   type MemoryEntityRole,
 } from "./entitySql.js";
+import { proposeEdgesForFact } from "./orgInfer.js";
 
 /** Default confidence floor for setting subject_entity_id (privacy-safe). */
 export const DEFAULT_RESOLVE_MIN = 0.8;
@@ -80,8 +82,10 @@ export function linkFactEntities(
   const subjectRole: MemoryEntityRole = fact.category === "owner" ? "owner" : "subject";
   const minSubject = resolveMin();
 
-  // Dedupe resolved entities by id, keeping the highest decision confidence.
+  // Dedupe resolved entities by id, keeping the highest decision confidence;
+  // track each entity's type so org-edge inference can reason about it.
   const byEntity = new Map<number, number>();
+  const typeById = new Map<number, EntityType>();
   let best: { id: number; conf: number } | null = null;
 
   for (const rawName of names) {
@@ -90,8 +94,11 @@ export function linkFactEntities(
     const decision = resolveEntity({ rawName, type: hint }, candidates);
 
     let entityId = decision.entityId;
+    let entityType = hint;
     if (entityId !== undefined) {
       recordEntityResolution("matched");
+      // Use the matched entity's actual type, not the name-guessed hint.
+      entityType = candidates.find((c) => c.id === entityId)?.type ?? hint;
     } else if (decision.shouldCreate) {
       entityId = createEntity(db, {
         type: hint,
@@ -110,6 +117,7 @@ export function linkFactEntities(
       addAlias(db, entityId, decision.newAlias, now);
     }
 
+    typeById.set(entityId, entityType);
     const prev = byEntity.get(entityId);
     if (prev === undefined || decision.confidence > prev) {
       byEntity.set(entityId, decision.confidence);
@@ -124,6 +132,33 @@ export function linkFactEntities(
     linkMemoryEntity(db, { memoryId, entityId, role, confidence: conf, now });
   }
   if (best) setMemorySubject(db, memoryId, best.id);
+
+  // Derive org-graph edges from this fact (high-precision: owner facts with a
+  // confident subject only). Each fact contributes its signals exactly once —
+  // at insert OR via backfill (the backfill's NOT-EXISTS guard prevents both),
+  // so edge confidence never double-counts.
+  if (best) {
+    const others = [...byEntity.keys()]
+      .filter((id) => id !== best!.id)
+      .map((id) => ({ id, type: typeById.get(id) ?? "other" as EntityType }));
+    const proposed = proposeEdgesForFact({
+      category: fact.category,
+      subject: { id: best.id, type: typeById.get(best.id) ?? "person" },
+      others,
+      assertedAt: fact.assertedAt,
+    });
+    for (const e of proposed) {
+      upsertEdge(db, {
+        srcId: e.srcId,
+        dstId: e.dstId,
+        relation: e.relation,
+        confidence: e.confidence,
+        provenance: e.provenance,
+        assertedAt: e.assertedAt,
+        now,
+      });
+    }
+  }
 
   return { linked: byEntity.size, subjectEntityId: best?.id ?? null };
 }
