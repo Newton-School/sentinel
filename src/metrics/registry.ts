@@ -47,7 +47,14 @@ export interface MemoryMetricsSnapshot {
   injected: number;
   /** Recall queries that returned zero memories. */
   retrievalEmpty: number;
+  /** Entity-resolution outcomes keyed by outcome (matched/created/ambiguous). */
+  entitiesResolved: Record<string, number>;
+  /** Total entity-resolution attempts across all outcomes. */
+  entitiesResolvedTotal: number;
 }
+
+/** A single entity-resolution outcome (see entityLink.linkFactEntities). */
+export type EntityResolutionOutcome = "matched" | "created" | "ambiguous";
 
 export interface MetricsSnapshot {
   totalRequests: number;
@@ -75,6 +82,7 @@ interface Counters {
   memoryExtractBudgetExhausted: number;
   memoryInjected: number;
   memoryRetrievalEmpty: number;
+  memoryEntitiesResolved: Map<EntityResolutionOutcome, number>;
 }
 
 function freshCounters(): Counters {
@@ -91,6 +99,7 @@ function freshCounters(): Counters {
     memoryExtractBudgetExhausted: 0,
     memoryInjected: 0,
     memoryRetrievalEmpty: 0,
+    memoryEntitiesResolved: new Map(),
   };
 }
 
@@ -147,6 +156,14 @@ export function recordMemoryRetrievalEmpty(): void {
   counters.memoryRetrievalEmpty += 1;
 }
 
+/** Record one entity-resolution attempt and its outcome (company brain). */
+export function recordEntityResolution(outcome: EntityResolutionOutcome): void {
+  counters.memoryEntitiesResolved.set(
+    outcome,
+    (counters.memoryEntitiesResolved.get(outcome) ?? 0) + 1
+  );
+}
+
 /** Read a plain-object copy of the current counters. */
 export function snapshot(): MetricsSnapshot {
   const byType: Record<string, number> = {};
@@ -157,6 +174,13 @@ export function snapshot(): MetricsSnapshot {
   for (const [source, count] of counters.memoryFactsBySource) {
     factsBySource[source] = count;
     factsTotal += count;
+  }
+
+  const entitiesResolved: Record<string, number> = {};
+  let entitiesResolvedTotal = 0;
+  for (const [outcome, count] of counters.memoryEntitiesResolved) {
+    entitiesResolved[outcome] = count;
+    entitiesResolvedTotal += count;
   }
 
   return {
@@ -174,6 +198,8 @@ export function snapshot(): MetricsSnapshot {
       extractBudgetExhausted: counters.memoryExtractBudgetExhausted,
       injected: counters.memoryInjected,
       retrievalEmpty: counters.memoryRetrievalEmpty,
+      entitiesResolved,
+      entitiesResolvedTotal,
     },
   };
 }
@@ -277,6 +303,18 @@ export function renderPrometheus(): string {
     "counter",
     "Recall queries that returned zero memories",
     [{ value: s.memory.retrievalEmpty }]
+  );
+
+  // Company brain: entity-resolution outcomes (total + a labelled series per
+  // outcome — matched/created/ambiguous).
+  const byOutcomeSamples = Object.entries(s.memory.entitiesResolved).map(
+    ([outcome, value]) => ({ labels: `outcome="${outcome}"`, value })
+  );
+  metric(
+    "sentinel_memory_entity_resolved_total",
+    "counter",
+    "Entity-resolution attempts during fact linking",
+    [{ value: s.memory.entitiesResolvedTotal }, ...byOutcomeSamples]
   );
 
   // Trailing newline per Prometheus convention.
