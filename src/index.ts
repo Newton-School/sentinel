@@ -5,7 +5,7 @@ import { getMcpConfigPath, getUnavailableSources, cleanupMcpConfig } from "./cla
 import { createSlackApp } from "./slack/socketClient.js";
 import { fetchThreadContext } from "./slack/threadContext.js";
 import { getOrCreatePersona, getTraits } from "./persona/store.js";
-import { searchMemories } from "./memory/memoryStore.js";
+import { searchMemories, currentViewerScope } from "./memory/memoryStore.js";
 import { extractFromConversation } from "./memory/conversationHook.js";
 import { buildSystemPrompt } from "./claude/systemPrompt.js";
 import type { RankedMemory } from "./memory/types.js";
@@ -90,7 +90,10 @@ async function handleEvent(
     // belt-and-braces — a memory failure must NEVER fail the reply.
     let memories: RankedMemory[] = [];
     try {
-      memories = searchMemories(envelope.text);
+      // Thread the asker's scope through the canView ACL seam. In founders
+      // mode (default) every allowed user is a founder and sees all rows —
+      // equivalent to the prior behaviour.
+      memories = searchMemories(envelope.text, 6, currentViewerScope(envelope.userId));
     } catch {
       // Never fail the reply over memory recall.
     }

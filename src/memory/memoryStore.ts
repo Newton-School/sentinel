@@ -22,6 +22,9 @@ import {
 } from "./memorySql.js";
 import { rankMemories, sanitizeFtsQuery } from "./rank.js";
 import { isEntityGraphEnabled, linkFactEntities } from "./entityLink.js";
+import { config } from "../config.js";
+import { buildViewerScope, canView, type ViewerScope } from "../access/scope.js";
+import type { MemoryCandidate } from "./types.js";
 import type {
   InsertResult,
   MemoryRow,
@@ -32,8 +35,42 @@ import type {
 const log = createLogger("memory-store");
 
 /**
+ * Resolves the current asker into a ViewerScope using the configured founder
+ * list (MEMORY_FOUNDER_USER_IDS, defaulting to ALLOWED_USER_IDS). Entity/team
+ * context is left empty for now — in founders mode (the only active policy) a
+ * founder sees everything regardless, so it isn't needed until scoped mode.
+ */
+export function currentViewerScope(userId: string): ViewerScope {
+  const envFounders = (process.env.MEMORY_FOUNDER_USER_IDS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const founderUserIds = envFounders.length > 0 ? envFounders : config.ALLOWED_USER_IDS;
+  return buildViewerScope(userId, { founderUserIds });
+}
+
+/**
+ * Whether a candidate is visible to `viewer`. A legacy string viewer keeps the
+ * original exact-visibility filter (byte-for-byte backward compatible); a
+ * ViewerScope routes through the canView ACL predicate.
+ */
+function candidateVisible(c: MemoryCandidate, viewer: ViewerScope | string): boolean {
+  if (typeof viewer === "string") return c.visibility === viewer;
+  return canView(
+    {
+      visibility: c.visibility,
+      subjectEntityId: c.subjectEntityId,
+      scopeTeamId: c.scopeTeamId,
+      sensitivity: c.sensitivity,
+    },
+    viewer
+  );
+}
+
+/**
  * Retrieves the top-k organizational memories relevant to `query`, filtered
- * to what `viewer` may see (v1: only `visibility = 'founders'` rows exist).
+ * to what `viewer` may see via the canView ACL seam. A legacy string viewer
+ * (the default) preserves the pre-brain exact-visibility filter.
  *
  * Synchronous (better-sqlite3) and failure-proof by contract: ANY internal
  * error is logged and swallowed, returning [] — a memory failure must never
@@ -42,7 +79,7 @@ const log = createLogger("memory-store");
 export function searchMemories(
   query: string,
   k = 6,
-  viewer = "founders"
+  viewer: ViewerScope | string = "founders"
 ): RankedMemory[] {
   // Metrics note: searchMemories is the only in-process recall path, and its
   // return value is exactly what buildSystemPrompt injects — so the
@@ -54,8 +91,8 @@ export function searchMemories(
     const db = getDb();
     const ftsQuery = sanitizeFtsQuery(query);
     if (ftsQuery) {
-      const candidates = searchCandidates(db, ftsQuery).filter(
-        (c) => c.visibility === viewer
+      const candidates = searchCandidates(db, ftsQuery).filter((c) =>
+        candidateVisible(c, viewer)
       );
       results = rankMemories(candidates, new Date(), k);
     }
