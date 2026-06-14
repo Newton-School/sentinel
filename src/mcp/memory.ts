@@ -30,6 +30,8 @@ import {
   getRelatedEntities,
   getTeamRoster,
   resolveQueryEntities,
+  forgetEntityMemories,
+  addEntityExclusion,
 } from "../memory/entitySql.js";
 import { rankMemories, sanitizeFtsQuery } from "../memory/rank.js";
 import type { EntityRelation } from "../memory/entitySql.js";
@@ -226,11 +228,14 @@ server.tool(
     query: z.string().describe("Natural-language search text (e.g., 'Q3 placement target')"),
     limit: z.number().default(8).describe("Maximum results (default: 8)"),
     include_inactive: z.boolean().default(false).describe("Also list superseded/forgotten records (clearly labeled by status) — needed for forget/supersede flows"),
+    include_sensitive: z.boolean().default(false).describe("Include HR/comp/legal/medical-sensitive facts (excluded by default; set true to deliberately retrieve them)"),
   },
-  async ({ query, limit, include_inactive }) =>
+  async ({ query, limit, include_inactive, include_sensitive }) =>
     guarded(() => {
       const ftsQuery = sanitizeFtsQuery(query);
-      const candidates = searchCandidates(db, ftsQuery);
+      const candidates = searchCandidates(db, ftsQuery).filter(
+        (c) => include_sensitive || c.sensitivity !== "sensitive"
+      );
       const ranked = rankMemories(candidates, new Date(), limit);
 
       const payload: Record<string, unknown> = {
@@ -474,6 +479,24 @@ server.tool(
           confidence: Number(r.confidence.toFixed(2)),
         })),
       });
+    })
+);
+
+// Tool: right-to-be-forgotten for an entity
+server.tool(
+  "memory_forget_entity",
+  "Forget everything about a person/team and stop storing new facts about them (right-to-be-forgotten): redacts all active memories whose subject is this entity AND adds it to the do-not-store exclusion list. Find the entity_id via entity_search first; confirm with the user before calling.",
+  {
+    entity_id: z.number().describe("Entity id (from entity_search)"),
+    reason: z.string().optional().describe("Optional note for the audit trail (e.g., 'left the company')"),
+  },
+  async ({ entity_id, reason }) =>
+    guardedEntity(() => {
+      const e = getEntityById(db, entity_id);
+      if (!e) return textResult(`entity ${entity_id} not found`);
+      const forgottenCount = forgetEntityMemories(db, entity_id);
+      addEntityExclusion(db, entity_id, reason, "mcp");
+      return jsonResult({ entityId: entity_id, name: e.canonicalName, forgottenCount, excluded: true });
     })
 );
 
