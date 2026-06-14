@@ -15,12 +15,17 @@
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import { sanitizeFtsQuery } from "./rank.js";
+import { jaccard, normalizeForHash, tokenSet } from "./textMatch.js";
 import type {
   InsertResult,
   MemoryCandidate,
   MemoryRow,
   NewFact,
 } from "./types.js";
+
+// Re-exported for backward compatibility: callers that imported
+// `normalizeForHash` from this module keep working.
+export { normalizeForHash } from "./textMatch.js";
 
 /** Hard cap on stored fact text length. */
 export const MAX_FACT_TEXT_CHARS = 300;
@@ -77,34 +82,8 @@ function mapMemoryRow(row: MemoryDbRow): MemoryRow {
   };
 }
 
-/**
- * Canonical text normalization for content hashing: lowercase, strip
- * everything but letters/digits/whitespace (unicode-aware), collapse
- * whitespace, trim.
- */
-export function normalizeForHash(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function contentHash(normalized: string): string {
   return createHash("sha256").update(normalized).digest("hex");
-}
-
-function tokenSet(normalized: string): Set<string> {
-  return new Set(normalized.split(" ").filter(Boolean));
-}
-
-function jaccard(a: Set<string>, b: Set<string>): number {
-  if (a.size === 0 && b.size === 0) return 0;
-  let intersection = 0;
-  for (const t of a) {
-    if (b.has(t)) intersection++;
-  }
-  return intersection / (a.size + b.size - intersection);
 }
 
 /**
