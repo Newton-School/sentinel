@@ -284,8 +284,12 @@ server.tool(
     text: z.string().describe("The fact to remember (hard-capped at 300 chars; longer text is truncated)"),
     category: z.enum(CATEGORIES).default("fact").describe("Kind of fact (default: 'fact')"),
     entities: z.array(z.string()).optional().describe("Entity names mentioned in the fact (people, teams, companies)"),
+    sensitivity: z
+      .enum(["normal", "sensitive"])
+      .default("normal")
+      .describe("Set 'sensitive' for compensation, HR/performance, legal, or medical facts — they are then excluded from ambient recall and need explicit retrieval"),
   },
-  async ({ text, category, entities }) =>
+  async ({ text, category, entities, sensitivity }) =>
     guarded(() => {
       const result = insertFact(db, {
         text,
@@ -294,6 +298,7 @@ server.tool(
         sourceType: "manual",
         sourceLabel: "Stored on request via Slack",
         confidence: 0.9,
+        sensitivity,
       });
       // Entity-link the stored fact (parity with the in-process ingestion
       // path, which links inside memoryStore.insertFact). Best-effort: a
