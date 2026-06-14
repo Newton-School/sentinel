@@ -1,5 +1,21 @@
 import { describe, it, expect } from "vitest";
-import { markdownToSlackMrkdwn } from "../src/slack/formatters.js";
+import {
+  markdownToSlackMrkdwn,
+  slackReplyText,
+  EMPTY_REPLY_FALLBACK,
+} from "../src/slack/formatters.js";
+
+describe("slackReplyText (never posts an empty message)", () => {
+  it("falls back for undefined / empty / whitespace results", () => {
+    expect(slackReplyText(undefined)).toBe(EMPTY_REPLY_FALLBACK);
+    expect(slackReplyText("")).toBe(EMPTY_REPLY_FALLBACK);
+    expect(slackReplyText("   \n  ")).toBe(EMPTY_REPLY_FALLBACK);
+  });
+
+  it("formats and returns real content", () => {
+    expect(slackReplyText("**Answer**")).toBe("*Answer*");
+  });
+});
 
 describe("markdownToSlackMrkdwn", () => {
   describe("bold conversion", () => {
