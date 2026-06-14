@@ -22,8 +22,17 @@ import {
   forgetMemory,
   supersedeMemory,
   recentMemories,
+  getMemoriesByIds,
 } from "../memory/memorySql.js";
+import {
+  getEntityById,
+  getEntityMemoryIds,
+  getRelatedEntities,
+  getTeamRoster,
+  resolveQueryEntities,
+} from "../memory/entitySql.js";
 import { rankMemories, sanitizeFtsQuery } from "../memory/rank.js";
+import type { EntityRelation } from "../memory/entitySql.js";
 import type { MemoryCategory, MemoryRow } from "../memory/types.js";
 import { assertEnv } from "./requireEnv.js";
 
@@ -49,6 +58,16 @@ const schemaReady =
 
 const UNINITIALIZED_MSG =
   "memory store not initialized — run the Sentinel bot once to create the schema";
+
+// Company-brain entity graph guard (separate from `memories`): the brain tools
+// degrade independently if the entity tables are absent.
+const entitiesReady =
+  db
+    .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='entities'`)
+    .get() !== undefined;
+
+const ENTITY_UNINITIALIZED_MSG =
+  "entity graph not initialized — run the Sentinel bot once to create the schema";
 
 const CATEGORIES = [
   "decision",
@@ -87,6 +106,27 @@ function guarded(body: () => ToolText): ToolText {
       `memory tool error: ${err instanceof Error ? err.message : String(err)}`
     );
   }
+}
+
+/** As {@link guarded}, but gated on the entity-graph tables. */
+function guardedEntity(body: () => ToolText): ToolText {
+  if (!entitiesReady) return textResult(ENTITY_UNINITIALIZED_MSG);
+  try {
+    return body();
+  } catch (err) {
+    return textResult(
+      `entity tool error: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
+/** Shapes an entity's key facts (most recent active, capped) for a tool payload. */
+function entityFactsPayload(entityId: number, limit: number): Record<string, unknown>[] {
+  const ids = getEntityMemoryIds(db, entityId);
+  const rows = getMemoriesByIds(db, ids)
+    .sort((a, b) => (a.assertedAt ?? a.createdAt) < (b.assertedAt ?? b.createdAt) ? 1 : -1)
+    .slice(0, limit);
+  return rows.map(shapeRow);
 }
 
 function shapeRow(row: MemoryRow): Record<string, unknown> {
@@ -328,6 +368,111 @@ server.tool(
       return jsonResult({
         resultCount: rows.length,
         results: rows.map(shapeRow),
+      });
+    })
+);
+
+// --- Company brain: entity-graph tools --------------------------------------
+
+// Tool: find entities (people/teams/projects) by name
+server.tool(
+  "entity_search",
+  "Search the company-brain entity graph for people, teams, projects, etc. mentioned by name. Returns matching entities with their type and how many facts are linked. Use before entity_get / org_lookup to find an entity_id.",
+  {
+    query: z.string().describe("Name or phrase to look up (e.g., 'placements team', 'Rahul')"),
+    limit: z.number().default(8).describe("Maximum results (default: 8)"),
+  },
+  async ({ query, limit }) =>
+    guardedEntity(() => {
+      const mentioned = resolveQueryEntities(db, query, limit);
+      return jsonResult({
+        resultCount: mentioned.length,
+        results: mentioned.map((m) => ({
+          entityId: m.entityId,
+          name: m.name,
+          type: m.type,
+          factCount: getEntityMemoryIds(db, m.entityId).length,
+        })),
+      });
+    })
+);
+
+// Tool: full dossier-style view of one entity
+server.tool(
+  "entity_get",
+  "Get a company-brain entity by id: its name/type plus its most recent linked facts. Use to answer \"what do we know about <person/team>\".",
+  {
+    entity_id: z.number().describe("Entity id (from entity_search)"),
+    fact_limit: z.number().default(10).describe("Max linked facts to include (default: 10)"),
+  },
+  async ({ entity_id, fact_limit }) =>
+    guardedEntity(() => {
+      const e = getEntityById(db, entity_id);
+      if (!e || e.status !== "active") return textResult(`entity ${entity_id} not found`);
+      return jsonResult({
+        entityId: e.id,
+        name: e.canonicalName,
+        type: e.type,
+        aliases: e.aliases,
+        keyFacts: entityFactsPayload(e.id, fact_limit),
+      });
+    })
+);
+
+// Tool: facts linked to an entity
+server.tool(
+  "entity_facts",
+  "List the facts linked to a company-brain entity (most recent first).",
+  {
+    entity_id: z.number().describe("Entity id (from entity_search)"),
+    limit: z.number().default(10).describe("Maximum facts (default: 10)"),
+  },
+  async ({ entity_id, limit }) =>
+    guardedEntity(() => {
+      const facts = entityFactsPayload(entity_id, limit);
+      return jsonResult({ entityId: entity_id, resultCount: facts.length, results: facts });
+    })
+);
+
+// Tool: team roster (lead + members) from the edge graph
+server.tool(
+  "team_roster",
+  "Get a team's lead (manages) and members (member_of) from the company-brain org graph. Pass a team entity_id (from entity_search).",
+  {
+    team_id: z.number().describe("Team entity id (from entity_search)"),
+  },
+  async ({ team_id }) =>
+    guardedEntity(() => {
+      const team = getEntityById(db, team_id);
+      if (!team || team.status !== "active") return textResult(`team ${team_id} not found`);
+      const roster = getTeamRoster(db, team_id);
+      return jsonResult({ team: { entityId: team.id, name: team.canonicalName }, ...roster });
+    })
+);
+
+// Tool: follow an org-graph relation (owns / manages / reports_to / ...)
+server.tool(
+  "org_lookup",
+  "Follow a relation in the company-brain org graph from an entity: e.g. what a person/team 'owns' or 'manages'. Edges are confidence-weighted and decay if not reinforced; low-confidence/stale edges are omitted.",
+  {
+    entity_id: z.number().describe("Source entity id (from entity_search)"),
+    relation: z
+      .enum(["owns", "manages", "reports_to", "member_of", "works_on", "depends_on", "part_of", "related_to"])
+      .describe("Relation to follow from the source entity"),
+  },
+  async ({ entity_id, relation }) =>
+    guardedEntity(() => {
+      const related = getRelatedEntities(db, entity_id, relation as EntityRelation);
+      return jsonResult({
+        entityId: entity_id,
+        relation,
+        resultCount: related.length,
+        results: related.map((r) => ({
+          entityId: r.entityId,
+          name: r.name,
+          type: r.type,
+          confidence: Number(r.confidence.toFixed(2)),
+        })),
       });
     })
 );

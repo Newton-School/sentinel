@@ -11,8 +11,12 @@
 /** Half-life (days) for org-edge confidence decay. */
 export const EDGE_HALF_LIFE_DAYS = 60;
 
-/** Decayed confidence at/above which an edge is considered "real" for display. */
-export const EDGE_DISPLAY_THRESHOLD = 0.6;
+/**
+ * Decayed confidence at/above which an edge is considered "real" for display.
+ * Set so a single explicit ownership signal (base 0.5) surfaces, while a stale
+ * edge that has decayed below it drops out.
+ */
+export const EDGE_DISPLAY_THRESHOLD = 0.5;
 
 /**
  * Confidence after exponential decay from `updatedAt` to `now`. A non-positive
