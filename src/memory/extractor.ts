@@ -141,8 +141,8 @@ export function buildExtractionSystemPrompt(input: {
     "",
     "Every fact needs a verbatim evidence_quote copied character-for-character from the content.",
     "Resolve pronouns to the people or things they refer to, and resolve relative dates to absolute dates using today's date.",
-    'Populate "entities" with the canonical names of EVERY person, team, project, product, or company the fact is about (e.g. ["Priya Nair", "placements team"]). Use [] only when the fact names none.',
-    'Set "subject" to the canonical name of the ONE entity the fact is primarily ABOUT — for an ownership/role fact, the entity that HOLDS the role. Critically, for a correction like "the project is now owned by Karthik, not Vikram", the subject is the NEW holder "Karthik" (never the negated/former one). The subject MUST also appear in "entities". Omit "subject" when no single entity is the focus.',
+    'Populate "entities" with the canonical names of EVERY person, team, project, product, or company the fact names — INCLUDING the thing acted upon. For an ownership fact this means BOTH the owner AND the thing owned (e.g. "the analytics dashboard is owned by the data team" → ["data team", "analytics dashboard"]). Use [] only when the fact names none.',
+    'Then set "subject" to WHICH of those listed entities the fact is primarily about — the role-holder for an ownership/role fact. On a correction like "owned by Karthik, not Vikram", the subject is the NEW holder ("Karthik"), never the negated/former one. "subject" must be one of the names already in "entities" and never shrinks that list. Omit "subject" when no single entity is the focus.',
     "Translate Hinglish to plain business English, including both synonym forms where relevant.",
     'Return {"facts":[]} when nothing qualifies.',
   ];
@@ -229,6 +229,15 @@ export async function extractFacts(
     if (SECRET_REGEX.test(fact.text) || SECRET_REGEX.test(fact.evidence_quote)) {
       secretDropped++;
       continue;
+    }
+
+    // Belt-and-suspenders: the declared subject must be linkable, so guarantee
+    // it appears in `entities` even if the model listed it only as the subject.
+    if (
+      fact.subject &&
+      !fact.entities.some((e) => e.toLowerCase() === fact.subject!.toLowerCase())
+    ) {
+      fact.entities = [...fact.entities, fact.subject];
     }
 
     facts.push(fact);
