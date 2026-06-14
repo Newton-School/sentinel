@@ -14,6 +14,7 @@
 
 import type Database from "better-sqlite3";
 import { normalizeForHash, tokenSet } from "./textMatch.js";
+import { decayedEdgeConfidence, EDGE_DISPLAY_THRESHOLD } from "./edgeDecay.js";
 import type {
   EntityCandidate,
   EntityType,
@@ -462,6 +463,62 @@ export interface EdgeFilter {
   dstId?: number;
   relation?: EntityRelation;
   status?: EntityEdgeRow["status"];
+}
+
+export interface EntityRef {
+  entityId: number;
+  name: string;
+  type: EntityType;
+}
+
+/**
+ * Team roster from the edge graph: the lead (a `manages` edge into the team)
+ * and members (`member_of` edges into the team), filtered to edges whose
+ * read-time-decayed confidence clears the display threshold.
+ */
+export function getTeamRoster(
+  db: Database.Database,
+  teamId: number,
+  now: Date = new Date()
+): { lead: EntityRef | null; members: EntityRef[] } {
+  const display = (e: EntityEdgeRow) =>
+    decayedEdgeConfidence(e.confidence, e.updatedAt, now) >= EDGE_DISPLAY_THRESHOLD;
+  const toRef = (id: number): EntityRef | null => {
+    const e = getEntityById(db, id);
+    return e ? { entityId: e.id, name: e.canonicalName, type: e.type } : null;
+  };
+
+  const leadRef = getEdges(db, { dstId: teamId, relation: "manages", status: "active" })
+    .filter(display)
+    .map((e) => toRef(e.srcId))
+    .find((r): r is EntityRef => r !== null) ?? null;
+
+  const members = getEdges(db, { dstId: teamId, relation: "member_of", status: "active" })
+    .filter(display)
+    .map((e) => toRef(e.srcId))
+    .filter((r): r is EntityRef => r !== null);
+
+  return { lead: leadRef, members };
+}
+
+/**
+ * Entities reachable from `srcId` via an outgoing edge of `relation`, filtered
+ * by decayed confidence. Used by org_lookup / "who owns X" tools.
+ */
+export function getRelatedEntities(
+  db: Database.Database,
+  srcId: number,
+  relation: EntityRelation,
+  now: Date = new Date()
+): Array<EntityRef & { confidence: number }> {
+  const out: Array<EntityRef & { confidence: number }> = [];
+  for (const e of getEdges(db, { srcId, relation, status: "active" })) {
+    const dc = decayedEdgeConfidence(e.confidence, e.updatedAt, now);
+    if (dc < EDGE_DISPLAY_THRESHOLD) continue;
+    const ent = getEntityById(db, e.dstId);
+    if (ent) out.push({ entityId: ent.id, name: ent.canonicalName, type: ent.type, confidence: dc });
+  }
+  return out.sort((a, b) => b.confidence - a.confidence);
 }
 
 export function getEdges(db: Database.Database, filter: EdgeFilter = {}): EntityEdgeRow[] {
