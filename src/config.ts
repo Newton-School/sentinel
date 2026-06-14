@@ -32,6 +32,12 @@ export const envSchema = z
   GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
   GOOGLE_REFRESH_TOKEN: z.string().min(1).optional(),
 
+  // OpenAI embeddings for hybrid retrieval (optional). Enabled at RUNTIME via
+  // MEMORY_EMBEDDINGS=1 (kill-switch style); without a key the embedder is a
+  // logged no-op and retrieval stays BM25-only — never a boot failure.
+  MEMORY_EMBEDDING_API_KEY: z.string().min(1).optional(),
+  MEMORY_EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),
+
   HEALTH_CHECK_PORT: z.coerce.number().default(8930),
 
   SQLITE_DB_PATH: z.string().default("./sentinel.db"),
