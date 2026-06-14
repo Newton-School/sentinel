@@ -213,6 +213,116 @@ function runMigrations(db: Database.Database): void {
     );
   }
 
+  // Migration: company-brain entity graph. People/teams become first-class
+  // entities; facts link to them via memory_entities; entity_edges holds the
+  // (derived) org chart; entity_profiles holds rolling per-entity dossiers.
+  // All additive CREATE ... IF NOT EXISTS, so re-runs are no-ops. `entities`
+  // is created before the memories governance-column ALTER below so the
+  // schema referencing it exists first.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS entities (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL CHECK (type IN
+        ('person','team','project','metric','product','customer','vendor','other')),
+      canonical_name TEXT NOT NULL,
+      normalized_name TEXT NOT NULL,
+      aliases TEXT,
+      slack_user_id TEXT,
+      email TEXT,
+      metadata TEXT,
+      confidence REAL NOT NULL DEFAULT 0.5,
+      visibility TEXT NOT NULL DEFAULT 'founders',
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','merged','forgotten')),
+      merged_into INTEGER REFERENCES entities(id),
+      embedding BLOB,
+      source_ref TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_entities_type_status ON entities(type, status);
+    CREATE INDEX IF NOT EXISTS idx_entities_normalized ON entities(normalized_name);
+    -- Hard identity keys are unique only among ACTIVE rows: a merged tombstone
+    -- keeps its old key for audit. Partial unique indexes are the primary
+    -- entity-fragmentation guard.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_entities_slack_uid
+      ON entities(slack_user_id) WHERE slack_user_id IS NOT NULL AND status = 'active';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_entities_email
+      ON entities(email) WHERE email IS NOT NULL AND status = 'active';
+
+    CREATE TABLE IF NOT EXISTS entity_edges (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      src_id INTEGER NOT NULL REFERENCES entities(id),
+      dst_id INTEGER NOT NULL REFERENCES entities(id),
+      relation TEXT NOT NULL CHECK (relation IN
+        ('member_of','manages','reports_to','owns','works_on','depends_on','part_of','related_to')),
+      confidence REAL NOT NULL DEFAULT 0.5,
+      evidence_count INTEGER NOT NULL DEFAULT 1,
+      provenance TEXT,
+      asserted_at TEXT,
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','superseded','forgotten')),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(src_id, dst_id, relation)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_edges_src ON entity_edges(src_id, relation, status);
+    CREATE INDEX IF NOT EXISTS idx_edges_dst ON entity_edges(dst_id, relation, status);
+
+    CREATE TABLE IF NOT EXISTS memory_entities (
+      memory_id INTEGER NOT NULL REFERENCES memories(id),
+      entity_id INTEGER NOT NULL REFERENCES entities(id),
+      role TEXT NOT NULL DEFAULT 'mention' CHECK (role IN ('subject','owner','mention','about')),
+      confidence REAL NOT NULL DEFAULT 0.5,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (memory_id, entity_id, role)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_mement_entity ON memory_entities(entity_id);
+    CREATE INDEX IF NOT EXISTS idx_mement_memory ON memory_entities(memory_id);
+
+    CREATE TABLE IF NOT EXISTS entity_profiles (
+      entity_id INTEGER PRIMARY KEY REFERENCES entities(id),
+      profile_md TEXT NOT NULL,
+      source_fact_ids TEXT NOT NULL,
+      embedding BLOB,
+      fact_count INTEGER NOT NULL DEFAULT 0,
+      version INTEGER NOT NULL DEFAULT 1,
+      model TEXT NOT NULL DEFAULT 'haiku',
+      built_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS entity_profile_cursors (
+      entity_id INTEGER PRIMARY KEY,
+      last_fact_count INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS entity_exclusions (
+      entity_id INTEGER PRIMARY KEY REFERENCES entities(id),
+      reason TEXT,
+      created_by TEXT,
+      created_at TEXT NOT NULL
+    );
+  `);
+
+  // Migration: per-fact governance columns on memories. `subject_entity_id` is
+  // the single person/team a fact is ABOUT (ACL keys on this, not every
+  // mention); `scope_team_id` is an explicit team scope for team-visibility
+  // rows. Plain INTEGER (no inline FK): ALTER TABLE ADD COLUMN with a
+  // REFERENCES clause is brittle under FK enforcement, and write integrity is
+  // guaranteed in code by the entity resolver. Guarded so re-runs are no-ops.
+  const memColumns = db.pragma("table_info(memories)") as Array<{ name: string }>;
+  const memColNames = new Set(memColumns.map((c) => c.name));
+  if (!memColNames.has("subject_entity_id")) {
+    db.exec(`ALTER TABLE memories ADD COLUMN subject_entity_id INTEGER`);
+    log.info("Added subject_entity_id column to memories");
+  }
+  if (!memColNames.has("scope_team_id")) {
+    db.exec(`ALTER TABLE memories ADD COLUMN scope_team_id INTEGER`);
+    log.info("Added scope_team_id column to memories");
+  }
+
   log.info("Migrations complete");
 }
 
