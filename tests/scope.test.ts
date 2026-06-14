@@ -4,6 +4,8 @@ import {
   canView,
   allowedTiersForRole,
   aclMode,
+  viewerScopeToEnv,
+  viewerScopeFromEnv,
   type ViewerScope,
 } from "../src/access/scope.js";
 
@@ -79,6 +81,35 @@ describe("canView — scoped mode (built now, activated later)", () => {
 
   it("a member cannot see a leadership-tier row", () => {
     expect(canView({ visibility: "leadership" }, scope({ role: "member" }), "scoped")).toBe(false);
+  });
+});
+
+describe("viewerScope env round-trip", () => {
+  it("serializes and reconstructs a ViewerScope through env vars", () => {
+    const v = buildViewerScope("U1", { founderUserIds: ["U1"], teamIds: [3, 7], entityId: 42 });
+    const env = viewerScopeToEnv(v);
+    expect(env.MEMORY_VIEWER_ROLE).toBe("founder");
+    expect(env.MEMORY_VIEWER_TEAM_IDS).toBe("3,7");
+    expect(env.MEMORY_VIEWER_ENTITY_ID).toBe("42");
+
+    const back = viewerScopeFromEnv(env);
+    expect(back).not.toBeNull();
+    expect(back!.role).toBe("founder");
+    expect(back!.teamIds).toEqual([3, 7]);
+    expect(back!.entityId).toBe(42);
+    expect(back!.allowedTiers.has("founders")).toBe(true);
+  });
+
+  it("round-trips a null entity and empty teams", () => {
+    const v = buildViewerScope("U9", { founderUserIds: ["U1"] });
+    const back = viewerScopeFromEnv(viewerScopeToEnv(v));
+    expect(back!.role).toBe("unknown");
+    expect(back!.teamIds).toEqual([]);
+    expect(back!.entityId).toBeNull();
+  });
+
+  it("returns null when no viewer env is present (no ACL filtering at the edge)", () => {
+    expect(viewerScopeFromEnv({})).toBeNull();
   });
 });
 

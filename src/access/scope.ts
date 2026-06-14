@@ -107,3 +107,43 @@ export function canView(
   }
   return true;
 }
+
+/**
+ * Serializes a ViewerScope into env vars for the spawned memory MCP server, so
+ * `canView` can run at the MCP recall edge too (not just in-process).
+ */
+export function viewerScopeToEnv(v: ViewerScope): Record<string, string> {
+  return {
+    MEMORY_VIEWER_USER_ID: v.userId,
+    MEMORY_VIEWER_ROLE: v.role,
+    MEMORY_VIEWER_TEAM_IDS: v.teamIds.join(","),
+    MEMORY_VIEWER_ENTITY_ID: v.entityId == null ? "" : String(v.entityId),
+  };
+}
+
+/**
+ * Reconstructs a ViewerScope from env (the inverse of {@link viewerScopeToEnv}),
+ * or null when no viewer was passed — in which case the MCP server applies no
+ * ACL filtering (its pre-brain behaviour, safe while founders-only).
+ */
+export function viewerScopeFromEnv(
+  env: Record<string, string | undefined>
+): ViewerScope | null {
+  const role = env.MEMORY_VIEWER_ROLE;
+  if (!role) return null;
+  const teamIds = (env.MEMORY_VIEWER_TEAM_IDS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map(Number)
+    .filter((n) => Number.isFinite(n));
+  const rawEntity = env.MEMORY_VIEWER_ENTITY_ID;
+  const entityId = rawEntity && Number.isFinite(Number(rawEntity)) ? Number(rawEntity) : null;
+  return {
+    userId: env.MEMORY_VIEWER_USER_ID ?? "",
+    role: role as Role,
+    entityId,
+    teamIds,
+    allowedTiers: allowedTiersForRole(role as Role),
+  };
+}

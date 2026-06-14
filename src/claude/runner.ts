@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { config } from "../config.js";
 import { createLogger } from "../logging/logger.js";
 import { getMcpConfigPath, removeMcpConfig } from "./mcpConfig.js";
+import type { ViewerScope } from "../access/scope.js";
 import type { ClaudeResponse } from "../types/contracts.js";
 
 const log = createLogger("claude-runner");
@@ -75,9 +76,10 @@ export function parseClaudeJsonOutput(stdout: string): ParsedClaudeOutput {
 export async function runClaude(
   systemPrompt: string,
   userMessage: string,
-  threadContext?: string
+  threadContext?: string,
+  viewer?: ViewerScope
 ): Promise<ClaudeResponse> {
-  const mcpConfigPath = getMcpConfigPath();
+  const mcpConfigPath = getMcpConfigPath({ viewer });
   const start = Date.now();
 
   const fullPrompt = threadContext

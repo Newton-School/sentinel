@@ -36,6 +36,7 @@ import {
 import { rankMemories, sanitizeFtsQuery } from "../memory/rank.js";
 import type { EntityRelation } from "../memory/entitySql.js";
 import type { MemoryCategory, MemoryRow } from "../memory/types.js";
+import { canView, viewerScopeFromEnv } from "../access/scope.js";
 import { assertEnv } from "./requireEnv.js";
 
 // Validate required env up front so a misconfigured server fails with a clear
@@ -122,13 +123,33 @@ function guardedEntity(body: () => ToolText): ToolText {
   }
 }
 
-/** Shapes an entity's key facts (most recent active, capped) for a tool payload. */
+/** Shapes an entity's key facts (most recent active, ACL-filtered, capped). */
 function entityFactsPayload(entityId: number, limit: number): Record<string, unknown>[] {
   const ids = getEntityMemoryIds(db, entityId);
   const rows = getMemoriesByIds(db, ids)
+    .filter(viewerCanSee)
     .sort((a, b) => (a.assertedAt ?? a.createdAt) < (b.assertedAt ?? b.createdAt) ? 1 : -1)
     .slice(0, limit);
   return rows.map(shapeRow);
+}
+
+// The asker's scope, threaded in via the per-request MCP config env. Null when
+// absent (warm-up / pre-scoped-ACL) → no ACL filtering, the pre-brain behaviour
+// (safe while founders-only). In founders mode a founder viewer sees all.
+const viewer = viewerScopeFromEnv(process.env);
+
+/** ACL gate at the MCP recall edge — mirrors the in-process recallVisible. */
+function viewerCanSee(m: MemoryRow): boolean {
+  if (!viewer) return true;
+  return canView(
+    {
+      visibility: m.visibility,
+      subjectEntityId: m.subjectEntityId,
+      scopeTeamId: m.scopeTeamId,
+      sensitivity: m.sensitivity,
+    },
+    viewer
+  );
 }
 
 function shapeRow(row: MemoryRow): Record<string, unknown> {
@@ -234,7 +255,7 @@ server.tool(
     guarded(() => {
       const ftsQuery = sanitizeFtsQuery(query);
       const candidates = searchCandidates(db, ftsQuery).filter(
-        (c) => include_sensitive || c.sensitivity !== "sensitive"
+        (c) => (include_sensitive || c.sensitivity !== "sensitive") && viewerCanSee(c)
       );
       const ranked = rankMemories(candidates, new Date(), limit);
 

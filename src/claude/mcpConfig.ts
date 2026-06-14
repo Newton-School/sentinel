@@ -11,8 +11,14 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { config } from "../config.js";
 import { createLogger } from "../logging/logger.js";
+import { viewerScopeToEnv, type ViewerScope } from "../access/scope.js";
 
 const log = createLogger("mcp-config");
+
+export interface McpConfigOptions {
+  /** Asker scope, threaded into the memory MCP server so canView runs there too. */
+  viewer?: ViewerScope;
+}
 
 /**
  * Resolves the tmpdir that holds per-spawn MCP config files. Each file contains
@@ -38,7 +44,7 @@ interface McpConfig {
   mcpServers: Record<string, McpServerConfig>;
 }
 
-export function getMcpConfigPath(): string {
+export function getMcpConfigPath(opts: McpConfigOptions = {}): string {
   // Unique path per call: with MAX_CONCURRENT spawns sharing one tmpdir, a
   // write racing the Claude CLI's read of a fixed-path file could yield torn
   // JSON. A fresh randomUUID-named file per spawn removes that race; the
@@ -174,10 +180,21 @@ export function getMcpConfigPath(): string {
   // default and the server needs no credentials. The path is resolved to an
   // ABSOLUTE path because the Claude CLI child process (which spawns the
   // server) may run with a different cwd than the Sentinel process.
+  const memoryEnv: Record<string, string> = {
+    SQLITE_DB_PATH: resolve(config.SQLITE_DB_PATH),
+  };
+  // Pass the ACL mode + sensitivity gate so the MCP server matches in-process
+  // policy, and the per-request viewer scope so canView runs at the MCP edge.
+  if (process.env.MEMORY_ACL_MODE) memoryEnv.MEMORY_ACL_MODE = process.env.MEMORY_ACL_MODE;
+  if (process.env.MEMORY_SENSITIVE_RECALL) {
+    memoryEnv.MEMORY_SENSITIVE_RECALL = process.env.MEMORY_SENSITIVE_RECALL;
+  }
+  if (opts.viewer) Object.assign(memoryEnv, viewerScopeToEnv(opts.viewer));
+
   mcpConfig.mcpServers.memory = {
     command: "node",
     args: [join(process.cwd(), "dist", "mcp", "memory.js")],
-    env: { SQLITE_DB_PATH: resolve(config.SQLITE_DB_PATH) },
+    env: memoryEnv,
   };
   log.info("Memory MCP server registered");
 
