@@ -127,11 +127,20 @@ function guardedEntity(body: () => ToolText): ToolText {
   }
 }
 
-/** Shapes an entity's key facts (most recent active, ACL-filtered, capped). */
-function entityFactsPayload(entityId: number, limit: number): Record<string, unknown>[] {
+/**
+ * Shapes an entity's key facts (most recent active, ACL-filtered, capped).
+ * Sensitive facts (HR/comp/legal/medical) are excluded unless
+ * `includeSensitive` — mirroring memory_search, so the entity tools don't leak
+ * sensitive text to the model on an ordinary profile lookup.
+ */
+function entityFactsPayload(
+  entityId: number,
+  limit: number,
+  includeSensitive = false
+): Record<string, unknown>[] {
   const ids = getEntityMemoryIds(db, entityId);
   const rows = getMemoriesByIds(db, ids)
-    .filter(viewerCanSee)
+    .filter((r) => (includeSensitive || r.sensitivity !== "sensitive") && viewerCanSee(r))
     .sort((a, b) => (a.assertedAt ?? a.createdAt) < (b.assertedAt ?? b.createdAt) ? 1 : -1)
     .slice(0, limit);
   return rows.map(shapeRow);
@@ -457,8 +466,9 @@ server.tool(
   {
     entity_id: z.number().describe("Entity id (from entity_search)"),
     fact_limit: z.number().default(10).describe("Max linked facts to include (default: 10)"),
+    include_sensitive: z.boolean().default(false).describe("Include HR/comp/legal/medical-sensitive facts (excluded by default)"),
   },
-  async ({ entity_id, fact_limit }) =>
+  async ({ entity_id, fact_limit, include_sensitive }) =>
     guardedEntity(() => {
       const e = getEntityById(db, entity_id);
       if (!e || e.status !== "active") return textResult(`entity ${entity_id} not found`);
@@ -467,7 +477,7 @@ server.tool(
         name: e.canonicalName,
         type: e.type,
         aliases: e.aliases,
-        keyFacts: entityFactsPayload(e.id, fact_limit),
+        keyFacts: entityFactsPayload(e.id, fact_limit, include_sensitive),
       });
     })
 );
@@ -479,10 +489,11 @@ server.tool(
   {
     entity_id: z.number().describe("Entity id (from entity_search)"),
     limit: z.number().default(10).describe("Maximum facts (default: 10)"),
+    include_sensitive: z.boolean().default(false).describe("Include HR/comp/legal/medical-sensitive facts (excluded by default)"),
   },
-  async ({ entity_id, limit }) =>
+  async ({ entity_id, limit, include_sensitive }) =>
     guardedEntity(() => {
-      const facts = entityFactsPayload(entity_id, limit);
+      const facts = entityFactsPayload(entity_id, limit, include_sensitive);
       return jsonResult({ entityId: entity_id, resultCount: facts.length, results: facts });
     })
 );
