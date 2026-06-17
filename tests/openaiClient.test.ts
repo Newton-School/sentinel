@@ -8,6 +8,12 @@ vi.mock("pino", () => {
   return { default: pino };
 });
 
+// Intercept the LLM trace sink so telemetry recording is observable and never
+// touches the DB. The spy is hoisted so it survives vi.resetModules() and is
+// the same instance the freshly-imported client calls.
+const { recordLlmCallSpy } = vi.hoisted(() => ({ recordLlmCallSpy: vi.fn() }));
+vi.mock("../src/llm/traceStore.js", () => ({ recordLlmCall: recordLlmCallSpy }));
+
 /** Response-like fake for the injected fetch. */
 function apiResponse(body: unknown, status = 200): Response {
   return {
@@ -137,5 +143,100 @@ describe("openaiClient.extractJson", () => {
     const day2 = Date.parse("2026-06-16T00:00:00Z");
     await extractJson({ system: "s", user: "u", schema: SCHEMA, apiKey: "k", fetchImpl, now: () => day2 });
     expect(calls).toBe(MAX_EXTRACTION_CALLS_PER_DAY + 1);
+  });
+});
+
+describe("openaiClient.extractJson — telemetry", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    recordLlmCallSpy.mockClear();
+  });
+
+  function bodyWithUsage(payload: unknown, usage: unknown): unknown {
+    return {
+      choices: [{ message: { content: JSON.stringify(payload) }, finish_reason: "stop" }],
+      usage,
+    };
+  }
+
+  it("records an openai 'extract' call with usage tokens + computed cost on success", async () => {
+    const { extractJson, __resetBudgetForTests } = await importClient();
+    __resetBudgetForTests();
+    const fetchImpl = (async () =>
+      apiResponse(bodyWithUsage({ facts: [] }, { prompt_tokens: 100, completion_tokens: 50 }))) as unknown as typeof fetch;
+
+    await extractJson({ system: "s", user: "u", schema: SCHEMA, apiKey: "k", fetchImpl, now: () => 0 });
+
+    expect(recordLlmCallSpy).toHaveBeenCalledTimes(1);
+    const arg = recordLlmCallSpy.mock.calls[0][0];
+    expect(arg.provider).toBe("openai");
+    expect(arg.operation).toBe("extract");
+    expect(arg.model).toBe("gpt-4o-mini");
+    expect(arg.inputTokens).toBe(100);
+    expect(arg.outputTokens).toBe(50);
+    expect(arg.status).toBe("ok");
+    // 100/1000*0.00015 + 50/1000*0.00060 = 0.000045
+    expect(arg.costUsd).toBeCloseTo(0.000045, 12);
+    expect(typeof arg.latencyMs).toBe("number");
+  });
+
+  it("tags operation + model from options (consolidate via gpt-4o)", async () => {
+    const { extractJson, __resetBudgetForTests } = await importClient();
+    __resetBudgetForTests();
+    const fetchImpl = (async () =>
+      apiResponse(bodyWithUsage({ profile_md: "x" }, { prompt_tokens: 10, completion_tokens: 5 }))) as unknown as typeof fetch;
+
+    await extractJson({ system: "s", user: "u", schema: SCHEMA, model: "gpt-4o", operation: "consolidate", apiKey: "k", fetchImpl, now: () => 0 });
+
+    const arg = recordLlmCallSpy.mock.calls[0][0];
+    expect(arg.operation).toBe("consolidate");
+    expect(arg.model).toBe("gpt-4o");
+  });
+
+  it("records an error call on a non-ok HTTP response", async () => {
+    const { extractJson, __resetBudgetForTests } = await importClient();
+    __resetBudgetForTests();
+    const fetchImpl = (async () => apiResponse({ error: {} }, 500)) as unknown as typeof fetch;
+    await extractJson({ system: "s", user: "u", schema: SCHEMA, apiKey: "k", fetchImpl, now: () => 0 });
+    const arg = recordLlmCallSpy.mock.calls[0][0];
+    expect(arg.status).toBe("error");
+    expect(arg.errorKind).toBe("http");
+  });
+
+  it("records an error call on a refusal/length-truncated choice", async () => {
+    const { extractJson, __resetBudgetForTests } = await importClient();
+    __resetBudgetForTests();
+    const fetchImpl = (async () =>
+      apiResponse({ choices: [{ message: { content: "{" }, finish_reason: "length" }] })) as unknown as typeof fetch;
+    await extractJson({ system: "s", user: "u", schema: SCHEMA, apiKey: "k", fetchImpl, now: () => 0 });
+    expect(recordLlmCallSpy.mock.calls[0][0].status).toBe("error");
+    expect(recordLlmCallSpy.mock.calls[0][0].errorKind).toBe("unusable");
+  });
+
+  it("records an error call (parse) on JSON garbage", async () => {
+    const { extractJson, __resetBudgetForTests } = await importClient();
+    __resetBudgetForTests();
+    const fetchImpl = (async () =>
+      apiResponse({ choices: [{ message: { content: "not json" }, finish_reason: "stop" }] })) as unknown as typeof fetch;
+    await extractJson({ system: "s", user: "u", schema: SCHEMA, apiKey: "k", fetchImpl, now: () => 0 });
+    expect(recordLlmCallSpy.mock.calls[0][0].errorKind).toBe("parse");
+  });
+
+  it("records an error call (network) when fetch throws", async () => {
+    const { extractJson, __resetBudgetForTests } = await importClient();
+    __resetBudgetForTests();
+    const fetchImpl = (async () => {
+      throw new Error("boom");
+    }) as unknown as typeof fetch;
+    await extractJson({ system: "s", user: "u", schema: SCHEMA, apiKey: "k", fetchImpl, now: () => 0 });
+    expect(recordLlmCallSpy.mock.calls[0][0].errorKind).toBe("network");
+  });
+
+  it("does NOT record a call when there is no API key (skipped, not attempted)", async () => {
+    const { extractJson, __resetBudgetForTests } = await importClient();
+    __resetBudgetForTests();
+    const fetchImpl = (async () => apiResponse(successBody({ facts: [] }))) as unknown as typeof fetch;
+    await extractJson({ system: "s", user: "u", schema: SCHEMA, fetchImpl, now: () => 0 });
+    expect(recordLlmCallSpy).not.toHaveBeenCalled();
   });
 });

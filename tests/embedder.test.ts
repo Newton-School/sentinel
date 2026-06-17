@@ -1,4 +1,10 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+
+// Intercept the LLM trace sink: telemetry recording is observable and never
+// touches the DB.
+const { recordLlmCallSpy } = vi.hoisted(() => ({ recordLlmCallSpy: vi.fn() }));
+vi.mock("../src/llm/traceStore.js", () => ({ recordLlmCall: recordLlmCallSpy }));
+
 import {
   floatToBlob,
   blobToFloat,
@@ -94,5 +100,40 @@ describe("embedTexts (batch)", () => {
     const { fn, bodies } = fakeOpenAI([]);
     expect(await embedTexts([], { apiKey: "k", fetchImpl: fn, now: NOW })).toEqual([]);
     expect(bodies).toHaveLength(0);
+  });
+});
+
+describe("embedder telemetry", () => {
+  beforeEach(() => {
+    __resetEmbeddingBudgetForTests();
+    recordLlmCallSpy.mockClear();
+  });
+
+  it("records one 'embed' call per request with prompt-token cost on success", async () => {
+    const { fn } = fakeOpenAI([[0.1, 0.2]]); // fakeOpenAI sets usage.prompt_tokens = 1
+    await embedText("hi", { apiKey: "k", fetchImpl: fn, now: NOW });
+    expect(recordLlmCallSpy).toHaveBeenCalledTimes(1);
+    const arg = recordLlmCallSpy.mock.calls[0][0];
+    expect(arg.provider).toBe("openai");
+    expect(arg.operation).toBe("embed");
+    expect(arg.model).toBe("text-embedding-3-small");
+    expect(arg.inputTokens).toBe(1);
+    expect(arg.outputTokens).toBe(0);
+    expect(arg.status).toBe("ok");
+    expect(arg.costUsd).toBeGreaterThan(0);
+    expect(typeof arg.latencyMs).toBe("number");
+  });
+
+  it("records an error 'embed' call on an HTTP failure", async () => {
+    const failing = (async () => new Response("nope", { status: 500 })) as unknown as typeof fetch;
+    await embedText("hi", { apiKey: "k", fetchImpl: failing, now: NOW });
+    expect(recordLlmCallSpy).toHaveBeenCalledTimes(1);
+    expect(recordLlmCallSpy.mock.calls[0][0].status).toBe("error");
+    expect(recordLlmCallSpy.mock.calls[0][0].errorKind).toBe("http");
+  });
+
+  it("does NOT record a call without an API key", async () => {
+    await embedText("hi", { now: NOW });
+    expect(recordLlmCallSpy).not.toHaveBeenCalled();
   });
 });

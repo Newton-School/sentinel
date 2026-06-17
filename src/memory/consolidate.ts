@@ -147,6 +147,7 @@ export async function consolidateEntity(
     user,
     schema: PROFILE_SCHEMA as unknown as Record<string, unknown>,
     model: modelId,
+    operation: "consolidate",
     apiKey: deps.apiKey,
     fetchImpl: deps.fetchImpl,
     now: deps.now,

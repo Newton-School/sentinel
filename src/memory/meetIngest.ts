@@ -211,6 +211,7 @@ async function ingestConference(
       system: SUMMARY_SYSTEM_PROMPT,
       user: factTexts.join("\n").slice(0, MAX_SUMMARY_INPUT_CHARS),
       schema: SUMMARY_JSON_SCHEMA,
+      operation: "summary",
       apiKey: deps.apiKey,
       fetchImpl: deps.fetchImpl,
     });

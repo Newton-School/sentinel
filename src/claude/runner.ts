@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { config } from "../config.js";
 import { createLogger } from "../logging/logger.js";
 import { getMcpConfigPath, removeMcpConfig } from "./mcpConfig.js";
+import { recordLlmCall } from "../llm/traceStore.js";
 import type { ViewerScope } from "../access/scope.js";
 import type { ClaudeResponse } from "../types/contracts.js";
 
@@ -16,6 +17,7 @@ const TIMEOUT_MS = 180_000; // 3 minutes (headroom for multi-tool investigations
  */
 interface ParsedClaudeOutput {
   text?: string;
+  model?: string;
   inputTokens?: number;
   outputTokens?: number;
   costUsd?: number;
@@ -28,6 +30,10 @@ function isObject(v: unknown): v is Record<string, unknown> {
 
 function asNumber(v: unknown): number | undefined {
   return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+function asString(v: unknown): string | undefined {
+  return typeof v === "string" && v.length > 0 ? v : undefined;
 }
 
 /**
@@ -60,6 +66,9 @@ export function parseClaudeJsonOutput(stdout: string): ParsedClaudeOutput {
         ? parsed.text
         : undefined;
   if (text !== undefined) out.text = text;
+
+  const model = asString(parsed.model);
+  if (model !== undefined) out.model = model;
 
   const usage = isObject(parsed.usage) ? parsed.usage : undefined;
   if (usage) {
@@ -115,6 +124,36 @@ export async function runClaude(
     let stdout = "";
     let stderr = "";
 
+    // Record exactly one anthropic `reply` span for this invocation, whichever
+    // terminal handler fires first (close/error/timeout). Best-effort: a sink
+    // failure must never break the reply. The CLI is a subprocess, so this is
+    // one aggregate row — its internal tool calls are opaque.
+    let spanRecorded = false;
+    const recordReply = (
+      status: "ok" | "error",
+      parsed?: ParsedClaudeOutput,
+      errorKind?: string
+    ): void => {
+      if (spanRecorded) return;
+      spanRecorded = true;
+      try {
+        recordLlmCall({
+          provider: "anthropic",
+          model: parsed?.model ?? "claude",
+          operation: "reply",
+          inputTokens: parsed?.inputTokens,
+          outputTokens: parsed?.outputTokens,
+          costUsd: parsed?.costUsd,
+          latencyMs: Date.now() - start,
+          numTurns: parsed?.numTurns,
+          status,
+          errorKind,
+        });
+      } catch {
+        /* telemetry must never break the reply */
+      }
+    };
+
     proc.stdout.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
     });
@@ -157,9 +196,11 @@ export async function runClaude(
           },
           "Claude completed"
         );
+        recordReply("ok", parsed);
         resolve(response);
       } else {
         log.error({ code, stderr, durationMs }, "Claude CLI failed");
+        recordReply("error", undefined, "nonzero_exit");
         reject(new Error(`Claude CLI exited with code ${code}: ${stderr}`));
       }
     });
@@ -170,6 +211,7 @@ export async function runClaude(
       removeMcpConfig(mcpConfigPath);
       const durationMs = Date.now() - start;
       log.error({ err, durationMs }, "Failed to spawn Claude CLI");
+      recordReply("error", undefined, "spawn");
       reject(err);
     });
 
@@ -179,6 +221,7 @@ export async function runClaude(
     const timer = setTimeout(() => {
       if (!proc.killed) {
         proc.kill("SIGTERM");
+        recordReply("error", undefined, "timeout");
         reject(new Error(`Claude CLI timed out after ${TIMEOUT_MS}ms`));
       }
     }, TIMEOUT_MS);
