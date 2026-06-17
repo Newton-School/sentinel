@@ -38,7 +38,28 @@ import {
   normalizeMention,
   normalizeDmMessage,
   normalizeSlashCommand,
+  normalizeReactionAdded,
 } from "../src/slack/socketClient.js";
+
+describe("normalizeReactionAdded", () => {
+  it("normalizes a reaction on a message into an envelope", () => {
+    expect(
+      normalizeReactionAdded({ user: "U1", reaction: "+1", item: { type: "message", channel: "C1", ts: "12.3" } })
+    ).toEqual({ reactorUserId: "U1", channelId: "C1", itemTs: "12.3", reaction: "+1" });
+  });
+
+  it("returns null for reactions on non-message items (e.g. files)", () => {
+    expect(
+      normalizeReactionAdded({ user: "U1", reaction: "+1", item: { type: "file", channel: "C1", ts: "12.3" } })
+    ).toBeNull();
+  });
+
+  it("returns null when required fields are missing", () => {
+    expect(normalizeReactionAdded({ reaction: "+1", item: { type: "message", channel: "C1", ts: "1" } })).toBeNull();
+    expect(normalizeReactionAdded({ user: "U1", item: { type: "message", channel: "C1", ts: "1" } })).toBeNull();
+    expect(normalizeReactionAdded({ user: "U1", reaction: "+1" })).toBeNull();
+  });
+});
 
 describe("isAllowed (authorization gate)", () => {
   it("allows user IDs that are in the allow-list", () => {

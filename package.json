@@ -14,7 +14,8 @@
     "meet-bot:join": "tsx src/meet-bot/joiner.ts",
     "monitor:memory": "tsx scripts/monitor-memory.ts",
     "eval": "tsx evals/runner.ts",
-    "eval:gate": "tsx evals/runner.ts --gate"
+    "eval:gate": "tsx evals/runner.ts --gate",
+    "feedback:harvest": "tsx scripts/harvest-feedback.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",

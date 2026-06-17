@@ -11,8 +11,10 @@ import { isEmbeddingsEnabled } from "./memory/embeddingBackfill.js";
 import { embedText } from "./memory/embedder.js";
 import { openaiApiKey } from "./llm/openaiClient.js";
 import { extractFromConversation } from "./memory/conversationHook.js";
-import { runWithTrace, newTraceId } from "./llm/traceContext.js";
+import { runWithTrace, newTraceId, currentTrace } from "./llm/traceContext.js";
 import { activePromptVersionId } from "./prompts/registry.js";
+import { recordReply, recordFeedback, isFeedbackEnabled } from "./feedback/store.js";
+import type { ReactionEnvelope } from "./slack/socketClient.js";
 import { buildSystemPrompt } from "./claude/systemPrompt.js";
 import type { RankedMemory, RetrievalBundle } from "./memory/types.js";
 import { runClaude } from "./claude/runner.js";
@@ -171,12 +173,29 @@ async function handleEventInner(
     // Post response (convert Markdown to Slack mrkdwn; never post an empty
     // message — an empty/looped Claude result falls back to a notice).
     const slackText = slackReplyText(response.text);
-    await client.chat.postMessage({
+    const posted = await client.chat.postMessage({
       channel: envelope.channelId,
       thread_ts: envelope.threadTs,
       text: slackText,
       unfurl_links: false,
     });
+
+    // Remember this reply so a later 👍/👎 reaction can be attributed to its
+    // trace (and harvested into eval datasets). Best-effort, gated on the flag.
+    if (isFeedbackEnabled() && posted.ts) {
+      try {
+        recordReply({
+          channelId: envelope.channelId,
+          replyTs: posted.ts,
+          traceId: currentTrace()?.traceId,
+          userId: envelope.userId,
+          question: envelope.text,
+          answer: response.text,
+        });
+      } catch (err) {
+        log.error({ err }, "Failed to record bot reply for feedback (non-fatal)");
+      }
+    }
 
     // Swap :eyes: for :white_check_mark:
     try {
@@ -273,6 +292,25 @@ async function handleEventInner(
   }
 }
 
+/**
+ * Records a 👍/👎 reaction on a bot reply as feedback. Best-effort: a feedback
+ * failure must never disrupt the bot. Reactions on non-bot messages are no-ops
+ * (recordFeedback only writes when the reply is tracked in bot_replies).
+ */
+async function handleReaction(env: ReactionEnvelope): Promise<void> {
+  try {
+    recordFeedback({
+      channelId: env.channelId,
+      replyTs: env.itemTs,
+      reactorUserId: env.reactorUserId,
+      reaction: env.reaction,
+      addedAtIso: new Date().toISOString(),
+    });
+  } catch (err) {
+    log.error({ err }, "Failed to record feedback (non-fatal)");
+  }
+}
+
 let slackConnected = false;
 const startTime = Date.now();
 
@@ -340,8 +378,8 @@ async function main(): Promise<void> {
   // Start consolidation watcher (rolls entity facts into dossiers).
   stopConsolidation = startConsolidationWatcher();
 
-  // Start Slack app
-  const app = createSlackApp(handleEvent);
+  // Start Slack app (wire the feedback reaction handler only when enabled).
+  const app = createSlackApp(handleEvent, isFeedbackEnabled() ? handleReaction : undefined);
   slackApp = app;
   await app.start();
   slackConnected = true;

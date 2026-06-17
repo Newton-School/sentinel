@@ -21,6 +21,13 @@ export const LLM_CALLS_RETENTION_DAYS = 90;
  * history is valuable for tracking quality trends across prompt versions). */
 export const EVAL_RUNS_RETENTION_DAYS = 180;
 
+/** Retention for feedback rows (kept long — quality signal worth trending). */
+export const FEEDBACK_RETENTION_DAYS = 180;
+
+/** Retention for bot_replies rows (only needed long enough to attribute a late
+ * reaction; pruned sooner than feedback itself). */
+export const BOT_REPLIES_RETENTION_DAYS = 90;
+
 /**
  * True when the DB handle is already open. The LLM trace sink
  * (src/llm/traceStore.ts) consults this so it only writes a durable row when
@@ -89,6 +96,15 @@ export function getDb(): Database.Database {
       }
     } catch (err) {
       log.error({ err }, "eval_runs retention prune failed (non-fatal)");
+    }
+    try {
+      const fb = pruneFeedback();
+      const br = pruneBotReplies();
+      if (fb > 0 || br > 0) {
+        log.info({ feedback: fb, botReplies: br }, "Pruned stale feedback rows");
+      }
+    } catch (err) {
+      log.error({ err }, "feedback retention prune failed (non-fatal)");
     }
   }
 
@@ -414,6 +430,38 @@ function runMigrations(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_eval_runs_suite ON eval_runs(suite, ran_at);
   `);
 
+  // Migration: feedback loop. bot_replies maps a posted reply (channel+ts) to
+  // the request trace id (and keeps the Q&A text so 👎'd replies can be
+  // harvested into eval datasets); feedback records the 👍/👎 reactions.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS bot_replies (
+      channel_id TEXT NOT NULL,
+      reply_ts TEXT NOT NULL,
+      trace_id TEXT,
+      user_id TEXT,
+      question TEXT,
+      answer TEXT,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (channel_id, reply_ts)
+    );
+
+    CREATE TABLE IF NOT EXISTS feedback (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      trace_id TEXT,
+      channel_id TEXT NOT NULL,
+      reply_ts TEXT NOT NULL,
+      reactor_user_id TEXT NOT NULL,
+      reaction TEXT NOT NULL,
+      sentiment TEXT NOT NULL CHECK (sentiment IN ('positive','negative')),
+      score INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(channel_id, reply_ts, reactor_user_id, reaction)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_feedback_trace ON feedback(trace_id);
+    CREATE INDEX IF NOT EXISTS idx_feedback_created_at ON feedback(created_at);
+  `);
+
   log.info("Migrations complete");
 }
 
@@ -512,6 +560,20 @@ export function pruneEvalRuns(
   const now = nowMs ?? Date.now();
   const cutoffIso = new Date(now - retentionDays * 24 * 60 * 60 * 1000).toISOString();
   return db.prepare(`DELETE FROM eval_runs WHERE ran_at < ?`).run(cutoffIso).changes;
+}
+
+/** Deletes feedback rows older than the retention window. */
+export function pruneFeedback(retentionDays = FEEDBACK_RETENTION_DAYS, nowMs?: number): number {
+  const db = getDb();
+  const cutoffIso = new Date((nowMs ?? Date.now()) - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+  return db.prepare(`DELETE FROM feedback WHERE created_at < ?`).run(cutoffIso).changes;
+}
+
+/** Deletes bot_replies rows older than the retention window. */
+export function pruneBotReplies(retentionDays = BOT_REPLIES_RETENTION_DAYS, nowMs?: number): number {
+  const db = getDb();
+  const cutoffIso = new Date((nowMs ?? Date.now()) - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+  return db.prepare(`DELETE FROM bot_replies WHERE created_at < ?`).run(cutoffIso).changes;
 }
 
 export function closeDb(): void {
