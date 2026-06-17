@@ -22,6 +22,40 @@ export interface ReactionEnvelope {
 
 export type ReactionHandler = (env: ReactionEnvelope) => void | Promise<void>;
 
+/** A normalized click on a 👍/👎 feedback button on a bot reply. */
+export interface FeedbackActionEnvelope {
+  reactorUserId: string;
+  channelId: string;
+  replyTs: string;
+  sentiment: "positive" | "negative";
+  /** The reply's current blocks, so the handler can acknowledge in place. */
+  messageBlocks?: unknown[];
+}
+
+export type FeedbackActionHandler = (
+  env: FeedbackActionEnvelope,
+  client: InstanceType<typeof App>["client"]
+) => void | Promise<void>;
+
+/** Normalize a feedback button action, or null if it isn't one / is malformed. */
+export function normalizeFeedbackAction(
+  actionId: string,
+  body: {
+    user?: { id?: string };
+    channel?: { id?: string };
+    message?: { ts?: string; blocks?: unknown[] };
+  }
+): FeedbackActionEnvelope | null {
+  const sentiment =
+    actionId === "feedback_up" ? "positive" : actionId === "feedback_down" ? "negative" : null;
+  if (!sentiment) return null;
+  const reactorUserId = body.user?.id;
+  const channelId = body.channel?.id;
+  const replyTs = body.message?.ts;
+  if (!reactorUserId || !channelId || !replyTs) return null;
+  return { reactorUserId, channelId, replyTs, sentiment, messageBlocks: body.message?.blocks };
+}
+
 /**
  * Normalize a `reaction_added` event, or null when it isn't a reaction on a
  * message (only message reactions can be feedback on a bot reply).
@@ -134,7 +168,11 @@ function dedupeKey(envelope: SlackEventEnvelope): string {
   return `${envelope.channelId}:${envelope.messageTs}`;
 }
 
-export function createSlackApp(handler: EventHandler, reactionHandler?: ReactionHandler) {
+export function createSlackApp(
+  handler: EventHandler,
+  reactionHandler?: ReactionHandler,
+  feedbackActionHandler?: FeedbackActionHandler
+) {
   const app = new App({
     token: config.SLACK_BOT_TOKEN,
     appToken: config.SLACK_APP_TOKEN,
@@ -252,6 +290,27 @@ export function createSlackApp(handler: EventHandler, reactionHandler?: Reaction
       const env = normalizeReactionAdded(e);
       if (!env) return;
       await reactionHandler(env);
+    });
+  }
+
+  // Handle 👍/👎 feedback button clicks. Needs Slack Interactivity (Socket Mode
+  // supports it without a Request URL); no reactions:read scope required.
+  if (feedbackActionHandler) {
+    app.action(/^feedback_(up|down)$/, async ({ ack, body, action, client }) => {
+      await ack();
+      const a = action as { action_id?: string };
+      const b = body as {
+        user?: { id?: string };
+        channel?: { id?: string };
+        message?: { ts?: string; blocks?: unknown[] };
+      };
+      if (!b.user?.id || !isAllowed(b.user.id)) {
+        log.warn({ userId: b.user?.id }, "Unauthorized user feedback action, ignoring");
+        return;
+      }
+      const env = normalizeFeedbackAction(a.action_id ?? "", b);
+      if (!env) return;
+      await feedbackActionHandler(env, client);
     });
   }
 

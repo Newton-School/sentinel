@@ -39,7 +39,27 @@ import {
   normalizeDmMessage,
   normalizeSlashCommand,
   normalizeReactionAdded,
+  normalizeFeedbackAction,
 } from "../src/slack/socketClient.js";
+
+describe("normalizeFeedbackAction", () => {
+  const body = { user: { id: "U1" }, channel: { id: "C1" }, message: { ts: "9.9", blocks: [{ type: "section" }] } };
+
+  it("maps feedback_up → positive and feedback_down → negative", () => {
+    expect(normalizeFeedbackAction("feedback_up", body)).toMatchObject({ reactorUserId: "U1", channelId: "C1", replyTs: "9.9", sentiment: "positive" });
+    expect(normalizeFeedbackAction("feedback_down", body)?.sentiment).toBe("negative");
+  });
+
+  it("carries the message blocks for in-place acknowledgement", () => {
+    expect(normalizeFeedbackAction("feedback_up", body)?.messageBlocks).toEqual([{ type: "section" }]);
+  });
+
+  it("returns null for non-feedback actions or missing fields", () => {
+    expect(normalizeFeedbackAction("some_other_button", body)).toBeNull();
+    expect(normalizeFeedbackAction("feedback_up", { user: { id: "U1" }, channel: { id: "C1" } })).toBeNull();
+    expect(normalizeFeedbackAction("feedback_up", { channel: { id: "C1" }, message: { ts: "9.9" } })).toBeNull();
+  });
+});
 
 describe("normalizeReactionAdded", () => {
   it("normalizes a reaction on a message into an envelope", () => {

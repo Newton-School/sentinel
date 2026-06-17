@@ -13,8 +13,9 @@ import { openaiApiKey } from "./llm/openaiClient.js";
 import { extractFromConversation } from "./memory/conversationHook.js";
 import { runWithTrace, newTraceId, currentTrace } from "./llm/traceContext.js";
 import { activePromptVersionId } from "./prompts/registry.js";
-import { recordReply, recordFeedback, isFeedbackEnabled } from "./feedback/store.js";
-import type { ReactionEnvelope } from "./slack/socketClient.js";
+import { recordReply, recordFeedback, recordButtonFeedback, isFeedbackEnabled } from "./feedback/store.js";
+import type { ReactionEnvelope, FeedbackActionEnvelope } from "./slack/socketClient.js";
+import { buildReplyBlocks, acknowledgedBlocks, type Block } from "./slack/feedbackBlocks.js";
 import { buildSystemPrompt } from "./claude/systemPrompt.js";
 import type { RankedMemory, RetrievalBundle } from "./memory/types.js";
 import { runClaude } from "./claude/runner.js";
@@ -174,16 +175,20 @@ async function handleEventInner(
     // Post response (convert Markdown to Slack mrkdwn; never post an empty
     // message — an empty/looped Claude result falls back to a notice).
     const slackText = slackReplyText(response.text);
+    const feedbackOn = isFeedbackEnabled();
+    // When feedback is on, render the answer with 👍/👎 buttons (trace id rides
+    // on each button so a click is attributable). `text` stays as the fallback.
     const posted = await client.chat.postMessage({
       channel: envelope.channelId,
       thread_ts: envelope.threadTs,
       text: slackText,
       unfurl_links: false,
+      ...(feedbackOn ? { blocks: buildReplyBlocks(slackText, currentTrace()?.traceId ?? "") } : {}),
     });
 
-    // Remember this reply so a later 👍/👎 reaction can be attributed to its
-    // trace (and harvested into eval datasets). Best-effort, gated on the flag.
-    if (isFeedbackEnabled() && posted.ts) {
+    // Remember this reply so a later 👍/👎 vote can be attributed to its trace
+    // (and harvested into eval datasets). Best-effort, gated on the flag.
+    if (feedbackOn && posted.ts) {
       try {
         recordReply({
           channelId: envelope.channelId,
@@ -312,6 +317,35 @@ async function handleReaction(env: ReactionEnvelope): Promise<void> {
   }
 }
 
+/**
+ * Records a 👍/👎 feedback-button click, then swaps the buttons for a
+ * thank-you note so the vote is confirmed and can't be re-clicked. Best-effort.
+ */
+async function handleFeedbackAction(
+  env: FeedbackActionEnvelope,
+  client: Parameters<import("./slack/socketClient.js").EventHandler>[1]
+): Promise<void> {
+  try {
+    const recorded = recordButtonFeedback({
+      channelId: env.channelId,
+      replyTs: env.replyTs,
+      reactorUserId: env.reactorUserId,
+      sentiment: env.sentiment,
+      addedAtIso: new Date().toISOString(),
+    });
+    if (recorded && Array.isArray(env.messageBlocks)) {
+      await client.chat.update({
+        channel: env.channelId,
+        ts: env.replyTs,
+        text: "Thanks for your feedback.",
+        blocks: acknowledgedBlocks(env.messageBlocks as Block[], env.sentiment, env.reactorUserId),
+      });
+    }
+  } catch (err) {
+    log.error({ err }, "Failed to record feedback action (non-fatal)");
+  }
+}
+
 let slackConnected = false;
 const startTime = Date.now();
 
@@ -380,8 +414,14 @@ async function main(): Promise<void> {
   // Start consolidation watcher (rolls entity facts into dossiers).
   stopConsolidation = startConsolidationWatcher();
 
-  // Start Slack app (wire the feedback reaction handler only when enabled).
-  const app = createSlackApp(handleEvent, isFeedbackEnabled() ? handleReaction : undefined);
+  // Start Slack app. When feedback is enabled, wire both the button-action
+  // handler (primary) and the reaction handler (secondary — both write feedback).
+  const feedbackOn = isFeedbackEnabled();
+  const app = createSlackApp(
+    handleEvent,
+    feedbackOn ? handleReaction : undefined,
+    feedbackOn ? handleFeedbackAction : undefined
+  );
   slackApp = app;
   await app.start();
   slackConnected = true;

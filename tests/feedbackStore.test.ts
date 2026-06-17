@@ -95,6 +95,48 @@ describe("feedback tables + store", () => {
     db.closeDb();
   });
 
+  it("recordButtonFeedback records a vote with explicit sentiment, resolving the trace", async () => {
+    const { db, store, registry } = await load();
+    db.getDb();
+    registry.reset();
+    store.recordReply({ channelId: "C1", replyTs: "5.5", traceId: "TB", question: "Q", answer: "A" });
+
+    const ok = store.recordButtonFeedback({ channelId: "C1", replyTs: "5.5", reactorUserId: "U2", sentiment: "negative", addedAtIso: "2026-06-28T00:00:00.000Z" });
+    expect(ok).toBe(true);
+
+    const row = db.getDb().prepare("SELECT trace_id, reaction, sentiment, score FROM feedback").get() as Record<string, unknown>;
+    expect(row.trace_id).toBe("TB");
+    expect(row.reaction).toBe("button");
+    expect(row.sentiment).toBe("negative");
+    expect(row.score).toBe(-1);
+    expect(registry.snapshot().feedback.negative).toBe(1);
+    db.closeDb();
+  });
+
+  it("a user's latest button vote wins (one row per user+reply), and harvests when negative", async () => {
+    const { db, store } = await load();
+    db.getDb();
+    store.recordReply({ channelId: "C1", replyTs: "5.5", traceId: "TB", question: "Who owns pricing?", answer: "Unclear." });
+
+    store.recordButtonFeedback({ channelId: "C1", replyTs: "5.5", reactorUserId: "U2", sentiment: "positive", addedAtIso: "t1" });
+    store.recordButtonFeedback({ channelId: "C1", replyTs: "5.5", reactorUserId: "U2", sentiment: "negative", addedAtIso: "t2" });
+
+    // Switching the vote replaces the row rather than adding a second.
+    expect((db.getDb().prepare("SELECT COUNT(*) AS c FROM feedback").get() as { c: number }).c).toBe(1);
+    const row = db.getDb().prepare("SELECT sentiment FROM feedback").get() as { sentiment: string };
+    expect(row.sentiment).toBe("negative");
+    // Now harvestable as a 👎'd case.
+    expect(store.harvestNegativeFeedback(10)).toHaveLength(1);
+    db.closeDb();
+  });
+
+  it("recordButtonFeedback ignores an untracked reply", async () => {
+    const { db, store } = await load();
+    db.getDb();
+    expect(store.recordButtonFeedback({ channelId: "C1", replyTs: "nope", reactorUserId: "U2", sentiment: "positive", addedAtIso: "t" })).toBe(false);
+    db.closeDb();
+  });
+
   it("pruneFeedback + pruneBotReplies drop rows older than their windows", async () => {
     const { db, store } = await load();
     db.getDb();
