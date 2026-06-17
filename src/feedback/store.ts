@@ -9,16 +9,6 @@ import { getDb } from "../state/db.js";
 import { classifyReaction } from "./reactions.js";
 import { recordFeedback as recordFeedbackMetric } from "../metrics/registry.js";
 
-/**
- * Runtime kill-switch (matches the MEMORY_INGEST_* idiom). Feedback capture
- * stays off until the Slack app has the `reaction_added` subscription +
- * `reactions:read` scope, then `FEEDBACK_ENABLED=1` turns it on — so this PR
- * can merge before the Slack-side config lands.
- */
-export function isFeedbackEnabled(): boolean {
-  return process.env.FEEDBACK_ENABLED === "1";
-}
-
 export interface RecordReplyInput {
   channelId: string;
   replyTs: string;
