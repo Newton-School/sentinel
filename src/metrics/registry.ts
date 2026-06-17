@@ -36,6 +36,39 @@ export interface RecordInput {
   isError?: boolean;
 }
 
+/**
+ * Latency histogram bucket upper-bounds (ms). A call's latency lands in the
+ * first bucket whose bound it does not exceed; latencies above the largest
+ * bound appear only in the implicit `+Inf` bucket (== count). Cumulative
+ * `le=` lines are produced at render time.
+ */
+export const LLM_LATENCY_BUCKETS_MS = [
+  50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000, 120000,
+];
+
+/** One LLM call's metrics (see src/llm/traceStore.recordLlmCall). */
+export interface RecordLlmMetricInput {
+  provider: string;
+  model: string;
+  operation: string;
+  status: "ok" | "error";
+  inputTokens?: number;
+  outputTokens?: number;
+  costUsd?: number;
+  latencyMs?: number;
+}
+
+/** Per-(provider,model,operation) aggregate of tokens/cost + a latency histogram. */
+interface LlmAgg {
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  /** Non-cumulative per-bucket counts, parallel to LLM_LATENCY_BUCKETS_MS. */
+  buckets: number[];
+  latencySum: number;
+  latencyCount: number;
+}
+
 export interface MemoryMetricsSnapshot {
   /** Total stored-fact events (insert or dedup-reinforce), all sources. */
   factsTotal: number;
@@ -63,6 +96,20 @@ export type EntityResolutionOutcome = "matched" | "created" | "ambiguous";
 /** A single embedding outcome (see embeddingBackfill). */
 export type EmbeddingResult = "ok" | "error";
 
+/** Per-call LLM trace metrics (see src/llm/traceStore). */
+export interface LlmMetricsSnapshot {
+  /** Call counts keyed by "provider|model|operation|status". */
+  calls: Record<string, number>;
+  /** Input tokens keyed by "provider|model|operation". */
+  inputTokens: Record<string, number>;
+  /** Output tokens keyed by "provider|model|operation". */
+  outputTokens: Record<string, number>;
+  /** Cost (USD) keyed by "provider|model|operation". */
+  costUsd: Record<string, number>;
+  /** Latency histogram keyed by "provider|model|operation". */
+  latency: Record<string, { buckets: number[]; sum: number; count: number }>;
+}
+
 export interface MetricsSnapshot {
   totalRequests: number;
   totalErrors: number;
@@ -74,6 +121,8 @@ export interface MetricsSnapshot {
   byType: Record<string, number>;
   /** Organizational-memory subsystem counters. */
   memory: MemoryMetricsSnapshot;
+  /** Per-call LLM trace metrics. */
+  llm: LlmMetricsSnapshot;
 }
 
 interface Counters {
@@ -91,6 +140,10 @@ interface Counters {
   memoryRetrievalEmpty: number;
   memoryEntitiesResolved: Map<EntityResolutionOutcome, number>;
   memoryEmbeddings: Map<EmbeddingResult, number>;
+  /** Call counts keyed by "provider|model|operation|status". */
+  llmCalls: Map<string, number>;
+  /** Token/cost/latency aggregates keyed by "provider|model|operation". */
+  llmAgg: Map<string, LlmAgg>;
 }
 
 function freshCounters(): Counters {
@@ -109,6 +162,8 @@ function freshCounters(): Counters {
     memoryRetrievalEmpty: 0,
     memoryEntitiesResolved: new Map(),
     memoryEmbeddings: new Map(),
+    llmCalls: new Map(),
+    llmAgg: new Map(),
   };
 }
 
@@ -124,6 +179,46 @@ export function record(input: RecordInput): void {
   if (input.isError) counters.totalErrors += 1;
 
   counters.byType.set(input.type, (counters.byType.get(input.type) ?? 0) + 1);
+}
+
+/**
+ * Record one LLM call (Claude reply or OpenAI extract/embed/...) into the
+ * labeled LLM series. Distinct from {@link record}: that aggregates per Slack
+ * request; this is per individual provider call. Call counts carry a status
+ * label; token/cost/latency are keyed by provider|model|operation only.
+ */
+export function recordLlmMetric(input: RecordLlmMetricInput): void {
+  const base = `${input.provider}|${input.model}|${input.operation}`;
+  const callKey = `${base}|${input.status}`;
+  counters.llmCalls.set(callKey, (counters.llmCalls.get(callKey) ?? 0) + 1);
+
+  let agg = counters.llmAgg.get(base);
+  if (!agg) {
+    agg = {
+      inputTokens: 0,
+      outputTokens: 0,
+      costUsd: 0,
+      buckets: new Array(LLM_LATENCY_BUCKETS_MS.length).fill(0),
+      latencySum: 0,
+      latencyCount: 0,
+    };
+    counters.llmAgg.set(base, agg);
+  }
+  agg.inputTokens += input.inputTokens ?? 0;
+  agg.outputTokens += input.outputTokens ?? 0;
+  agg.costUsd += input.costUsd ?? 0;
+
+  if (typeof input.latencyMs === "number" && input.latencyMs >= 0) {
+    agg.latencySum += input.latencyMs;
+    agg.latencyCount += 1;
+    for (let i = 0; i < LLM_LATENCY_BUCKETS_MS.length; i++) {
+      if (input.latencyMs <= LLM_LATENCY_BUCKETS_MS[i]) {
+        agg.buckets[i] += 1;
+        break;
+      }
+    }
+    // latencies above the largest finite bucket only show up at +Inf (==count)
+  }
 }
 
 // --- Memory subsystem counters ----------------------------------------------
@@ -204,6 +299,19 @@ export function snapshot(): MetricsSnapshot {
     embeddingsTotal += count;
   }
 
+  const llmCalls: Record<string, number> = {};
+  for (const [key, count] of counters.llmCalls) llmCalls[key] = count;
+  const llmInputTokens: Record<string, number> = {};
+  const llmOutputTokens: Record<string, number> = {};
+  const llmCostUsd: Record<string, number> = {};
+  const llmLatency: Record<string, { buckets: number[]; sum: number; count: number }> = {};
+  for (const [key, agg] of counters.llmAgg) {
+    llmInputTokens[key] = agg.inputTokens;
+    llmOutputTokens[key] = agg.outputTokens;
+    llmCostUsd[key] = agg.costUsd;
+    llmLatency[key] = { buckets: [...agg.buckets], sum: agg.latencySum, count: agg.latencyCount };
+  }
+
   return {
     totalRequests: counters.totalRequests,
     totalErrors: counters.totalErrors,
@@ -223,6 +331,13 @@ export function snapshot(): MetricsSnapshot {
       entitiesResolvedTotal,
       embeddings,
       embeddingsTotal,
+    },
+    llm: {
+      calls: llmCalls,
+      inputTokens: llmInputTokens,
+      outputTokens: llmOutputTokens,
+      costUsd: llmCostUsd,
+      latency: llmLatency,
     },
   };
 }
@@ -349,6 +464,61 @@ export function renderPrometheus(): string {
     "Embedding attempts during backfill (ok/error)",
     [{ value: s.memory.embeddingsTotal }, ...byEmbedResult]
   );
+
+  // --- LLM trace metrics (per-call, labeled by provider/model/operation) ----
+  // base key "provider|model|operation" → label string (call counts add status)
+  const baseLabels = (key: string): string => {
+    const [provider, model, operation] = key.split("|");
+    return `provider="${provider}",model="${model}",operation="${operation}"`;
+  };
+
+  const callSamples = Object.entries(s.llm.calls).map(([key, value]) => {
+    const [provider, model, operation, status] = key.split("|");
+    return {
+      labels: `provider="${provider}",model="${model}",operation="${operation}",status="${status}"`,
+      value,
+    };
+  });
+  metric(
+    "sentinel_llm_calls_total",
+    "counter",
+    "LLM calls by provider/model/operation/status",
+    callSamples
+  );
+
+  metric(
+    "sentinel_llm_input_tokens_total",
+    "counter",
+    "LLM input (prompt) tokens by provider/model/operation",
+    Object.entries(s.llm.inputTokens).map(([key, value]) => ({ labels: baseLabels(key), value }))
+  );
+  metric(
+    "sentinel_llm_output_tokens_total",
+    "counter",
+    "LLM output (completion) tokens by provider/model/operation",
+    Object.entries(s.llm.outputTokens).map(([key, value]) => ({ labels: baseLabels(key), value }))
+  );
+  metric(
+    "sentinel_llm_cost_usd_total",
+    "counter",
+    "LLM cost in USD by provider/model/operation",
+    Object.entries(s.llm.costUsd).map(([key, value]) => ({ labels: baseLabels(key), value }))
+  );
+
+  // Latency histogram: cumulative le= buckets + +Inf (== count) + _sum/_count.
+  lines.push("# HELP sentinel_llm_latency_ms LLM call latency in milliseconds");
+  lines.push("# TYPE sentinel_llm_latency_ms histogram");
+  for (const [key, h] of Object.entries(s.llm.latency)) {
+    const labels = baseLabels(key);
+    let cumulative = 0;
+    for (let i = 0; i < LLM_LATENCY_BUCKETS_MS.length; i++) {
+      cumulative += h.buckets[i];
+      lines.push(`sentinel_llm_latency_ms_bucket{${labels},le="${LLM_LATENCY_BUCKETS_MS[i]}"} ${cumulative}`);
+    }
+    lines.push(`sentinel_llm_latency_ms_bucket{${labels},le="+Inf"} ${h.count}`);
+    lines.push(`sentinel_llm_latency_ms_sum{${labels}} ${fmt(h.sum)}`);
+    lines.push(`sentinel_llm_latency_ms_count{${labels}} ${h.count}`);
+  }
 
   // Trailing newline per Prometheus convention.
   return lines.join("\n") + "\n";

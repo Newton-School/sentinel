@@ -11,6 +11,7 @@ import { isEmbeddingsEnabled } from "./memory/embeddingBackfill.js";
 import { embedText } from "./memory/embedder.js";
 import { openaiApiKey } from "./llm/openaiClient.js";
 import { extractFromConversation } from "./memory/conversationHook.js";
+import { runWithTrace, newTraceId } from "./llm/traceContext.js";
 import { buildSystemPrompt } from "./claude/systemPrompt.js";
 import type { RankedMemory, RetrievalBundle } from "./memory/types.js";
 import { runClaude } from "./claude/runner.js";
@@ -31,7 +32,23 @@ const log = createLogger("main");
 let activeRequests = 0;
 const MAX_CONCURRENT = 3;
 
+/**
+ * Establishes a per-request LLM trace, then handles the event. Every LLM call
+ * in the fan-out — the Claude reply AND the fire-and-forget fact extraction
+ * launched in the `finally` (which inherits this AsyncLocalStorage scope) —
+ * records an `llm_calls` row sharing this trace id.
+ */
 async function handleEvent(
+  envelope: SlackEventEnvelope,
+  client: Parameters<import("./slack/socketClient.js").EventHandler>[1]
+): Promise<void> {
+  return runWithTrace(
+    { traceId: newTraceId(), userId: envelope.userId },
+    () => handleEventInner(envelope, client)
+  );
+}
+
+async function handleEventInner(
   envelope: SlackEventEnvelope,
   client: Parameters<import("./slack/socketClient.js").EventHandler>[1]
 ): Promise<void> {

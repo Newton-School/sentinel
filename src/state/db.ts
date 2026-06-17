@@ -14,6 +14,19 @@ export const QUERY_LOG_RETENTION_DAYS = 90;
 /** Default retention window for non-active memory rows, in days. */
 export const MEMORY_RETENTION_DAYS = 90;
 
+/** Default retention window for llm_calls trace rows, in days. */
+export const LLM_CALLS_RETENTION_DAYS = 90;
+
+/**
+ * True when the DB handle is already open. The LLM trace sink
+ * (src/llm/traceStore.ts) consults this so it only writes a durable row when
+ * the app has already initialized the DB — it must never auto-open a stray
+ * database (which in tests would pollute ./sentinel.db).
+ */
+export function isDbOpen(): boolean {
+  return _db !== null;
+}
+
 /**
  * True when the FTS5 virtual table + triggers were created successfully
  * during migration. False on SQLite builds without the fts5 module — memory
@@ -56,6 +69,14 @@ export function getDb(): Database.Database {
       }
     } catch (err) {
       log.error({ err }, "memories retention prune failed (non-fatal)");
+    }
+    try {
+      const deleted = pruneLlmCalls();
+      if (deleted > 0) {
+        log.info({ deleted }, "Pruned stale llm_calls rows");
+      }
+    } catch (err) {
+      log.error({ err }, "llm_calls retention prune failed (non-fatal)");
     }
   }
 
@@ -323,6 +344,35 @@ function runMigrations(db: Database.Database): void {
     log.info("Added scope_team_id column to memories");
   }
 
+  // Migration: LLMOps trace sink. One row per LLM call (Claude reply +
+  // OpenAI extract/consolidate/embed/summary), correlated by trace_id across a
+  // request's fan-out. Token/cost/latency are nullable (telemetry can be
+  // absent; no-key/budget skips are not recorded here). created_at is an ISO
+  // string so it reuses the lexicographic-cutoff prune pattern.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS llm_calls (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      call_id TEXT NOT NULL,
+      trace_id TEXT NOT NULL,
+      provider TEXT NOT NULL CHECK (provider IN ('anthropic','openai')),
+      model TEXT NOT NULL,
+      operation TEXT NOT NULL CHECK (operation IN ('reply','extract','consolidate','embed','summary')),
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      cost_usd REAL,
+      latency_ms INTEGER,
+      status TEXT NOT NULL DEFAULT 'ok' CHECK (status IN ('ok','error')),
+      error_kind TEXT,
+      num_turns INTEGER,
+      user_id TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_llm_calls_trace ON llm_calls(trace_id);
+    CREATE INDEX IF NOT EXISTS idx_llm_calls_created_at ON llm_calls(created_at);
+    CREATE INDEX IF NOT EXISTS idx_llm_calls_op_model ON llm_calls(operation, model);
+  `);
+
   log.info("Migrations complete");
 }
 
@@ -381,6 +431,27 @@ export function pruneMemories(
       .run(cutoffIso).changes;
   });
   return prune();
+}
+
+/**
+ * Deletes llm_calls rows older than the retention window. `created_at` is an
+ * ISO 8601 string, so the cutoff is compared lexicographically (valid for
+ * fixed-format UTC ISO timestamps). Rows strictly older than the cutoff are
+ * removed; a row exactly at the boundary is kept.
+ *
+ * @param retentionDays how many days of trace history to keep (default 90)
+ * @param nowMs reference "now" in epoch ms (defaults to Date.now()); injectable for tests
+ * @returns the number of rows deleted
+ */
+export function pruneLlmCalls(
+  retentionDays = LLM_CALLS_RETENTION_DAYS,
+  nowMs?: number
+): number {
+  const db = getDb();
+  const now = nowMs ?? Date.now();
+  const cutoffIso = new Date(now - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+  const result = db.prepare(`DELETE FROM llm_calls WHERE created_at < ?`).run(cutoffIso);
+  return result.changes;
 }
 
 export function closeDb(): void {

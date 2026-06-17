@@ -58,6 +58,11 @@ vi.mock("node:child_process", () => ({
   spawn: spawnMock,
 }));
 
+// Intercept the LLM trace sink so the reply span is observable and never
+// touches the DB.
+const { recordLlmCallSpy } = vi.hoisted(() => ({ recordLlmCallSpy: vi.fn() }));
+vi.mock("../src/llm/traceStore.js", () => ({ recordLlmCall: recordLlmCallSpy }));
+
 // Helper: flush pending microtasks/promise callbacks so that .then/.catch
 // handlers attached inside runClaude run before we assert.
 async function flush() {
@@ -426,6 +431,90 @@ describe("runClaude", () => {
       vi.advanceTimersByTime(180_000);
       await flush();
       expect(child.kill).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("LLM trace recording", () => {
+    function jsonResult(overrides: Record<string, unknown> = {}): string {
+      return JSON.stringify({
+        type: "result",
+        result: "Hello world",
+        usage: { input_tokens: 123, output_tokens: 45 },
+        total_cost_usd: 0.0123,
+        num_turns: 3,
+        ...overrides,
+      });
+    }
+
+    it("records an anthropic 'reply' span with parsed telemetry on success", async () => {
+      const { runClaude } = await import("../src/claude/runner.js");
+      const promise = runClaude("sys", "msg");
+      child.stdout.emit("data", Buffer.from(jsonResult()));
+      child.emit("close", 0);
+      await promise;
+
+      expect(recordLlmCallSpy).toHaveBeenCalledTimes(1);
+      const arg = recordLlmCallSpy.mock.calls[0][0];
+      expect(arg.provider).toBe("anthropic");
+      expect(arg.operation).toBe("reply");
+      expect(arg.inputTokens).toBe(123);
+      expect(arg.outputTokens).toBe(45);
+      expect(arg.costUsd).toBe(0.0123);
+      expect(arg.numTurns).toBe(3);
+      expect(arg.status).toBe("ok");
+      expect(arg.latencyMs).toBeGreaterThanOrEqual(0);
+    });
+
+    it("captures the model id from the CLI JSON when present", async () => {
+      const { runClaude } = await import("../src/claude/runner.js");
+      const promise = runClaude("sys", "msg");
+      child.stdout.emit("data", Buffer.from(jsonResult({ model: "claude-opus-4-8" })));
+      child.emit("close", 0);
+      await promise;
+      expect(recordLlmCallSpy.mock.calls[0][0].model).toBe("claude-opus-4-8");
+    });
+
+    it("falls back to model 'claude' when the JSON omits it", async () => {
+      const { runClaude } = await import("../src/claude/runner.js");
+      const promise = runClaude("sys", "msg");
+      child.stdout.emit("data", Buffer.from(JSON.stringify({ result: "answer only" })));
+      child.emit("close", 0);
+      await promise;
+      expect(recordLlmCallSpy.mock.calls[0][0].model).toBe("claude");
+    });
+
+    it("records an error reply span on a non-zero exit", async () => {
+      const { runClaude } = await import("../src/claude/runner.js");
+      const promise = runClaude("sys", "msg");
+      child.stderr.emit("data", Buffer.from("boom"));
+      child.emit("close", 1);
+      await expect(promise).rejects.toThrow();
+      expect(recordLlmCallSpy).toHaveBeenCalledTimes(1);
+      const arg = recordLlmCallSpy.mock.calls[0][0];
+      expect(arg.provider).toBe("anthropic");
+      expect(arg.operation).toBe("reply");
+      expect(arg.status).toBe("error");
+      expect(arg.model).toBe("claude");
+    });
+
+    it("records an error reply span when spawn errors", async () => {
+      const { runClaude } = await import("../src/claude/runner.js");
+      const promise = runClaude("sys", "msg");
+      child.emit("error", new Error("ENOENT"));
+      await expect(promise).rejects.toThrow();
+      expect(recordLlmCallSpy.mock.calls[0][0].status).toBe("error");
+    });
+
+    it("a throwing recorder never rejects runClaude", async () => {
+      recordLlmCallSpy.mockImplementationOnce(() => {
+        throw new Error("sink boom");
+      });
+      const { runClaude } = await import("../src/claude/runner.js");
+      const promise = runClaude("sys", "msg");
+      child.stdout.emit("data", Buffer.from(JSON.stringify({ result: "ok" })));
+      child.emit("close", 0);
+      const result = await promise;
+      expect(result.text).toBe("ok");
     });
   });
 });

@@ -15,6 +15,8 @@
 import { fetchWithRetry } from "../mcp/httpRetry.js";
 import { redactedHttpError } from "../mcp/httpError.js";
 import { createLogger } from "../logging/logger.js";
+import { recordLlmCall } from "../llm/traceStore.js";
+import { computeCostUsd } from "../llm/modelPricing.js";
 
 const log = createLogger("embedder");
 
@@ -86,6 +88,7 @@ export interface EmbedOptions {
 
 interface EmbeddingsResponse {
   data?: Array<{ index?: number; embedding?: number[] }>;
+  usage?: { prompt_tokens?: number; total_tokens?: number };
 }
 
 /**
@@ -112,6 +115,21 @@ export async function embedTexts(
     return texts.map(() => null);
   }
 
+  // An API call is attempted from here, so every exit records one llm_calls
+  // span (one row per request, regardless of batch size).
+  const model = opts.model ?? DEFAULT_MODEL;
+  const startedAt = Date.now();
+  const reportError = (errorKind: string): void => {
+    recordLlmCall({
+      provider: "openai",
+      model,
+      operation: "embed",
+      latencyMs: Date.now() - startedAt,
+      status: "error",
+      errorKind,
+    });
+  };
+
   try {
     const res = await fetchWithRetry(
       OPENAI_EMBEDDINGS_URL,
@@ -121,7 +139,7 @@ export async function embedTexts(
           authorization: `Bearer ${opts.apiKey}`,
           "content-type": "application/json",
         },
-        body: JSON.stringify({ model: opts.model ?? DEFAULT_MODEL, input: texts }),
+        body: JSON.stringify({ model, input: texts }),
       },
       { timeoutMs: TIMEOUT_MS, retries: RETRIES, fetchImpl: opts.fetchImpl }
     );
@@ -131,6 +149,7 @@ export async function embedTexts(
         { message: redactedHttpError("Embeddings request failed", res).message },
         "embedTexts HTTP failure"
       );
+      reportError("http");
       return texts.map(() => null);
     }
 
@@ -138,8 +157,21 @@ export async function embedTexts(
     const data = payload.data;
     if (!Array.isArray(data) || data.length !== texts.length) {
       log.warn("embedTexts response shape unexpected — skipping");
+      reportError("parse");
       return texts.map(() => null);
     }
+
+    const promptTokens = payload.usage?.prompt_tokens;
+    recordLlmCall({
+      provider: "openai",
+      model,
+      operation: "embed",
+      inputTokens: promptTokens,
+      outputTokens: 0,
+      costUsd: computeCostUsd(model, promptTokens ?? 0, 0),
+      latencyMs: Date.now() - startedAt,
+      status: "ok",
+    });
 
     // Order by `index` defensively (the API returns them in input order).
     const out: Array<Float32Array | null> = texts.map(() => null);
@@ -153,6 +185,7 @@ export async function embedTexts(
     return out;
   } catch (err) {
     log.warn({ err }, "embedTexts failed (non-fatal)");
+    reportError("network");
     return texts.map(() => null);
   }
 }

@@ -22,6 +22,8 @@ import {
   recordMemoryExtractError,
   recordMemoryExtractBudgetExhausted,
 } from "../metrics/registry.js";
+import { recordLlmCall } from "./traceStore.js";
+import { computeCostUsd } from "./modelPricing.js";
 
 const log = createLogger("openai-client");
 
@@ -77,6 +79,8 @@ export interface ExtractJsonOptions {
   schema: Record<string, unknown>;
   /** Model id override (defaults to OPENAI_EXTRACT_MODEL). */
   model?: string;
+  /** Operation tag for the LLM trace row (defaults to "extract"). */
+  operation?: "extract" | "consolidate" | "summary";
   maxTokens?: number;
   /** API key. Defaults to {@link openaiApiKey}; without one the call no-ops to null. */
   apiKey?: string;
@@ -129,6 +133,23 @@ export async function extractJson(opts: ExtractJsonOptions): Promise<unknown | n
     return null;
   }
 
+  // Beyond this point an API call is actually attempted, so every exit records
+  // one llm_calls span (provider=openai). The no-key/budget skips above are NOT
+  // recorded — they are not calls.
+  const model = opts.model ?? OPENAI_EXTRACT_MODEL;
+  const operation = opts.operation ?? "extract";
+  const startedAt = Date.now();
+  const reportError = (errorKind: string): void => {
+    recordLlmCall({
+      provider: "openai",
+      model,
+      operation,
+      latencyMs: Date.now() - startedAt,
+      status: "error",
+      errorKind,
+    });
+  };
+
   try {
     const res = await fetchWithRetry(
       OPENAI_CHAT_URL,
@@ -145,6 +166,7 @@ export async function extractJson(opts: ExtractJsonOptions): Promise<unknown | n
 
     if (!res.ok) {
       recordMemoryExtractError();
+      reportError("http");
       log.warn(
         { message: redactedHttpError("OpenAI chat request failed", res).message },
         "extractJson HTTP failure"
@@ -157,11 +179,13 @@ export async function extractJson(opts: ExtractJsonOptions): Promise<unknown | n
         message?: { content?: string | null; refusal?: string | null };
         finish_reason?: string;
       }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
 
     const choice = payload.choices?.[0];
     if (!choice || choice.message?.refusal || choice.finish_reason === "length") {
       recordMemoryExtractError();
+      reportError("unusable");
       log.warn({ finishReason: choice?.finish_reason }, "extractJson unusable response");
       return null;
     }
@@ -169,13 +193,37 @@ export async function extractJson(opts: ExtractJsonOptions): Promise<unknown | n
     const content = choice.message?.content;
     if (typeof content !== "string") {
       recordMemoryExtractError();
+      reportError("parse");
       log.warn("extractJson response had no message content");
       return null;
     }
 
-    return JSON.parse(content) as unknown;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(content);
+    } catch (err) {
+      recordMemoryExtractError();
+      reportError("parse");
+      log.warn({ err }, "extractJson content was not valid JSON");
+      return null;
+    }
+
+    const inputTokens = payload.usage?.prompt_tokens;
+    const outputTokens = payload.usage?.completion_tokens;
+    recordLlmCall({
+      provider: "openai",
+      model,
+      operation,
+      inputTokens,
+      outputTokens,
+      costUsd: computeCostUsd(model, inputTokens ?? 0, outputTokens ?? 0),
+      latencyMs: Date.now() - startedAt,
+      status: "ok",
+    });
+    return parsed;
   } catch (err) {
     recordMemoryExtractError();
+    reportError("network");
     log.warn({ err }, "extractJson failed (non-fatal)");
     return null;
   }
