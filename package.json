@@ -12,7 +12,9 @@
     "test:watch": "vitest",
     "meet-bot:setup": "tsx src/meet-bot/setup.ts",
     "meet-bot:join": "tsx src/meet-bot/joiner.ts",
-    "monitor:memory": "tsx scripts/monitor-memory.ts"
+    "monitor:memory": "tsx scripts/monitor-memory.ts",
+    "eval": "tsx evals/runner.ts",
+    "eval:gate": "tsx evals/runner.ts --gate"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
