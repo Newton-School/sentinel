@@ -28,17 +28,19 @@ There are two capture paths, both writing to the same `feedback` table:
 4. `npm run feedback:harvest` emits 👎'd Q&A pairs as `answers.jsonl` candidates
    for the eval harness.
 
-## Enabling it (one-time Slack setup)
+## Slack setup
 
-The code ships **off** behind `FEEDBACK_ENABLED`. Before turning it on:
+Feedback is a **default, always-on** feature — no env flag. Buttons render on
+every reply out of the box. Two Slack-app settings make the capture functional:
 
 - **For buttons (primary):** enable **Interactivity** in the Slack app. With
-  Socket Mode this just needs the toggle on — no Request URL.
+  Socket Mode this is just the toggle — no Request URL. Until it's on, the
+  buttons render but a click won't reach the bot.
 - **For reactions (optional):** add the `reaction_added` bot event subscription
   + the `reactions:read` scope.
 
-Then set `FEEDBACK_ENABLED=1` and restart. Until then, replies render as plain
-text exactly as before.
+If neither is configured, replies still render with buttons; the votes just
+won't be captured until Interactivity is enabled.
 
 ## Harvesting feedback into evals
 

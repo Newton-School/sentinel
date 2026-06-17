@@ -271,9 +271,8 @@ export function createSlackApp(
   });
 
   // Handle 👍/👎 reactions on the bot's replies (feedback loop). Only wired
-  // when a reaction handler is supplied (i.e. FEEDBACK_ENABLED), and requires
-  // the `reaction_added` event subscription + `reactions:read` scope on the
-  // Slack app.
+  // when a reaction handler is supplied, and requires the `reaction_added`
+  // event subscription + `reactions:read` scope on the Slack app.
   if (reactionHandler) {
     app.event("reaction_added", async ({ event }) => {
       const e = event as {
