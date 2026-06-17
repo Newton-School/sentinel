@@ -2,6 +2,7 @@ import type { PersonaProfile, PersonaTrait } from "../persona/types.js";
 import type { RankedMemory, RetrievalBundle } from "../memory/types.js";
 import { decayedConfidence } from "../persona/personaDecay.js";
 import { allocateInjection } from "./injectionBudget.js";
+import { ANALYTICS_BRAIN } from "../prompts/atlas-brain.js";
 
 /** Minimum (decayed) confidence for a trait to appear in the prompt. */
 const TRAIT_CONFIDENCE_THRESHOLD = 0.6;
@@ -252,6 +253,48 @@ export function buildSystemPrompt(
   parts.push(
     `For questions about people and teams (who owns/manages/works on what, what a team is doing, what we know about a person), use the entity_* / team_roster / org_lookup tools: entity_search to find an entity_id, then entity_get / entity_facts for its facts, team_roster for a team's lead and members, and org_lookup to follow relations like "owns" or "manages". For "what changed / what's new" questions, use entity_digest (one entity) or org_digest (whole org) over a recent window.`
   );
+
+  return parts.join("\n");
+}
+
+/**
+ * System prompt for the ANALYTICS route. Unlike buildSystemPrompt, the base is
+ * the Atlas brain (atlas-brain.ts) — a different behavioral contract (ask
+ * clarifying questions, state which DB, flag gotchas, write gotcha-aware SQL),
+ * NOT the founders bot's 5-section format. Only the lightweight dynamic
+ * sections (current time in IST, current user) are layered on; org-memory
+ * recall is deliberately skipped (the brain is its own context) to save
+ * latency. When a projection skill is matched, its month-resolved directive is
+ * appended AFTER the brain so its "section 16/17 above" references resolve.
+ *
+ * `traits` is accepted for signature symmetry with buildSystemPrompt and
+ * possible future use; analytics answers are steered by the brain, not by the
+ * general focus-area traits.
+ */
+export function buildAnalyticsSystemPrompt(
+  persona: PersonaProfile,
+  _traits: PersonaTrait[],
+  opts?: { skillDirective?: string }
+): string {
+  const parts = [ANALYTICS_BRAIN];
+
+  parts.push(`\n## Current Time`);
+  parts.push(getCurrentTimeContext());
+
+  parts.push(`\n## Current User`);
+  parts.push(`You are speaking with **${persona.displayName}**.`);
+  if (persona.role) {
+    parts.push(`Their role is: ${persona.role}.`);
+  }
+
+  parts.push(`\n## Output for Slack`);
+  parts.push(
+    `You are replying in Slack. Lead with the headline number/answer, then the supporting detail. Render wide tables inside a triple-backtick code block so columns stay aligned, and use Slack mrkdwn for emphasis (*bold*, _italic_, <url|text>). Per the brain's rules, always state which database/table you queried and never fabricate numbers — if a query fails or returns nothing, say so.`
+  );
+
+  if (opts?.skillDirective) {
+    parts.push(`\n${opts.skillDirective}`);
+  }
 
   return parts.join("\n");
 }

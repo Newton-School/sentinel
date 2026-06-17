@@ -19,8 +19,21 @@ import { promptHash } from "./hash.js";
 import { EXTRACTION_INSTRUCTIONS } from "./extraction.js";
 import { CONSOLIDATION_SYSTEM_TEMPLATE } from "./consolidation.js";
 import { BASE_PROMPT } from "../claude/systemPrompt.js";
+import { ANALYTICS_BRAIN } from "./atlas-brain.js";
+import {
+  ANALYTICS_CLASSIFIER_INSTRUCTIONS,
+  OPEN_FUNNEL_SKILL_DIRECTIVE,
+  M0_RFD_SKILL_DIRECTIVE,
+} from "./analytics.js";
 
-export type PromptId = "extraction" | "consolidation" | "system";
+export type PromptId =
+  | "extraction"
+  | "consolidation"
+  | "system"
+  | "analytics"
+  | "analytics_classifier"
+  | "analytics_skill_open_funnel"
+  | "analytics_skill_m0_rfd";
 
 export interface PromptDef {
   id: PromptId;
@@ -43,6 +56,10 @@ const PROMPTS: Record<PromptId, PromptDef> = {
   extraction: def("extraction", "1.0.0", EXTRACTION_INSTRUCTIONS.join("\n")),
   consolidation: def("consolidation", "1.0.0", CONSOLIDATION_SYSTEM_TEMPLATE),
   system: def("system", "1.0.0", BASE_PROMPT),
+  analytics: def("analytics", "1.0.0", ANALYTICS_BRAIN),
+  analytics_classifier: def("analytics_classifier", "1.0.0", ANALYTICS_CLASSIFIER_INSTRUCTIONS),
+  analytics_skill_open_funnel: def("analytics_skill_open_funnel", "1.0.0", OPEN_FUNNEL_SKILL_DIRECTIVE),
+  analytics_skill_m0_rfd: def("analytics_skill_m0_rfd", "1.0.0", M0_RFD_SKILL_DIRECTIVE),
 };
 
 /** The full definition for a prompt (version, skeleton, hash, versionId). */

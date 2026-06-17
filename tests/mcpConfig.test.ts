@@ -421,6 +421,63 @@ describe("getMcpConfigPath", () => {
     expect(config.mcpServers).not.toHaveProperty("notion");
   });
 
+  it("restricts to ONLY the allowlisted servers (plus memory) when a `servers` set is passed", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: "https://metabase.test",
+        METABASE_USERNAME: "admin",
+        METABASE_PASSWORD: "pass",
+        GITHUB_TOKEN: "ghp_test",
+        NOTION_API_KEY: "ntn_test",
+        SLACK_USER_TOKEN: "xoxp-test",
+        GOOGLE_CLIENT_ID: "client-id",
+        GOOGLE_CLIENT_SECRET: "client-secret",
+        GOOGLE_REFRESH_TOKEN: "refresh-token",
+        SQLITE_DB_PATH: "./sentinel.db",
+      },
+    }));
+
+    const { getMcpConfigPath } = await import("../src/claude/mcpConfig.js");
+    // Analytics route: everything is credentialed, but we only want Metabase.
+    const configPath = getMcpConfigPath({ servers: new Set(["metabase"]) });
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+
+    expect(config.mcpServers).toHaveProperty("metabase");
+    // memory is always included, regardless of the allowlist
+    expect(config.mcpServers).toHaveProperty("memory");
+    // everything else is excluded even though its credentials are present
+    expect(config.mcpServers).not.toHaveProperty("github");
+    expect(config.mcpServers).not.toHaveProperty("notion");
+    expect(config.mcpServers).not.toHaveProperty("slack-search");
+    expect(config.mcpServers).not.toHaveProperty("gmail");
+    expect(config.mcpServers).not.toHaveProperty("google-calendar");
+    expect(config.mcpServers).not.toHaveProperty("meeting-transcripts");
+    expect(config.mcpServers).not.toHaveProperty("google-meet");
+  });
+
+  it("an empty allowlist emits memory only (no credentialed servers)", async () => {
+    vi.doMock("../src/config.js", () => ({
+      config: {
+        METABASE_URL: "https://metabase.test",
+        METABASE_USERNAME: "admin",
+        METABASE_PASSWORD: "pass",
+        GITHUB_TOKEN: "ghp_test",
+        NOTION_API_KEY: "ntn_test",
+        SLACK_USER_TOKEN: "xoxp-test",
+        GOOGLE_CLIENT_ID: "client-id",
+        GOOGLE_CLIENT_SECRET: "client-secret",
+        GOOGLE_REFRESH_TOKEN: "refresh-token",
+        SQLITE_DB_PATH: "./sentinel.db",
+      },
+    }));
+
+    const { getMcpConfigPath } = await import("../src/claude/mcpConfig.js");
+    const configPath = getMcpConfigPath({ servers: new Set<string>() });
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+
+    expect(Object.keys(config.mcpServers)).toEqual(["memory"]);
+  });
+
   it("registers only Google servers when only Google credentials are set", async () => {
     vi.doMock("../src/config.js", () => ({
       config: {

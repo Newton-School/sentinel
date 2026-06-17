@@ -82,15 +82,30 @@ export function parseClaudeJsonOutput(stdout: string): ParsedClaudeOutput {
   return out;
 }
 
+/** Per-call overrides for a non-default (e.g. analytics) Claude run. */
+export interface RunClaudeOptions {
+  /** Pin a specific model via --model (default: the CLI's configured model). */
+  model?: string;
+  /** Restrict the spawned MCP toolset (memory is always included). */
+  mcpServers?: ReadonlySet<string>;
+  /** Override the spawn/timeout window (default: TIMEOUT_MS). */
+  timeoutMs?: number;
+}
+
 export async function runClaude(
   systemPrompt: string,
   userMessage: string,
   threadContext?: string,
   viewer?: ViewerScope,
-  promptVersion?: string
+  promptVersion?: string,
+  options?: RunClaudeOptions
 ): Promise<ClaudeResponse> {
-  const mcpConfigPath = getMcpConfigPath({ viewer });
+  const mcpConfigPath = getMcpConfigPath({
+    viewer,
+    ...(options?.mcpServers ? { servers: options.mcpServers } : {}),
+  });
   const start = Date.now();
+  const timeoutMs = options?.timeoutMs ?? TIMEOUT_MS;
 
   const fullPrompt = threadContext
     ? `${threadContext}\n\nLatest message:\n${userMessage}`
@@ -108,6 +123,12 @@ export async function runClaude(
     mcpConfigPath,
   ];
 
+  // Pin a model only when explicitly requested, so the default path's args stay
+  // byte-for-byte unchanged.
+  if (options?.model) {
+    args.push("--model", options.model);
+  }
+
   log.info(
     { promptLength: fullPrompt.length, mcpConfig: mcpConfigPath },
     "Spawning Claude CLI"
@@ -119,7 +140,7 @@ export async function runClaude(
     const proc = spawn(config.CLAUDE_BIN, args, {
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: TIMEOUT_MS,
+      timeout: timeoutMs,
     });
 
     let stdout = "";
@@ -224,8 +245,8 @@ export async function runClaude(
       if (!proc.killed) {
         proc.kill("SIGTERM");
         recordReply("error", undefined, "timeout");
-        reject(new Error(`Claude CLI timed out after ${TIMEOUT_MS}ms`));
+        reject(new Error(`Claude CLI timed out after ${timeoutMs}ms`));
       }
-    }, TIMEOUT_MS);
+    }, timeoutMs);
   });
 }

@@ -13,6 +13,16 @@ export const envSchema = z
   // an embeddings-only config keeps working. (There is no ANTHROPIC_API_KEY.)
   OPENAI_API_KEY: z.string().min(1).optional(),
 
+  // Analytics route (Project Atlas brain). Gated OFF by default for safe
+  // rollout — flip ANALYTICS_ENABLED=1 after live verification. When on, an
+  // analytics-classified message is answered by the Atlas brain over Metabase.
+  // ANALYTICS_CLAUDE_MODEL optionally pins a stronger model for that route.
+  ANALYTICS_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => v === "1" || v === "true"),
+  ANALYTICS_CLAUDE_MODEL: z.string().min(1).optional(),
+
   // Metabase (optional — bot starts without it)
   METABASE_URL: z.string().url().optional(),
   METABASE_USERNAME: z.string().min(1).optional(),
