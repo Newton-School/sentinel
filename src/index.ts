@@ -16,9 +16,11 @@ import { activePromptVersionId } from "./prompts/registry.js";
 import { recordReply, recordFeedback, recordButtonFeedback } from "./feedback/store.js";
 import type { ReactionEnvelope, FeedbackActionEnvelope } from "./slack/socketClient.js";
 import { buildReplyBlocks, acknowledgedBlocks, type Block } from "./slack/feedbackBlocks.js";
-import { buildSystemPrompt } from "./claude/systemPrompt.js";
+import { buildSystemPrompt, buildAnalyticsSystemPrompt } from "./claude/systemPrompt.js";
 import type { RankedMemory, RetrievalBundle } from "./memory/types.js";
-import { runClaude } from "./claude/runner.js";
+import { runClaude, type RunClaudeOptions } from "./claude/runner.js";
+import { decideRoute } from "./analytics/router.js";
+import { skillDirective, skillPromptId } from "./analytics/skills.js";
 import { trackQuery } from "./persona/tracker.js";
 import { slackReplyText } from "./slack/formatters.js";
 import { startHealthServer, type HealthStatus } from "./health/server.js";
@@ -36,6 +38,18 @@ const log = createLogger("main");
 // Simple semaphore for concurrency limiting
 let activeRequests = 0;
 const MAX_CONCURRENT = 3;
+
+// The analytics route restricts the spawned MCP toolset to Metabase (+ the
+// always-on memory server) so the agent stays focused on SQL over Altius.
+const ANALYTICS_MCP_SERVERS = new Set(["metabase"]);
+
+/** Per-run overrides shared by the analytics Q&A and skill paths. */
+function analyticsRunOptions(): RunClaudeOptions {
+  return {
+    mcpServers: ANALYTICS_MCP_SERVERS,
+    ...(config.ANALYTICS_CLAUDE_MODEL ? { model: config.ANALYTICS_CLAUDE_MODEL } : {}),
+  };
+}
 
 /**
  * Establishes a per-request LLM trace, then handles the event. Every LLM call
@@ -117,47 +131,70 @@ async function handleEventInner(
     const persona = getOrCreatePersona(envelope.userId, displayName);
     const traits = getTraits(envelope.userId);
 
-    // Recall relevant organizational memories for this query. Best-effort:
-    // searchMemories already swallows internal errors, and this try/catch is
-    // belt-and-braces — a memory failure must NEVER fail the reply.
-    // Thread the asker's scope through the canView ACL seam. In founders mode
-    // (default) every allowed user is a founder and sees all rows — equivalent
-    // to the prior behaviour. When the entity graph is enabled, use the
-    // entity-aware bundle (query facts + facts about entities named in the
-    // query); otherwise the flat keyword recall. Best-effort: a memory failure
-    // must NEVER fail the reply.
-    // The asker's scope — used for recall filtering AND threaded into the
-    // memory MCP server (so canView applies at the MCP edge too).
+    // The asker's scope — used for general-path memory recall AND threaded into
+    // the memory MCP server on every route (so canView applies at the MCP edge
+    // too). In founders mode (default) every allowed user sees all rows.
     const viewer = currentViewerScope(envelope.userId);
-    let bundle: RetrievalBundle | undefined;
-    try {
-      if (isEntityGraphEnabled()) {
-        // Hybrid recall: embed the query for the semantic pass when enabled
-        // (best-effort — a null vector falls back to BM25-only inside).
-        let queryVec: Float32Array | undefined;
-        if (isEmbeddingsEnabled()) {
-          queryVec =
-            (await embedText(envelope.text, {
-              apiKey: openaiApiKey(),
-              model: config.MEMORY_EMBEDDING_MODEL,
-            })) ?? undefined;
-        }
-        bundle = assembleRetrieval(envelope.text, envelope.userId, viewer, queryVec);
-      } else {
-        memories = searchMemories(envelope.text, 6, viewer);
-      }
-    } catch {
-      // Never fail the reply over memory recall.
-    }
 
-    const unavailableSources = getUnavailableSources();
-    const systemPrompt = buildSystemPrompt(persona, traits, unavailableSources, memories, bundle);
+    // Decide the route up front: skill (deterministic trigger) > analytics (LLM
+    // classifier) > general. Gated by ANALYTICS_ENABLED — when off, every
+    // message takes the general path exactly as before. The classifier is
+    // fail-safe (any error → "general"), so routing can never break a reply.
+    const route = config.ANALYTICS_ENABLED
+      ? await decideRoute(envelope.text)
+      : ({ kind: "general" } as const);
+
+    let systemPrompt: string;
+    let promptVersion: string;
+    let runOptions: RunClaudeOptions | undefined = undefined;
+
+    if (route.kind === "skill") {
+      // Deterministic projection skill: brain + the month-resolved directive.
+      systemPrompt = buildAnalyticsSystemPrompt(persona, traits, {
+        skillDirective: skillDirective(route.skill, route.month),
+      });
+      promptVersion = activePromptVersionId(skillPromptId(route.skill));
+      runOptions = analyticsRunOptions();
+    } else if (route.kind === "analytics") {
+      // Open-ended analytics Q&A over the Atlas brain + Metabase.
+      systemPrompt = buildAnalyticsSystemPrompt(persona, traits);
+      promptVersion = activePromptVersionId("analytics");
+      runOptions = analyticsRunOptions();
+    } else {
+      // General path: recall organizational memories, then build the founders
+      // prompt. Recall is skipped on the analytics paths (the brain is its own
+      // context), which also saves the embedding + search latency there.
+      let bundle: RetrievalBundle | undefined;
+      try {
+        if (isEntityGraphEnabled()) {
+          // Hybrid recall: embed the query for the semantic pass when enabled
+          // (best-effort — a null vector falls back to BM25-only inside).
+          let queryVec: Float32Array | undefined;
+          if (isEmbeddingsEnabled()) {
+            queryVec =
+              (await embedText(envelope.text, {
+                apiKey: openaiApiKey(),
+                model: config.MEMORY_EMBEDDING_MODEL,
+              })) ?? undefined;
+          }
+          bundle = assembleRetrieval(envelope.text, envelope.userId, viewer, queryVec);
+        } else {
+          memories = searchMemories(envelope.text, 6, viewer);
+        }
+      } catch {
+        // Never fail the reply over memory recall.
+      }
+      const unavailableSources = getUnavailableSources();
+      systemPrompt = buildSystemPrompt(persona, traits, unavailableSources, memories, bundle);
+      promptVersion = activePromptVersionId("system");
+    }
 
     // Run Claude
     log.info(
       {
         userId: envelope.userId,
         type: envelope.type,
+        route: route.kind,
         textLength: envelope.text.length,
       },
       "Processing request"
@@ -168,7 +205,8 @@ async function handleEventInner(
       envelope.text,
       threadContext,
       viewer,
-      activePromptVersionId("system")
+      promptVersion,
+      runOptions
     );
     responseText = response.text ?? "";
 

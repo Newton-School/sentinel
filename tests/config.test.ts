@@ -163,6 +163,34 @@ describe("config envSchema (real module)", () => {
     });
   });
 
+  describe("ANALYTICS_ENABLED / ANALYTICS_CLAUDE_MODEL", () => {
+    it("defaults ANALYTICS_ENABLED to false when unset", () => {
+      const result = envSchema.safeParse(validEnv);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.ANALYTICS_ENABLED).toBe(false);
+        expect(result.data.ANALYTICS_CLAUDE_MODEL).toBeUndefined();
+      }
+    });
+
+    it("treats '1' and 'true' as enabled, anything else as disabled", () => {
+      for (const v of ["1", "true"]) {
+        const r = envSchema.safeParse({ ...validEnv, ANALYTICS_ENABLED: v });
+        expect(r.success && r.data.ANALYTICS_ENABLED).toBe(true);
+      }
+      for (const v of ["0", "false", "no", ""]) {
+        const r = envSchema.safeParse({ ...validEnv, ANALYTICS_ENABLED: v });
+        expect(r.success && r.data.ANALYTICS_ENABLED).toBe(false);
+      }
+    });
+
+    it("accepts an optional ANALYTICS_CLAUDE_MODEL override", () => {
+      const r = envSchema.safeParse({ ...validEnv, ANALYTICS_CLAUDE_MODEL: "claude-opus-4-8" });
+      expect(r.success).toBe(true);
+      if (r.success) expect(r.data.ANALYTICS_CLAUDE_MODEL).toBe("claude-opus-4-8");
+    });
+  });
+
   describe("optional Metabase/GitHub/Notion/Google fields", () => {
     const minimalEnv = {
       SLACK_BOT_TOKEN: "xoxb-test-token",

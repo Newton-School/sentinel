@@ -14,7 +14,8 @@ vi.mock("../src/config.js", () => ({
 import { getPrompt, activePromptVersionId } from "../src/prompts/registry.js";
 import { EXTRACTION_INSTRUCTIONS } from "../src/prompts/extraction.js";
 import { CONSOLIDATION_SYSTEM_TEMPLATE, consolidationSystem } from "../src/prompts/consolidation.js";
-import { BASE_PROMPT, buildSystemPrompt } from "../src/claude/systemPrompt.js";
+import { BASE_PROMPT, buildSystemPrompt, buildAnalyticsSystemPrompt } from "../src/claude/systemPrompt.js";
+import { ANALYTICS_BRAIN } from "../src/prompts/atlas-brain.js";
 import { buildExtractionSystemPrompt } from "../src/memory/extractor.js";
 import { buildConsolidationPrompt } from "../src/memory/consolidate.js";
 
@@ -27,10 +28,22 @@ const PINNED = {
   extraction: { version: "1.0.0", hash: "7d9323b8ba5a" },
   consolidation: { version: "1.0.0", hash: "4f47602a149a" },
   system: { version: "1.0.0", hash: "89c11ce42da9" },
+  analytics: { version: "1.0.0", hash: "96f694187d76" },
+  analytics_classifier: { version: "1.0.0", hash: "05b484f078c2" },
+  analytics_skill_open_funnel: { version: "1.0.0", hash: "2e93eb304abe" },
+  analytics_skill_m0_rfd: { version: "1.0.0", hash: "771cac051d7c" },
 } as const;
 
 describe("prompt registry — drift gate", () => {
-  for (const id of ["extraction", "consolidation", "system"] as const) {
+  for (const id of [
+    "extraction",
+    "consolidation",
+    "system",
+    "analytics",
+    "analytics_classifier",
+    "analytics_skill_open_funnel",
+    "analytics_skill_m0_rfd",
+  ] as const) {
     it(`${id} version + content hash are pinned`, () => {
       const p = getPrompt(id);
       expect(p.version).toBe(PINNED[id].version);
@@ -61,5 +74,12 @@ describe("prompt registry — skeleton ↔ builder parity", () => {
     const persona = { userId: "U", displayName: "Dipesh", role: undefined, createdAt: "x", updatedAt: "x" };
     const built = buildSystemPrompt(persona as never, []);
     expect(built).toContain(BASE_PROMPT);
+  });
+
+  it("analytics skeleton is ANALYTICS_BRAIN, embedded in the built analytics prompt", () => {
+    expect(getPrompt("analytics").skeleton).toBe(ANALYTICS_BRAIN);
+    const persona = { userId: "U", displayName: "Dipesh", role: undefined, createdAt: "x", updatedAt: "x" };
+    const built = buildAnalyticsSystemPrompt(persona as never, []);
+    expect(built).toContain(ANALYTICS_BRAIN);
   });
 });

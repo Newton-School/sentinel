@@ -18,6 +18,14 @@ const log = createLogger("mcp-config");
 export interface McpConfigOptions {
   /** Asker scope, threaded into the memory MCP server so canView runs there too. */
   viewer?: ViewerScope;
+  /**
+   * Optional allowlist of server names to emit (besides memory, which is always
+   * included). When set, ONLY these credentialed servers are written — used by
+   * the analytics route to restrict the toolset to just Metabase, cutting
+   * tool-confusion and subprocess startup. When undefined (default), every
+   * credentialed server is emitted — unchanged behaviour.
+   */
+  servers?: ReadonlySet<string>;
 }
 
 /**
@@ -57,13 +65,17 @@ export function getMcpConfigPath(opts: McpConfigOptions = {}): string {
     mcpServers: {},
   };
 
+  // When an allowlist is provided, only its members are emitted (memory is
+  // always included regardless). No allowlist → every credentialed server.
+  const allow = (name: string): boolean => !opts.servers || opts.servers.has(name);
+
   // Metabase — requires URL + EITHER an API key OR username+password.
   const hasMetabase =
     config.METABASE_URL &&
     (config.METABASE_API_KEY ||
       (config.METABASE_USERNAME && config.METABASE_PASSWORD));
 
-  if (hasMetabase) {
+  if (hasMetabase && allow("metabase")) {
     // Only emit the keys that are actually set, so an unset var is never
     // written into the spawned env as the string "undefined".
     const metabaseEnv: Record<string, string> = {
@@ -90,7 +102,7 @@ export function getMcpConfigPath(opts: McpConfigOptions = {}): string {
   }
 
   // GitHub — requires token
-  if (config.GITHUB_TOKEN) {
+  if (config.GITHUB_TOKEN && allow("github")) {
     mcpConfig.mcpServers.github = {
       command: "npx",
       args: ["-y", "@modelcontextprotocol/server-github"],
@@ -104,7 +116,7 @@ export function getMcpConfigPath(opts: McpConfigOptions = {}): string {
   }
 
   // Notion — requires API key
-  if (config.NOTION_API_KEY) {
+  if (config.NOTION_API_KEY && allow("notion")) {
     mcpConfig.mcpServers.notion = {
       command: "npx",
       args: ["-y", "@notionhq/notion-mcp-server"],
@@ -121,7 +133,7 @@ export function getMcpConfigPath(opts: McpConfigOptions = {}): string {
   }
 
   // Slack search — requires user token
-  if (config.SLACK_USER_TOKEN) {
+  if (config.SLACK_USER_TOKEN && allow("slack-search")) {
     mcpConfig.mcpServers["slack-search"] = {
       command: "node",
       args: [join(process.cwd(), "dist", "mcp", "slack.js")],
@@ -147,29 +159,37 @@ export function getMcpConfigPath(opts: McpConfigOptions = {}): string {
       GOOGLE_REFRESH_TOKEN: config.GOOGLE_REFRESH_TOKEN!,
     };
 
-    mcpConfig.mcpServers.gmail = {
-      command: "node",
-      args: [join(process.cwd(), "dist", "mcp", "gmail.js")],
-      env: googleEnv,
-    };
+    if (allow("gmail")) {
+      mcpConfig.mcpServers.gmail = {
+        command: "node",
+        args: [join(process.cwd(), "dist", "mcp", "gmail.js")],
+        env: googleEnv,
+      };
+    }
 
-    mcpConfig.mcpServers["google-calendar"] = {
-      command: "node",
-      args: [join(process.cwd(), "dist", "mcp", "calendar.js")],
-      env: googleEnv,
-    };
+    if (allow("google-calendar")) {
+      mcpConfig.mcpServers["google-calendar"] = {
+        command: "node",
+        args: [join(process.cwd(), "dist", "mcp", "calendar.js")],
+        env: googleEnv,
+      };
+    }
 
-    mcpConfig.mcpServers["meeting-transcripts"] = {
-      command: "node",
-      args: [join(process.cwd(), "dist", "mcp", "transcripts.js")],
-      env: googleEnv,
-    };
+    if (allow("meeting-transcripts")) {
+      mcpConfig.mcpServers["meeting-transcripts"] = {
+        command: "node",
+        args: [join(process.cwd(), "dist", "mcp", "transcripts.js")],
+        env: googleEnv,
+      };
+    }
 
-    mcpConfig.mcpServers["google-meet"] = {
-      command: "node",
-      args: [join(process.cwd(), "dist", "mcp", "meet.js")],
-      env: googleEnv,
-    };
+    if (allow("google-meet")) {
+      mcpConfig.mcpServers["google-meet"] = {
+        command: "node",
+        args: [join(process.cwd(), "dist", "mcp", "meet.js")],
+        env: googleEnv,
+      };
+    }
 
     log.info("Google Workspace MCP servers registered (Gmail, Calendar, Transcripts, Meet)");
   } else {

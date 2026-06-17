@@ -34,8 +34,9 @@ vi.mock("../src/config.js", () => ({
 // handlers to clean up that spawn's per-request config file.
 const MCP_CONFIG_PATH = "/tmp/test-mcp-config.json";
 const removeMcpConfigMock = vi.fn();
+const getMcpConfigPathMock = vi.fn(() => MCP_CONFIG_PATH);
 vi.mock("../src/claude/mcpConfig.js", () => ({
-  getMcpConfigPath: vi.fn(() => MCP_CONFIG_PATH),
+  getMcpConfigPath: getMcpConfigPathMock,
   removeMcpConfig: removeMcpConfigMock,
 }));
 
@@ -158,6 +159,47 @@ describe("runClaude", () => {
 
       const opts = spawnMock.mock.calls[0][2] as { env: NodeJS.ProcessEnv };
       expect(opts.env).toBe(process.env);
+    });
+
+    it("does NOT pass --model on the default path", async () => {
+      const { runClaude } = await import("../src/claude/runner.js");
+
+      const promise = runClaude("sys", "msg");
+      child.emit("close", 0);
+      await promise;
+
+      const args = spawnMock.mock.calls[0][1] as string[];
+      expect(args).not.toContain("--model");
+    });
+
+    it("passes --model <model> when options.model is provided", async () => {
+      const { runClaude } = await import("../src/claude/runner.js");
+
+      const promise = runClaude("sys", "msg", undefined, undefined, undefined, {
+        model: "claude-opus-4-8",
+      });
+      child.emit("close", 0);
+      await promise;
+
+      const args = spawnMock.mock.calls[0][1] as string[];
+      const idx = args.indexOf("--model");
+      expect(idx).toBeGreaterThanOrEqual(0);
+      expect(args[idx + 1]).toBe("claude-opus-4-8");
+    });
+
+    it("threads the mcpServers allowlist into getMcpConfigPath", async () => {
+      const { runClaude } = await import("../src/claude/runner.js");
+
+      const servers = new Set(["metabase"]);
+      const promise = runClaude("sys", "msg", undefined, undefined, undefined, {
+        mcpServers: servers,
+      });
+      child.emit("close", 0);
+      await promise;
+
+      expect(getMcpConfigPathMock).toHaveBeenCalledWith(
+        expect.objectContaining({ servers })
+      );
     });
   });
 

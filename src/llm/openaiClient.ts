@@ -49,24 +49,32 @@ export function openaiApiKey(): string | undefined {
 }
 
 // --- Daily budget (module-level, UTC-date keyed, injectable clock) ---------
+//
+// Counters are keyed by an opt-in bucket so independent call sites can't starve
+// each other: fact extraction / consolidation / summaries share the default
+// bucket (unchanged behaviour), while the analytics intent classifier passes
+// its own bucket so heavy routing traffic can't exhaust the extraction budget.
+// Every bucket gets the same daily cap; the UTC-day rollover resets all.
 
+const DEFAULT_BUDGET_BUCKET = "default";
 let budgetUtcDate = "";
-let budgetCallsToday = 0;
+const budgetCounts = new Map<string, number>();
 
-/** Resets the daily-budget counter. Test hook only. */
+/** Resets the daily-budget counters. Test hook only. */
 export function __resetBudgetForTests(): void {
   budgetUtcDate = "";
-  budgetCallsToday = 0;
+  budgetCounts.clear();
 }
 
-function consumeBudget(nowMs: number): boolean {
+function consumeBudget(nowMs: number, bucket: string = DEFAULT_BUDGET_BUCKET): boolean {
   const utcDate = new Date(nowMs).toISOString().slice(0, 10);
   if (utcDate !== budgetUtcDate) {
     budgetUtcDate = utcDate;
-    budgetCallsToday = 0;
+    budgetCounts.clear();
   }
-  if (budgetCallsToday >= MAX_EXTRACTION_CALLS_PER_DAY) return false;
-  budgetCallsToday++;
+  const used = budgetCounts.get(bucket) ?? 0;
+  if (used >= MAX_EXTRACTION_CALLS_PER_DAY) return false;
+  budgetCounts.set(bucket, used + 1);
   return true;
 }
 
@@ -81,6 +89,12 @@ export interface ExtractJsonOptions {
   model?: string;
   /** Operation tag for the LLM trace row (defaults to "extract"). */
   operation?: "extract" | "consolidate" | "summary";
+  /**
+   * Daily-budget bucket. Call sites that should not compete with fact
+   * extraction for the daily cap pass a distinct bucket (e.g. "classify").
+   * Defaults to the shared bucket — unchanged behaviour for existing callers.
+   */
+  budgetBucket?: string;
   /** Versioned prompt id stamped onto the LLM trace row. */
   promptVersion?: string;
   /** Set false to skip the llm_calls trace row (e.g. the offline eval judge). */
@@ -128,7 +142,7 @@ export async function extractJson(opts: ExtractJsonOptions): Promise<unknown | n
   }
 
   const nowMs = (opts.now ?? Date.now)();
-  if (!consumeBudget(nowMs)) {
+  if (!consumeBudget(nowMs, opts.budgetBucket)) {
     recordMemoryExtractBudgetExhausted();
     log.warn(
       { cap: MAX_EXTRACTION_CALLS_PER_DAY, utcDate: budgetUtcDate },
