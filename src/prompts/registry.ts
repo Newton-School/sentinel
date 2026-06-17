@@ -57,7 +57,7 @@ const PROMPTS: Record<PromptId, PromptDef> = {
   consolidation: def("consolidation", "1.0.0", CONSOLIDATION_SYSTEM_TEMPLATE),
   system: def("system", "1.0.0", BASE_PROMPT),
   analytics: def("analytics", "1.0.0", ANALYTICS_BRAIN),
-  analytics_classifier: def("analytics_classifier", "1.0.0", ANALYTICS_CLASSIFIER_INSTRUCTIONS),
+  analytics_classifier: def("analytics_classifier", "1.1.0", ANALYTICS_CLASSIFIER_INSTRUCTIONS),
   analytics_skill_open_funnel: def("analytics_skill_open_funnel", "1.0.0", OPEN_FUNNEL_SKILL_DIRECTIVE),
   analytics_skill_m0_rfd: def("analytics_skill_m0_rfd", "1.0.0", M0_RFD_SKILL_DIRECTIVE),
 };

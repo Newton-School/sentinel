@@ -15,6 +15,7 @@
     "monitor:memory": "tsx scripts/monitor-memory.ts",
     "eval": "tsx evals/runner.ts",
     "eval:gate": "tsx evals/runner.ts --gate",
+    "eval:analytics": "tsx evals/runner.ts --suite analytics --judge --threshold 0.7",
     "feedback:harvest": "tsx scripts/harvest-feedback.ts",
     "grafana:validate": "tsx scripts/provision-grafana.ts",
     "grafana:provision": "tsx scripts/provision-grafana.ts --apply"

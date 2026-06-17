@@ -16,14 +16,19 @@ import { fileURLToPath } from "node:url";
 
 import { runWithTrace } from "../src/llm/traceContext.js";
 import { isDbOpen, getDb } from "../src/state/db.js";
+import { config } from "../src/config.js";
 import { openaiApiKey } from "../src/llm/openaiClient.js";
 import { activePromptVersionId } from "../src/prompts/registry.js";
 import { runExtractionCase, type ExtractionCase } from "./extractionEval.js";
 import { runAnswerCase, type AnswerCase } from "./answerEval.js";
+import { runAnalyticsCase, type AnalyticsCase } from "./analyticsEval.js";
 import { judgePromptVersionId } from "./judge.js";
 import { recordEvalRun } from "./store.js";
 
-export type SuiteName = "extraction" | "answers" | "all";
+// "analytics" is LIVE (spawns the Claude CLI + hits Metabase) and is therefore
+// opt-in only — it is intentionally NOT part of "all" so `npm run eval` stays
+// offline + CI-safe.
+export type SuiteName = "extraction" | "answers" | "analytics" | "all";
 
 export interface EvalArgs {
   suite: SuiteName;
@@ -38,7 +43,10 @@ export interface RunEvalsOptions {
   ranAt: string; // ISO 8601 UTC
   extraction?: ExtractionCase[];
   answers?: AnswerCase[];
+  analytics?: AnalyticsCase[];
   deps: { apiKey?: string; fetchImpl?: typeof fetch; now?: () => number; useJudge?: boolean };
+  /** Optional model pin for the analytics route (config.ANALYTICS_CLAUDE_MODEL). */
+  analyticsModel?: string;
   threshold: number;
   persist?: boolean;
 }
@@ -122,6 +130,33 @@ export async function runEvals(opts: RunEvalsOptions): Promise<EvalReport> {
       }
     }
 
+    if (opts.analytics && opts.analytics.length > 0) {
+      const cases = [];
+      for (const c of opts.analytics) {
+        cases.push(
+          await runAnalyticsCase(c, {
+            judge: { apiKey: opts.deps.apiKey, fetchImpl: opts.deps.fetchImpl, now: opts.deps.now },
+            ...(opts.analyticsModel ? { model: opts.analyticsModel } : {}),
+          })
+        );
+      }
+      const nPass = cases.filter((c) => c.pass === true).length;
+      const meanScore = mean(cases.map((c) => c.score ?? 0));
+      suites.push({ suite: "analytics", nCases: cases.length, nPass, meanScore, passed: meanScore >= opts.threshold, cases });
+      if (opts.persist && isDbOpen()) {
+        recordEvalRun({
+          runId: opts.runId,
+          suite: "analytics",
+          nCases: cases.length,
+          nPass,
+          meanScore,
+          promptVersion: activePromptVersionId("analytics"),
+          judgeVersion: judgePromptVersionId(),
+          ranAt: opts.ranAt,
+        });
+      }
+    }
+
     return { runId: opts.runId, ranAt: opts.ranAt, threshold: opts.threshold, suites, passed: suites.every((s) => s.passed) };
   });
 }
@@ -154,10 +189,20 @@ async function main(): Promise<void> {
     console.warn("[eval] No OpenAI API key — extraction/judge calls will be skipped (scores will be 0).");
   }
 
+  // "analytics" is opt-in only (LIVE: spawns the CLI + hits Metabase) — never
+  // bundled into "all".
   const wantExtraction = args.suite === "all" || args.suite === "extraction";
   const wantAnswers = args.suite === "all" || args.suite === "answers";
+  const wantAnalytics = args.suite === "analytics";
   const extraction = wantExtraction ? loadJsonl<ExtractionCase>(join(args.datasetDir, "extraction.jsonl")) : [];
   const answers = wantAnswers ? loadJsonl<AnswerCase>(join(args.datasetDir, "answers.jsonl")) : [];
+  const analytics = wantAnalytics ? loadJsonl<AnalyticsCase>(join(args.datasetDir, "analytics.jsonl")) : [];
+
+  if (wantAnalytics && !config.METABASE_URL) {
+    console.warn(
+      "[eval] analytics suite selected but METABASE_URL is unset — ground-truth + agent runs will fail; routing-only cases still run."
+    );
+  }
 
   getDb(); // open so eval_runs persistence is enabled
 
@@ -169,7 +214,9 @@ async function main(): Promise<void> {
     ranAt,
     extraction,
     answers,
+    analytics,
     deps: { apiKey, useJudge: args.useJudge },
+    ...(config.ANALYTICS_CLAUDE_MODEL ? { analyticsModel: config.ANALYTICS_CLAUDE_MODEL } : {}),
     threshold: args.threshold,
     persist: true,
   });
