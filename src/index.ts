@@ -12,6 +12,7 @@ import { embedText } from "./memory/embedder.js";
 import { openaiApiKey } from "./llm/openaiClient.js";
 import { extractFromConversation } from "./memory/conversationHook.js";
 import { runWithTrace, newTraceId } from "./llm/traceContext.js";
+import { activePromptVersionId } from "./prompts/registry.js";
 import { buildSystemPrompt } from "./claude/systemPrompt.js";
 import type { RankedMemory, RetrievalBundle } from "./memory/types.js";
 import { runClaude } from "./claude/runner.js";
@@ -158,7 +159,13 @@ async function handleEventInner(
       "Processing request"
     );
 
-    const response = await runClaude(systemPrompt, envelope.text, threadContext, viewer);
+    const response = await runClaude(
+      systemPrompt,
+      envelope.text,
+      threadContext,
+      viewer,
+      activePromptVersionId("system")
+    );
     responseText = response.text ?? "";
 
     // Post response (convert Markdown to Slack mrkdwn; never post an empty

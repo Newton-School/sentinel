@@ -505,6 +505,15 @@ describe("runClaude", () => {
       expect(recordLlmCallSpy.mock.calls[0][0].status).toBe("error");
     });
 
+    it("stamps the promptVersion passed to runClaude onto the reply span", async () => {
+      const { runClaude } = await import("../src/claude/runner.js");
+      const promise = runClaude("sys", "msg", undefined, undefined, "system@1.0.0+89c11ce42da9");
+      child.stdout.emit("data", Buffer.from(jsonResult()));
+      child.emit("close", 0);
+      await promise;
+      expect(recordLlmCallSpy.mock.calls[0][0].promptVersion).toBe("system@1.0.0+89c11ce42da9");
+    });
+
     it("a throwing recorder never rejects runClaude", async () => {
       recordLlmCallSpy.mockImplementationOnce(() => {
         throw new Error("sink boom");

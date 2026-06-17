@@ -60,6 +60,7 @@ describe("llm_calls schema", () => {
       "error_kind",
       "num_turns",
       "user_id",
+      "prompt_version",
       "created_at",
     ]) {
       expect(cols).toContain(c);

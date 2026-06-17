@@ -49,7 +49,13 @@ When users say "today", "yesterday", "this week", etc., resolve them to exact da
 Always prefer recent data unless the query explicitly asks for historical context.`;
 }
 
-const BASE_PROMPT = `You are Sentinel, the founders-only internal intelligence assistant for Newton School.
+/**
+ * The static role/format/rules instructions for the main bot. Exported so the
+ * prompt registry (src/prompts/registry.ts) can version + hash it; the dynamic
+ * time/persona/memory sections assembled in buildSystemPrompt are runtime
+ * context and are NOT part of the versioned skeleton.
+ */
+export const BASE_PROMPT = `You are Sentinel, the founders-only internal intelligence assistant for Newton School.
 
 Your role is to answer high-value leadership questions by retrieving and synthesizing data from multiple internal systems. You serve founders who need fast, accurate, evidence-backed answers about company operations.
 

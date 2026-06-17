@@ -86,6 +86,21 @@ describe("traceStore.recordLlmCall", () => {
     db.closeDb();
   });
 
+  it("persists the prompt_version stamp", async () => {
+    const { db, traceStore } = await load();
+    db.getDb();
+    traceStore.recordLlmCall({
+      provider: "openai",
+      model: "gpt-4o-mini",
+      operation: "extract",
+      status: "ok",
+      promptVersion: "extraction@1.0.0+7d9323b8ba5a",
+    });
+    const row = db.getDb().prepare("SELECT prompt_version FROM llm_calls").get() as Record<string, unknown>;
+    expect(row.prompt_version).toBe("extraction@1.0.0+7d9323b8ba5a");
+    db.closeDb();
+  });
+
   it("persists error status + error_kind", async () => {
     const { db, traceStore } = await load();
     db.getDb();
