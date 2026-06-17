@@ -91,6 +91,43 @@ export function recordFeedback(opts: RecordFeedbackInput): boolean {
   return res.changes > 0;
 }
 
+/**
+ * Records an explicit 👍/👎 button vote on a tracked bot reply. Unlike a
+ * reaction (which can stack), a user has ONE button vote per reply — re-voting
+ * (or switching) replaces it (reaction column fixed to 'button'). Returns true
+ * when the reply is tracked; increments the online metric on each click.
+ */
+export function recordButtonFeedback(opts: {
+  channelId: string;
+  replyTs: string;
+  reactorUserId: string;
+  sentiment: "positive" | "negative";
+  addedAtIso: string;
+}): boolean {
+  const db = getDb();
+  const reply = db
+    .prepare(`SELECT trace_id FROM bot_replies WHERE channel_id = ? AND reply_ts = ?`)
+    .get(opts.channelId, opts.replyTs) as { trace_id: string | null } | undefined;
+  if (!reply) return false;
+
+  db.prepare(
+    `INSERT OR REPLACE INTO feedback
+       (trace_id, channel_id, reply_ts, reactor_user_id, reaction, sentiment, score, created_at)
+     VALUES (?, ?, ?, ?, 'button', ?, ?, ?)`
+  ).run(
+    reply.trace_id ?? null,
+    opts.channelId,
+    opts.replyTs,
+    opts.reactorUserId,
+    opts.sentiment,
+    opts.sentiment === "positive" ? 1 : -1,
+    opts.addedAtIso
+  );
+
+  recordFeedbackMetric(opts.sentiment);
+  return true;
+}
+
 export interface HarvestedCase {
   id: number;
   question: string;
