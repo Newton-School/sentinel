@@ -365,6 +365,7 @@ function runMigrations(db: Database.Database): void {
       error_kind TEXT,
       num_turns INTEGER,
       user_id TEXT,
+      prompt_version TEXT,
       created_at TEXT NOT NULL
     );
 
@@ -372,6 +373,15 @@ function runMigrations(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_llm_calls_created_at ON llm_calls(created_at);
     CREATE INDEX IF NOT EXISTS idx_llm_calls_op_model ON llm_calls(operation, model);
   `);
+
+  // Migration: prompt_version stamp (added after llm_calls shipped in #98).
+  // Guarded ALTER for DBs whose table predates this column; fresh DBs already
+  // have it from the CREATE above.
+  const llmColumns = db.pragma("table_info(llm_calls)") as Array<{ name: string }>;
+  if (!new Set(llmColumns.map((c) => c.name)).has("prompt_version")) {
+    db.exec(`ALTER TABLE llm_calls ADD COLUMN prompt_version TEXT`);
+    log.info("Added prompt_version column to llm_calls");
+  }
 
   log.info("Migrations complete");
 }

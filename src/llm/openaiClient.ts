@@ -81,6 +81,8 @@ export interface ExtractJsonOptions {
   model?: string;
   /** Operation tag for the LLM trace row (defaults to "extract"). */
   operation?: "extract" | "consolidate" | "summary";
+  /** Versioned prompt id stamped onto the LLM trace row. */
+  promptVersion?: string;
   maxTokens?: number;
   /** API key. Defaults to {@link openaiApiKey}; without one the call no-ops to null. */
   apiKey?: string;
@@ -147,6 +149,7 @@ export async function extractJson(opts: ExtractJsonOptions): Promise<unknown | n
       latencyMs: Date.now() - startedAt,
       status: "error",
       errorKind,
+      promptVersion: opts.promptVersion,
     });
   };
 
@@ -219,6 +222,7 @@ export async function extractJson(opts: ExtractJsonOptions): Promise<unknown | n
       costUsd: computeCostUsd(model, inputTokens ?? 0, outputTokens ?? 0),
       latencyMs: Date.now() - startedAt,
       status: "ok",
+      promptVersion: opts.promptVersion,
     });
     return parsed;
   } catch (err) {

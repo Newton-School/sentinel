@@ -86,7 +86,8 @@ export async function runClaude(
   systemPrompt: string,
   userMessage: string,
   threadContext?: string,
-  viewer?: ViewerScope
+  viewer?: ViewerScope,
+  promptVersion?: string
 ): Promise<ClaudeResponse> {
   const mcpConfigPath = getMcpConfigPath({ viewer });
   const start = Date.now();
@@ -148,6 +149,7 @@ export async function runClaude(
           numTurns: parsed?.numTurns,
           status,
           errorKind,
+          promptVersion,
         });
       } catch {
         /* telemetry must never break the reply */

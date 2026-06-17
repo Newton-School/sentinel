@@ -37,6 +37,8 @@ export interface LlmCallRecord {
   errorKind?: string;
   /** Anthropic reply only — agent turn count. */
   numTurns?: number;
+  /** Versioned prompt id ("<id>@<version>+<hash>"), when the call used one. */
+  promptVersion?: string;
 }
 
 // Latched off after the first durable-write failure so a missing/broken DB
@@ -76,8 +78,8 @@ export function recordLlmCall(rec: LlmCallRecord): void {
       .prepare(
         `INSERT INTO llm_calls
            (call_id, trace_id, provider, model, operation, input_tokens, output_tokens,
-            cost_usd, latency_ms, status, error_kind, num_turns, user_id, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            cost_usd, latency_ms, status, error_kind, num_turns, user_id, prompt_version, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         randomUUID(),
@@ -93,6 +95,7 @@ export function recordLlmCall(rec: LlmCallRecord): void {
         rec.errorKind ?? null,
         rec.numTurns ?? null,
         trace?.userId ?? null,
+        rec.promptVersion ?? null,
         new Date().toISOString()
       );
   } catch (err) {
