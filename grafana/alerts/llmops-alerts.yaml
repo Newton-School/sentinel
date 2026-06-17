@@ -1,0 +1,46 @@
+# Sentinel LLMOps alert rules (Prometheus alerting format).
+# Translate into the team's alerting backend (Prometheus rules or Grafana
+# alerting). Thresholds are starting points — tune against observed baselines
+# (use `query_prometheus` over a week of data) before paging on them.
+groups:
+  - name: sentinel-llmops
+    rules:
+      - alert: SentinelLLMErrorRateHigh
+        expr: sum(rate(sentinel_llm_calls_total{status="error"}[5m])) / clamp_min(sum(rate(sentinel_llm_calls_total[5m])), 1) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sentinel LLM error rate >10% for 10m"
+
+      - alert: SentinelLLMLatencyP95High
+        expr: histogram_quantile(0.95, sum by (le) (rate(sentinel_llm_latency_ms_bucket[5m]))) > 60000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sentinel LLM p95 latency >60s for 10m"
+
+      - alert: SentinelLLMCostSpike
+        expr: sum(increase(sentinel_llm_cost_usd_total[1h])) > 5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sentinel LLM spend >$5 in the last hour"
+
+      - alert: SentinelNegativeFeedbackSpike
+        expr: sum(rate(sentinel_feedback_total{sentiment="negative"}[1h])) / clamp_min(sum(rate(sentinel_feedback_total[1h])), 1) > 0.3
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sentinel 👎 rate >30% over the last hour"
+
+      - alert: SentinelEvalRegression
+        expr: min(sentinel_eval_pass_ratio) < 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A Sentinel eval suite pass ratio dropped below 0.8"
