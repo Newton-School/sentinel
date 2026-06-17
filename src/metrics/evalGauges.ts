@@ -11,7 +11,7 @@ import { createLogger } from "../logging/logger.js";
 
 const log = createLogger("eval-gauges");
 
-const SUITES = ["extraction", "answers"] as const;
+const SUITES = ["extraction", "answers", "analytics"] as const;
 
 function fmt(n: number): string {
   return String(n);

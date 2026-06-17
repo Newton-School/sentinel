@@ -71,16 +71,27 @@ async function runJudge(user: string, deps: JudgeDeps): Promise<JudgeResult | nu
   return { score: clamp01(r.score), pass: r.pass, rationale: r.rationale };
 }
 
-/** Judge a candidate answer against a goal question + rubric. */
+/**
+ * Judge a candidate answer against a goal question + rubric. When `groundTruth`
+ * is supplied (e.g. a value computed from the brain's canonical SQL), it is
+ * injected into the per-call user message as the correct value to grade
+ * against. The versioned JUDGE_SYSTEM skeleton is unchanged, so this adds no
+ * prompt drift.
+ */
 export function judgeAnswer(opts: {
   question: string;
   candidate: string;
   rubric: string[];
+  groundTruth?: string;
   deps: JudgeDeps;
 }): Promise<JudgeResult | null> {
+  const groundTruthBlock = opts.groundTruth
+    ? `GROUND TRUTH (computed from canonical SQL — treat this as the correct value):\n${opts.groundTruth}\n\n`
+    : "";
   const user =
     `GOAL (question): ${opts.question}\n\n` +
     `RUBRIC:\n${opts.rubric.map((r) => `- ${r}`).join("\n")}\n\n` +
+    groundTruthBlock +
     `CANDIDATE ANSWER:\n${opts.candidate}`;
   return runJudge(user, opts.deps);
 }
