@@ -9,7 +9,10 @@ vi.mock("../src/config.js", () => ({
     SLACK_BOT_TOKEN: "xoxb-test",
     SLACK_APP_TOKEN: "xapp-test",
     BOT_USER_ID: "UBOT",
-    ALLOWED_USER_IDS: ["U1", "U2"],
+    SENTINEL_OWNER_USER_ID: "UOWNER",
+    SENTINEL_ACCESS_GROUP_HANDLE: "sentinel-access-group",
+    // Kept in config but NO LONGER used by isAllowed (memory-founder default only).
+    ALLOWED_USER_IDS: ["U1", "U2", "ULEGACY"],
     LOG_LEVEL: "silent",
   },
 }));
@@ -41,6 +44,7 @@ import {
   normalizeReactionAdded,
   normalizeFeedbackAction,
 } from "../src/slack/socketClient.js";
+import { __setAccessMembersForTests } from "../src/slack/accessGroup.js";
 
 describe("normalizeFeedbackAction", () => {
   const body = { user: { id: "U1" }, channel: { id: "C1" }, message: { ts: "9.9", blocks: [{ type: "section" }] } };
@@ -82,12 +86,20 @@ describe("normalizeReactionAdded", () => {
 });
 
 describe("isAllowed (authorization gate)", () => {
-  it("allows user IDs that are in the allow-list", () => {
+  beforeEach(() => __setAccessMembersForTests(["U1", "U2"]));
+
+  it("always allows the owner", () => {
+    expect(isAllowed("UOWNER")).toBe(true);
+  });
+
+  it("allows current access-group members", () => {
     expect(isAllowed("U1")).toBe(true);
     expect(isAllowed("U2")).toBe(true);
   });
 
-  it("rejects user IDs that are NOT in the allow-list", () => {
+  it("rejects users NOT in the group — incl. legacy ALLOWED_USER_IDS entries", () => {
+    // ALLOWED_USER_IDS no longer grants entry: ULEGACY is in it but not the group.
+    expect(isAllowed("ULEGACY")).toBe(false);
     expect(isAllowed("U3")).toBe(false);
     expect(isAllowed("UEVIL")).toBe(false);
   });
@@ -97,9 +109,14 @@ describe("isAllowed (authorization gate)", () => {
   });
 
   it("does not match on substrings (no accidental prefix bypass)", () => {
-    // "U" is a prefix of allowed IDs but must not be treated as allowed.
     expect(isAllowed("U")).toBe(false);
     expect(isAllowed("U11")).toBe(false);
+  });
+
+  it("revokes access when a user leaves the group (owner still allowed)", () => {
+    __setAccessMembersForTests([]);
+    expect(isAllowed("U1")).toBe(false);
+    expect(isAllowed("UOWNER")).toBe(true);
   });
 });
 
@@ -312,6 +329,8 @@ describe("createSlackApp handler routing", () => {
         SLACK_BOT_TOKEN: "xoxb-test",
         SLACK_APP_TOKEN: "xapp-test",
         BOT_USER_ID: "UBOT",
+        SENTINEL_OWNER_USER_ID: "UOWNER",
+        SENTINEL_ACCESS_GROUP_HANDLE: "sentinel-access-group",
         ALLOWED_USER_IDS: ["U1", "U2"],
         LOG_LEVEL: "silent",
       },
@@ -332,6 +351,10 @@ describe("createSlackApp handler routing", () => {
       return { default: pino };
     });
     const mod = await import("../src/slack/socketClient.js");
+    // The reset module graph has a fresh (empty) access-group cache — seed the
+    // members these routing tests treat as "allowed". U3 stays a non-member.
+    const ag = await import("../src/slack/accessGroup.js");
+    ag.__setAccessMembersForTests(["U1", "U2"]);
     return { registered, createSlackApp: mod.createSlackApp };
   }
 
@@ -492,7 +515,7 @@ describe("createSlackApp handler routing", () => {
     );
   });
 
-  it("/sentinel from a non-allowed user ACKs but does NOT post or invoke the handler", async () => {
+  it("/sentinel from a non-allowed user ACKs, posts the denial, and does NOT invoke the handler", async () => {
     const { registered, createSlackApp } = await loadWithFakeBolt();
     const handler = vi.fn().mockResolvedValue(undefined);
     createSlackApp(handler);
@@ -509,8 +532,13 @@ describe("createSlackApp handler routing", () => {
 
     // Must still ACK (Slack requires it within 3s) ...
     expect(ack).toHaveBeenCalledTimes(1);
-    // ... but must not leak any work for an unauthorized user.
-    expect(postMessage).not.toHaveBeenCalled();
+    // ... posts the access-denied reply (not the Processing message) ...
+    expect(postMessage).toHaveBeenCalledTimes(1);
+    const arg = postMessage.mock.calls[0][0];
+    expect(arg.channel).toBe("C9");
+    expect(arg.text).toContain("dont have access");
+    expect(arg.text).not.toContain("Processing");
+    // ... and never runs the expensive handler.
     expect(handler).not.toHaveBeenCalled();
   });
 

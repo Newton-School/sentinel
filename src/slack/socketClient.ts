@@ -3,6 +3,7 @@ const { App } = bolt;
 import { config } from "../config.js";
 import { createLogger } from "../logging/logger.js";
 import { createMessageDeduper } from "./dedupe.js";
+import { isAccessGroupMember, denialMessage } from "./accessGroup.js";
 import type { SlackEventEnvelope } from "../types/contracts.js";
 
 const log = createLogger("slack");
@@ -83,12 +84,37 @@ export function normalizeReactionAdded(event: {
 }
 
 /**
- * Authorization gate. Returns true only when `userId` is in the allow-list.
- * Security-critical: this is the single check that keeps non-listed Slack
- * users from reaching the bot.
+ * Authorization gate. Returns true only for the owner (always allowed) or a
+ * current member of the `@sentinel-access-group` Slack user group (cached, see
+ * accessGroup.ts). Security-critical: the single check that keeps non-members
+ * from reaching the bot. (ALLOWED_USER_IDS no longer gates entry — it only
+ * feeds the memory-founder default.)
  */
 export function isAllowed(userId: string): boolean {
-  return config.ALLOWED_USER_IDS.includes(userId);
+  if (config.SENTINEL_OWNER_USER_ID && userId === config.SENTINEL_OWNER_USER_ID) {
+    return true;
+  }
+  return isAccessGroupMember(userId);
+}
+
+/**
+ * Post the "you don't have access" reply to a non-member. Best-effort: a post
+ * failure must never throw out of the event handler.
+ */
+async function postDenial(
+  client: InstanceType<typeof App>["client"],
+  channel: string,
+  threadTs?: string
+): Promise<void> {
+  try {
+    await client.chat.postMessage({
+      channel,
+      ...(threadTs ? { thread_ts: threadTs } : {}),
+      text: denialMessage(config.SENTINEL_OWNER_USER_ID),
+    });
+  } catch (err) {
+    log.warn({ err }, "Failed to post access-denied reply");
+  }
 }
 
 /**
@@ -189,7 +215,8 @@ export function createSlackApp(
   app.event("app_mention", async ({ event, client }) => {
     const userId = event.user;
     if (!userId || !isAllowed(userId)) {
-      log.warn({ userId }, "Unauthorized or unknown user, ignoring mention");
+      log.warn({ userId }, "Unauthorized or unknown user, denying mention");
+      if (userId) await postDenial(client, event.channel, event.thread_ts ?? event.ts);
       return;
     }
 
@@ -222,7 +249,8 @@ export function createSlackApp(
 
     const userId = msg.user as string;
     if (!isAllowed(userId)) {
-      log.warn({ userId }, "Unauthorized user, ignoring DM");
+      log.warn({ userId }, "Unauthorized user, denying DM");
+      await postDenial(client, msg.channel as string);
       return;
     }
 
@@ -246,8 +274,9 @@ export function createSlackApp(
     if (!isAllowed(command.user_id)) {
       log.warn(
         { userId: command.user_id },
-        "Unauthorized user, ignoring command"
+        "Unauthorized user, denying command"
       );
+      await postDenial(client, command.channel_id);
       return;
     }
 

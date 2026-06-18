@@ -27,6 +27,7 @@ import { record, renderPrometheus } from "./metrics/registry.js";
 import { renderEvalGauges } from "./metrics/evalGauges.js";
 import { startMeetWatcher } from "./meet-bot/watcher.js";
 import { startIngestWatcher } from "./memory/ingestWatcher.js";
+import { startAccessGroupWatcher } from "./slack/accessGroup.js";
 import { startConsolidationWatcher } from "./memory/consolidationWatcher.js";
 import { createGracefulShutdown } from "./shutdown.js";
 import type { SlackEventEnvelope } from "./types/contracts.js";
@@ -388,6 +389,7 @@ let slackApp: ReturnType<typeof createSlackApp> | null = null;
 let stopWatcher: (() => void) | null = null;
 let stopIngest: (() => void) | null = null;
 let stopConsolidation: (() => void) | null = null;
+let stopAccessGroup: (() => void) | null = null;
 let healthServer: http.Server | null = null;
 
 async function main(): Promise<void> {
@@ -448,6 +450,11 @@ async function main(): Promise<void> {
   // Start consolidation watcher (rolls entity facts into dossiers).
   stopConsolidation = startConsolidationWatcher();
 
+  // Resolve the access-group membership (warms the cache before Slack events
+  // arrive) and keep it refreshed. Needs the bot's usergroups:read scope; on
+  // failure only the owner is allowed (see accessGroup.ts).
+  stopAccessGroup = await startAccessGroupWatcher();
+
   // Start Slack app with feedback always wired: the button-action handler
   // (primary) and the reaction handler (secondary) both record feedback.
   const app = createSlackApp(handleEvent, handleReaction, handleFeedbackAction);
@@ -471,6 +478,7 @@ const shutdown = createGracefulShutdown({
     stopWatcher?.();
     stopIngest?.();
     stopConsolidation?.();
+    stopAccessGroup?.();
   },
   stopSlackApp: async () => {
     if (slackApp) await slackApp.stop();
