@@ -160,6 +160,36 @@ Placements are *up 15%* this week.
     });
   });
 
+  describe("robustness: malformed/mixed bold + list bullets", () => {
+    it("collapses residual ** so no raw double-asterisks leak to Slack", () => {
+      // The model sometimes emits malformed bold (label bolded, number left dangling).
+      const out = markdownToSlackMrkdwn("**DS enrollments: **117**");
+      expect(out).not.toContain("**");
+    });
+
+    it("converts a clean bolded metric cleanly", () => {
+      expect(markdownToSlackMrkdwn("**DS enrollments: 117**")).toBe("*DS enrollments: 117*");
+    });
+
+    it("never leaves ** anywhere in a mixed-bold line", () => {
+      expect(markdownToSlackMrkdwn("**A** plus **B** and a stray **")).not.toContain("**");
+    });
+
+    it("converts * and + list bullets to • (Slack shows them literally otherwise)", () => {
+      expect(markdownToSlackMrkdwn("* first\n* second")).toBe("• first\n• second");
+      expect(markdownToSlackMrkdwn("+ plus item")).toBe("• plus item");
+      expect(markdownToSlackMrkdwn("  * indented")).toBe("  • indented");
+    });
+
+    it("does not mistake a leading bold marker for a bullet", () => {
+      expect(markdownToSlackMrkdwn("**Heading**")).toBe("*Heading*");
+    });
+
+    it("still preserves - bullets (Slack renders them fine)", () => {
+      expect(markdownToSlackMrkdwn("- a\n- b")).toBe("- a\n- b");
+    });
+  });
+
   describe("edge cases", () => {
     it("handles empty string", () => {
       expect(markdownToSlackMrkdwn("")).toBe("");
