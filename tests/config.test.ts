@@ -163,6 +163,30 @@ describe("config envSchema (real module)", () => {
     });
   });
 
+  describe("access group (SENTINEL_ACCESS_GROUP_HANDLE / SENTINEL_OWNER_USER_ID)", () => {
+    it("defaults SENTINEL_ACCESS_GROUP_HANDLE to 'sentinel-access-group'", () => {
+      const r = envSchema.safeParse(validEnv);
+      expect(r.success).toBe(true);
+      if (r.success) {
+        expect(r.data.SENTINEL_ACCESS_GROUP_HANDLE).toBe("sentinel-access-group");
+        expect(r.data.SENTINEL_OWNER_USER_ID).toBeUndefined();
+      }
+    });
+
+    it("accepts overrides for handle + owner id", () => {
+      const r = envSchema.safeParse({
+        ...validEnv,
+        SENTINEL_ACCESS_GROUP_HANDLE: "data-team",
+        SENTINEL_OWNER_USER_ID: "U05EUC842KD",
+      });
+      expect(r.success).toBe(true);
+      if (r.success) {
+        expect(r.data.SENTINEL_ACCESS_GROUP_HANDLE).toBe("data-team");
+        expect(r.data.SENTINEL_OWNER_USER_ID).toBe("U05EUC842KD");
+      }
+    });
+  });
+
   describe("ANALYTICS_CLAUDE_MODEL", () => {
     it("defaults ANALYTICS_CLAUDE_MODEL to undefined when unset", () => {
       const result = envSchema.safeParse(validEnv);

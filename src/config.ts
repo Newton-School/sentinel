@@ -50,6 +50,15 @@ export const envSchema = z
 
   SQLITE_DB_PATH: z.string().default("./sentinel.db"),
 
+  // Entry gate: access is granted to members of this Slack user group (resolved
+  // by handle) plus SENTINEL_OWNER_USER_ID. Requires the bot's `usergroups:read`
+  // scope. ALLOWED_USER_IDS no longer gates entry (kept for the memory-founder
+  // default below).
+  SENTINEL_ACCESS_GROUP_HANDLE: z.string().min(1).default("sentinel-access-group"),
+  // Owner — always allowed (so a group-resolution failure can't lock you out)
+  // and rendered as the @mention in the denial reply to non-members.
+  SENTINEL_OWNER_USER_ID: z.string().min(1).optional(),
+
   ALLOWED_USER_IDS: z
     .string()
     .transform((s) => s.split(",").map((id) => id.trim()).filter(Boolean))

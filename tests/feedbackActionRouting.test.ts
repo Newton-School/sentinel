@@ -39,6 +39,9 @@ describe("createSlackApp feedback action routing", () => {
   async function load(withAction: boolean) {
     harness();
     const mod = await import("../src/slack/socketClient.js");
+    // Seed the fresh access-group cache so U1/U2 are "allowed" (U99 is not).
+    const ag = await import("../src/slack/accessGroup.js");
+    ag.__setAccessMembersForTests(["U1", "U2"]);
     const handler = vi.fn();
     mod.createSlackApp(vi.fn(), undefined, withAction ? handler : undefined);
     return { handler };

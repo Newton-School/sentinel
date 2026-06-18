@@ -40,6 +40,9 @@ describe("createSlackApp reaction routing", () => {
   async function load(withReaction: boolean) {
     harness();
     const mod = await import("../src/slack/socketClient.js");
+    // Seed the fresh access-group cache so U1 is "allowed" (others are not).
+    const ag = await import("../src/slack/accessGroup.js");
+    ag.__setAccessMembersForTests(["U1", "U2"]);
     const reactionHandler = vi.fn();
     mod.createSlackApp(vi.fn(), withReaction ? reactionHandler : undefined);
     return { reactionHandler };
