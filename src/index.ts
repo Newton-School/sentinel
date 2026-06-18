@@ -141,13 +141,10 @@ async function handleEventInner(
     // too). In founders mode (default) every allowed user sees all rows.
     const viewer = currentViewerScope(envelope.userId);
 
-    // Decide the route up front: skill (deterministic trigger) > analytics (LLM
-    // classifier) > general. Gated by ANALYTICS_ENABLED — when off, every
-    // message takes the general path exactly as before. The classifier is
-    // fail-safe (any error → "general"), so routing can never break a reply.
-    const route = config.ANALYTICS_ENABLED
-      ? await decideRoute(envelope.text)
-      : ({ kind: "general" } as const);
+    // Decide the route: skill (deterministic trigger) > analytics (LLM
+    // classifier) > general. Always on. The classifier is fail-safe (any error →
+    // "general"), so routing can never break a reply.
+    const route = await decideRoute(envelope.text);
 
     let systemPrompt: string;
     let promptVersion: string;

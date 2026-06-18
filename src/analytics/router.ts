@@ -4,8 +4,7 @@
  * Skills are matched first because a verbatim trigger phrase is an unambiguous
  * intent — free to detect and worth short-circuiting the (paid) classifier.
  * Otherwise the LLM intent classifier decides analytics vs general. Pure and
- * config-free: the ANALYTICS_ENABLED gate lives at the call site (index.ts), so
- * when disabled the classifier is never even invoked.
+ * config-free; routing is always on (called for every message).
  */
 
 import { matchSkill, type SkillId } from "./skills.js";
