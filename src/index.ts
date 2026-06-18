@@ -47,6 +47,11 @@ const ANALYTICS_MCP_SERVERS = new Set(["metabase"]);
 function analyticsRunOptions(): RunClaudeOptions {
   return {
     mcpServers: ANALYTICS_MCP_SERVERS,
+    // No timeout: the projection skills issue many sequential SQL queries and
+    // legitimately exceed the general 180s window. (The general route keeps its
+    // 180s safety net.) Trade-off: a stuck analytics run holds a concurrency
+    // slot until the CLI itself exits.
+    timeoutMs: 0,
     ...(config.ANALYTICS_CLAUDE_MODEL ? { model: config.ANALYTICS_CLAUDE_MODEL } : {}),
   };
 }

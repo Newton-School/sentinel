@@ -137,10 +137,13 @@ export async function runClaude(
   return new Promise<ClaudeResponse>((resolve, reject) => {
     // The Claude CLI authenticates via its own login (no ANTHROPIC_API_KEY);
     // it inherits the ambient env.
+    // timeoutMs <= 0 disables the timeout entirely (used by the analytics route,
+    // whose projection skills legitimately run longer than the default window).
+    const timeoutEnabled = timeoutMs > 0;
     const proc = spawn(config.CLAUDE_BIN, args, {
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: timeoutMs,
+      ...(timeoutEnabled ? { timeout: timeoutMs } : {}),
     });
 
     let stdout = "";
@@ -240,13 +243,16 @@ export async function runClaude(
 
     // Timeout safety net. Cleared on close/error so it never fires after the
     // process has already settled (which would kill an exited PID and leave a
-    // dangling timer holding the event loop open).
-    const timer = setTimeout(() => {
-      if (!proc.killed) {
-        proc.kill("SIGTERM");
-        recordReply("error", undefined, "timeout");
-        reject(new Error(`Claude CLI timed out after ${timeoutMs}ms`));
-      }
-    }, timeoutMs);
+    // dangling timer holding the event loop open). Skipped entirely when the
+    // timeout is disabled (timeoutMs <= 0) — clearTimeout(undefined) is a no-op.
+    const timer = timeoutEnabled
+      ? setTimeout(() => {
+          if (!proc.killed) {
+            proc.kill("SIGTERM");
+            recordReply("error", undefined, "timeout");
+            reject(new Error(`Claude CLI timed out after ${timeoutMs}ms`));
+          }
+        }, timeoutMs)
+      : undefined;
   });
 }
