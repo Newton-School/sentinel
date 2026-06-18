@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sentinel-data
+  labels:
+    app: sentinel
+spec:
+  # ReadWriteOnce: mounted by a single pod. Sentinel's SQLite DB (single-writer
+  # WAL) and the shared Chrome profile under /app/data must not be accessed by
+  # two pods at once — hence RWO + a single-replica, Recreate Deployment.
+  accessModes:
+    - ReadWriteOnce
+  # storageClassName is intentionally unset → uses the cluster's default
+  # StorageClass. If the staging cluster has no default (or you need a specific
+  # RWO class), set it explicitly here, e.g.:
+  #   storageClassName: gp3
+  resources:
+    requests:
+      storage: 10Gi

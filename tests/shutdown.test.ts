@@ -119,6 +119,26 @@ describe("createGracefulShutdown", () => {
     expect(mocks.closeDb).toHaveBeenCalledTimes(1);
   });
 
+  it("bounds a hung stopSlackApp and still completes shutdown", async () => {
+    // stopSlackApp that never resolves (hung Socket-Mode disconnect).
+    const stopSlackApp = vi.fn(() => new Promise<void>(() => {}));
+    const { deps, mocks } = makeDeps({
+      stopSlackApp: stopSlackApp as unknown as () => Promise<void>,
+      slackStopTimeoutMs: 10000,
+    });
+    const shutdown = createGracefulShutdown(deps);
+
+    const p = shutdown("SIGTERM");
+    await vi.runAllTimersAsync();
+    await p;
+
+    // The hung stop timed out (warn), but close/db/exit still ran.
+    expect(mocks.warn).toHaveBeenCalled();
+    expect(mocks.closeHealthServer).toHaveBeenCalledTimes(1);
+    expect(mocks.closeDb).toHaveBeenCalledTimes(1);
+    expect(mocks.exit).toHaveBeenCalledWith(0);
+  });
+
   it("is idempotent: a second signal does not re-run the sequence", async () => {
     const { deps, mocks } = makeDeps();
     const shutdown = createGracefulShutdown(deps);

@@ -1,0 +1,19 @@
+# Prometheus Operator ServiceMonitor — scrapes Sentinel's /metrics
+# (request/token/cost/feedback counters + eval gauges) off the Service's `http`
+# port. REQUIRES the Prometheus Operator CRD (monitoring.coreos.com/v1) in the
+# cluster. If staging has no Prometheus Operator, drop this from
+# k8s/base/kustomization.yaml (or use a static scrape job instead).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: sentinel
+  labels:
+    app: sentinel
+spec:
+  selector:
+    matchLabels:
+      app: sentinel
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
