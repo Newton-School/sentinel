@@ -1,58 +1,71 @@
-# Kubernetes manifests for Sentinel
+# Kubernetes manifests for Sentinel (kustomize)
 
-These manifests are packaged as a CodeBuild artifact (`buildspec.yml` ships
-`imageDetail.json` + `k8s/**/*`) and applied to the cluster by the deploy stage.
+Layout:
 
-## What's here
+```
+k8s/
+  base/                     # environment-agnostic resources (+ kustomization.yaml)
+    deployment.yaml service.yaml configmap.yaml pvc.yaml
+    serviceaccount.yaml servicemonitor.yaml
+    secret.example.yaml     # TEMPLATE only — not part of the kustomization
+  overlays/
+    staging/kustomization.yaml   # namespace + image for staging
+```
 
-| File                  | Object                                | Purpose                                                       |
-| --------------------- | ------------------------------------- | ------------------------------------------------------------ |
-| `configmap.yaml`      | ConfigMap `sentinel-config`           | Non-secret tunables (`LOG_LEVEL`, `SQLITE_DB_PATH`, `HEALTH_CHECK_PORT`). |
-| `secret.example.yaml` | Secret `sentinel-secrets` (template)  | Placeholder secret env. **Do not commit real values.**       |
-| `pvc.yaml`            | PersistentVolumeClaim `sentinel-data` | ReadWriteOnce 5Gi volume for `/app/data`.                    |
-| `deployment.yaml`     | Deployment `sentinel`                  | Single replica, `Recreate` strategy, probes, env, volume.    |
-| `service.yaml`        | Service `sentinel`                     | ClusterIP, port 8930 → targetPort 8930.                      |
+Render / apply:
+
+```sh
+kubectl kustomize k8s/overlays/staging          # preview
+kubectl apply -k  k8s/overlays/staging          # apply (or point ArgoCD/flux here)
+```
+
+The build packages `imageDetail.json` + `k8s/**` (`buildspec.yml`). With GitOps,
+the deployed image **tag** is set by the overlay's `images:` block — point your
+ArgoCD `Application` (or flux `Kustomization`) at `k8s/overlays/staging` and let
+image-updater/flux bump `newTag`. Set `newName` to your ECR repo URI.
 
 ## Why single-replica / Recreate / ReadWriteOnce
+All state lives under `/app/data`: the SQLite DB (single-writer WAL), the Meet
+bot's Chrome profile, and meet-bot logs. The bot also holds **one** Slack
+Socket-Mode connection. Sharing any of that across pods would double-process
+events and corrupt state — so it's **1 replica**, **`Recreate`**, **RWO PVC**.
 
-Sentinel keeps all state under `/app/data`: the SQLite DB (`sentinel.db`, a
-single-writer WAL database), the persistent Chrome profile used by the Meet
-bot, and meet-bot logs. None of that is safe to share between pods, so the
-Deployment runs **one replica** with a **`Recreate`** strategy (the old pod is
-torn down before the new one starts) backed by a **ReadWriteOnce** PVC. This
-guarantees the volume is never mounted by two pods at once.
+## Hardening baked into the base Deployment
+- `securityContext.fsGroup: 1000` (+ `runAsNonRoot`/`runAsUser: 1000`) — without
+  `fsGroup` the mounted PVC is root-owned and SQLite can't open the DB.
+- `terminationGracePeriodSeconds: 40` — covers the 25s in-flight drain + 10s
+  bounded Slack-stop (see `src/shutdown.ts`); `dumb-init` (Dockerfile) reaps
+  subprocess zombies and forwards SIGTERM.
+- `startupProbe` on `/ready` — gates liveness/readiness during slow boot/CLI
+  warmup so a healthy-but-slow start isn't killed.
 
-## Apply order
+## Secrets you must create (out-of-band / sealed-secrets) in the namespace
+| Secret | From | Why |
+| --- | --- | --- |
+| `sentinel-secrets` | `base/secret.example.yaml` | Slack/Metabase/OpenAI/Google env + `SENTINEL_OWNER_USER_ID`. |
+| `claude-cli-creds` | a logged-in machine's `~/.claude` | The `claude` CLI authenticates via its **own login**, NOT an env var. The init container seeds it into a writable `~/.claude`. |
+| `ecr-registry` | ECR docker-registry secret | Image pull (or remove `imagePullSecrets` and use node IAM/IRSA). |
 
-Dependencies (ConfigMap/Secret/PVC) must exist before the Deployment that
-references them:
-
+Create the Claude creds Secret, e.g.:
 ```sh
-kubectl apply -f k8s/configmap.yaml
-kubectl apply -f k8s/secret.yaml      # your real copy of secret.example.yaml
-kubectl apply -f k8s/pvc.yaml
-kubectl apply -f k8s/deployment.yaml
-kubectl apply -f k8s/service.yaml
+kubectl -n sentinel-staging create secret generic claude-cli-creds \
+  --from-file=$HOME/.claude/        # the exact files vary — verify on a logged-in box
 ```
+> ⚠️ Verify the precise `~/.claude` contents/filenames the installed CLI uses,
+> and plan rotation (subscription logins expire). This is the #1 deploy blocker.
 
-The secret is applied out-of-band from a private copy with real values — see
-the header of `secret.example.yaml`.
+## Meet bot (kept enabled)
+The Playwright joiner needs a **Google-signed-in Chrome profile** — it can't log
+in headless. One-time, seed `data/sentinel-chrome-profile` onto the PVC (e.g.
+`kubectl cp` from a machine that ran `npm run meet-bot:setup`, or an init-restore
+from object storage). Without it the joiner can't join meetings.
 
-## Image substitution at deploy time
-
-`deployment.yaml` ships with `image: PLACEHOLDER_IMAGE_URI`. The build writes
-the sha-pinned ECR image URI to `imageDetail.json`
-(`{"ImageURI":"<acct>.dkr.ecr.<region>.amazonaws.com/sentinel:<sha>"}`). The
-deploy step pins it before applying, either by patching a running Deployment:
-
-```sh
-kubectl set image deployment/sentinel \
-  sentinel="$(jq -r .ImageURI imageDetail.json)"
-```
-
-or by substituting the placeholder in the manifest before `kubectl apply`:
-
-```sh
-sed "s#PLACEHOLDER_IMAGE_URI#$(jq -r .ImageURI imageDetail.json)#" \
-  k8s/deployment.yaml | kubectl apply -f -
-```
+## Cluster prerequisites
+- A default (or named) RWO `StorageClass` for the PVC (`base/pvc.yaml`).
+- **Egress** to: Slack, Anthropic (the CLI), OpenAI, the Metabase host, Google
+  APIs, and the npm registry (the GitHub/Notion MCP servers `npx`-install at
+  runtime — or leave their tokens unset to disable them).
+- **Prometheus Operator** CRD for `servicemonitor.yaml` (else drop it from
+  `base/kustomization.yaml` and use a static scrape job for `:8930/metrics`).
+- A **staging Slack app** (separate Socket-Mode app + tokens, `usergroups:read`
+  scope, interactivity enabled, bot invited to the channels).

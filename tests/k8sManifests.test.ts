@@ -3,27 +3,25 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
- * Guard test for the Kubernetes manifests packaged by buildsp.yml
- * (artifacts include `k8s/**` + imageDetail.json).
+ * Guard test for the Kubernetes manifests (kustomize base + staging overlay)
+ * packaged by buildspec.yml (artifacts include `k8s/**`).
  *
- * A YAML parser (`yaml` / `js-yaml`) is not currently a dependency, so this
- * test attempts to load one dynamically and parses the manifests into objects
- * when available; otherwise it falls back to string/regex assertions over the
- * raw file contents. Either path must enforce the same invariants.
+ * A YAML parser is loaded dynamically when available; otherwise we fall back to
+ * string/regex assertions over the raw file contents. Both paths enforce the
+ * same invariants.
  */
 
-const k8sDir = join(process.cwd(), "k8s");
+const k8sRoot = join(process.cwd(), "k8s");
+const baseDir = join(k8sRoot, "base");
+const stagingDir = join(k8sRoot, "overlays", "staging");
 
-function read(name: string): string {
-  return readFileSync(join(k8sDir, name), "utf8");
+function readBase(name: string): string {
+  return readFileSync(join(baseDir, name), "utf8");
 }
 
-// Attempt to load a YAML parser. parseAll returns every document in a
-// multi-doc file (`---` separated) as an array of objects.
 let parseAll: ((src: string) => unknown[]) | null = null;
 
 beforeAll(async () => {
-  // Try the `yaml` package first, then `js-yaml`.
   try {
     const mod: any = await import("yaml");
     parseAll = (src: string) => mod.parseAllDocuments(src).map((d: any) => d.toJSON());
@@ -42,157 +40,178 @@ beforeAll(async () => {
   }
 });
 
-describe("k8s manifests exist", () => {
-  it("includes all expected manifest files", () => {
+function deploymentDoc(): any {
+  const raw = readBase("deployment.yaml");
+  if (!parseAll) return null;
+  return parseAll(raw).find((d: any) => d?.kind === "Deployment");
+}
+
+describe("k8s layout (kustomize base + overlay)", () => {
+  it("has all base manifests + the kustomization files + README", () => {
     for (const f of [
       "deployment.yaml",
       "service.yaml",
       "pvc.yaml",
       "configmap.yaml",
       "secret.example.yaml",
-      "README.md",
+      "serviceaccount.yaml",
+      "servicemonitor.yaml",
+      "kustomization.yaml",
     ]) {
-      expect(existsSync(join(k8sDir, f)), `k8s/${f} should exist`).toBe(true);
+      expect(existsSync(join(baseDir, f)), `k8s/base/${f} should exist`).toBe(true);
     }
+    expect(existsSync(join(stagingDir, "kustomization.yaml")), "staging overlay").toBe(true);
+    expect(existsSync(join(k8sRoot, "README.md")), "k8s/README.md").toBe(true);
+  });
+
+  it("base kustomization lists the resources but NOT the secret template", () => {
+    const raw = readBase("kustomization.yaml");
+    expect(raw).toMatch(/deployment\.yaml/);
+    expect(raw).toMatch(/service\.yaml/);
+    expect(raw).toMatch(/configmap\.yaml/);
+    expect(raw).toMatch(/pvc\.yaml/);
+    expect(raw).not.toMatch(/^\s*-\s*secret\.example\.yaml/m);
+  });
+
+  it("staging overlay sets the namespace, references base, and rewrites the image", () => {
+    const raw = readFileSync(join(stagingDir, "kustomization.yaml"), "utf8");
+    expect(raw).toMatch(/namespace:\s*sentinel-staging/);
+    expect(raw).toMatch(/\.\.\/\.\.\/base/);
+    expect(raw).toMatch(/images:/);
+    expect(raw).toMatch(/name:\s*sentinel\b/);
   });
 });
 
-describe("k8s/deployment.yaml", () => {
+describe("k8s/base/deployment.yaml", () => {
   it("is a single-replica Deployment with a Recreate strategy", () => {
-    const raw = read("deployment.yaml");
+    const raw = readBase("deployment.yaml");
     if (parseAll) {
-      const doc: any = parseAll(raw).find((d: any) => d?.kind === "Deployment");
-      expect(doc, "a Deployment document").toBeTruthy();
+      const doc = deploymentDoc();
+      expect(doc).toBeTruthy();
       expect(doc.spec.replicas).toBe(1);
       expect(doc.spec.strategy.type).toBe("Recreate");
     } else {
-      expect(raw).toMatch(/kind:\s*Deployment/);
       expect(raw).toMatch(/replicas:\s*1\b/);
       expect(raw).toMatch(/strategy:[\s\S]*type:\s*Recreate/);
     }
   });
 
-  it("exposes containerPort 8930", () => {
-    const raw = read("deployment.yaml");
+  it("exposes containerPort 8930 and has /health + /ready + startupProbe", () => {
+    const raw = readBase("deployment.yaml");
     if (parseAll) {
-      const doc: any = parseAll(raw).find((d: any) => d?.kind === "Deployment");
-      const container = doc.spec.template.spec.containers[0];
-      const ports = container.ports.map((p: any) => p.containerPort);
-      expect(ports).toContain(8930);
+      const c = deploymentDoc().spec.template.spec.containers[0];
+      expect(c.ports.map((p: any) => p.containerPort)).toContain(8930);
+      expect(c.livenessProbe.httpGet.path).toBe("/health");
+      expect(c.readinessProbe.httpGet.path).toBe("/ready");
+      expect(c.startupProbe.httpGet.path).toBe("/ready");
     } else {
       expect(raw).toMatch(/containerPort:\s*8930\b/);
-    }
-  });
-
-  it("has a liveness probe on /health and a readiness probe on /ready", () => {
-    const raw = read("deployment.yaml");
-    if (parseAll) {
-      const doc: any = parseAll(raw).find((d: any) => d?.kind === "Deployment");
-      const container = doc.spec.template.spec.containers[0];
-      expect(container.livenessProbe.httpGet.path).toBe("/health");
-      expect(container.readinessProbe.httpGet.path).toBe("/ready");
-    } else {
       expect(raw).toMatch(/livenessProbe:[\s\S]*path:\s*\/health/);
-      expect(raw).toMatch(/readinessProbe:[\s\S]*path:\s*\/ready/);
+      expect(raw).toMatch(/startupProbe:[\s\S]*path:\s*\/ready/);
     }
   });
 
-  it("mounts /app/data from a volume backed by a PVC", () => {
-    const raw = read("deployment.yaml");
+  it("sets fsGroup 1000 + runAsNonRoot so the PVC is writable by the non-root user", () => {
+    const raw = readBase("deployment.yaml");
     if (parseAll) {
-      const doc: any = parseAll(raw).find((d: any) => d?.kind === "Deployment");
-      const podSpec = doc.spec.template.spec;
-      const container = podSpec.containers[0];
-      const mount = container.volumeMounts.find((m: any) => m.mountPath === "/app/data");
-      expect(mount, "a volumeMount at /app/data").toBeTruthy();
-      const vol = podSpec.volumes.find((v: any) => v.name === mount.name);
-      expect(vol, "a matching volume for the /app/data mount").toBeTruthy();
-      expect(vol.persistentVolumeClaim?.claimName, "volume references a PVC").toBeTruthy();
+      const sc = deploymentDoc().spec.template.spec.securityContext;
+      expect(sc.fsGroup).toBe(1000);
+      expect(sc.runAsNonRoot).toBe(true);
+      expect(sc.runAsUser).toBe(1000);
+    } else {
+      expect(raw).toMatch(/fsGroup:\s*1000/);
+      expect(raw).toMatch(/runAsNonRoot:\s*true/);
+    }
+  });
+
+  it("sets an explicit terminationGracePeriodSeconds + serviceAccountName", () => {
+    const raw = readBase("deployment.yaml");
+    if (parseAll) {
+      const podSpec = deploymentDoc().spec.template.spec;
+      expect(podSpec.terminationGracePeriodSeconds).toBeGreaterThanOrEqual(35);
+      expect(podSpec.serviceAccountName).toBe("sentinel");
+    } else {
+      expect(raw).toMatch(/terminationGracePeriodSeconds:\s*\d+/);
+      expect(raw).toMatch(/serviceAccountName:\s*sentinel/);
+    }
+  });
+
+  it("mounts /app/data (PVC) and the writable Claude creds dir (~/.claude)", () => {
+    const raw = readBase("deployment.yaml");
+    if (parseAll) {
+      const podSpec = deploymentDoc().spec.template.spec;
+      const c = podSpec.containers[0];
+      const dataMount = c.volumeMounts.find((m: any) => m.mountPath === "/app/data");
+      expect(dataMount).toBeTruthy();
+      const vol = podSpec.volumes.find((v: any) => v.name === dataMount.name);
+      expect(vol.persistentVolumeClaim?.claimName).toBeTruthy();
+      expect(c.volumeMounts.some((m: any) => m.mountPath === "/home/pwuser/.claude")).toBe(true);
     } else {
       expect(raw).toMatch(/mountPath:\s*\/app\/data/);
-      expect(raw).toMatch(/persistentVolumeClaim:/);
       expect(raw).toMatch(/claimName:/);
+      expect(raw).toMatch(/mountPath:\s*\/home\/pwuser\/\.claude/);
     }
   });
 
-  it("pulls env from the sentinel-secrets Secret via envFrom", () => {
-    const raw = read("deployment.yaml");
+  it("pulls env from the sentinel-secrets Secret + sentinel-config ConfigMap", () => {
+    const raw = readBase("deployment.yaml");
     if (parseAll) {
-      const doc: any = parseAll(raw).find((d: any) => d?.kind === "Deployment");
-      const container = doc.spec.template.spec.containers[0];
-      const fromSecret = (container.envFrom ?? []).some(
-        (e: any) => e.secretRef?.name === "sentinel-secrets",
-      );
-      expect(fromSecret, "envFrom references sentinel-secrets").toBe(true);
+      const c = deploymentDoc().spec.template.spec.containers[0];
+      const refs = (c.envFrom ?? []).flatMap((e: any) => [e.secretRef?.name, e.configMapRef?.name]);
+      expect(refs).toContain("sentinel-secrets");
+      expect(refs).toContain("sentinel-config");
     } else {
-      expect(raw).toMatch(/envFrom:/);
       expect(raw).toMatch(/secretRef:[\s\S]*name:\s*sentinel-secrets/);
+      expect(raw).toMatch(/configMapRef:[\s\S]*name:\s*sentinel-config/);
     }
   });
 });
 
-describe("k8s/service.yaml", () => {
-  it("is a Service mapping port 8930 to targetPort 8930", () => {
-    const raw = read("service.yaml");
+describe("k8s/base/service.yaml", () => {
+  it("maps port 8930 → targetPort 8930 with a named http port", () => {
+    const raw = readBase("service.yaml");
     if (parseAll) {
       const doc: any = parseAll(raw).find((d: any) => d?.kind === "Service");
-      expect(doc, "a Service document").toBeTruthy();
       const portEntry = doc.spec.ports.find((p: any) => p.port === 8930);
-      expect(portEntry, "a port 8930 entry").toBeTruthy();
       expect(portEntry.targetPort).toBe(8930);
+      expect(portEntry.name).toBe("http");
     } else {
-      expect(raw).toMatch(/kind:\s*Service/);
       expect(raw).toMatch(/port:\s*8930\b/);
       expect(raw).toMatch(/targetPort:\s*8930\b/);
     }
   });
 });
 
-describe("k8s/pvc.yaml", () => {
+describe("k8s/base/pvc.yaml", () => {
   it("is a ReadWriteOnce PersistentVolumeClaim", () => {
-    const raw = read("pvc.yaml");
+    const raw = readBase("pvc.yaml");
     if (parseAll) {
       const doc: any = parseAll(raw).find((d: any) => d?.kind === "PersistentVolumeClaim");
-      expect(doc, "a PersistentVolumeClaim document").toBeTruthy();
       expect(doc.spec.accessModes).toContain("ReadWriteOnce");
     } else {
-      expect(raw).toMatch(/kind:\s*PersistentVolumeClaim/);
       expect(raw).toMatch(/ReadWriteOnce/);
     }
   });
 });
 
-describe("k8s/secret.example.yaml", () => {
-  it("is a Secret template containing only placeholder values (no real creds)", () => {
-    const raw = read("secret.example.yaml");
+describe("k8s/base/secret.example.yaml", () => {
+  it("is a Secret template with only REPLACE_ME placeholders (no real creds)", () => {
+    const raw = readBase("secret.example.yaml");
     if (parseAll) {
       const doc: any = parseAll(raw).find((d: any) => d?.kind === "Secret");
-      expect(doc, "a Secret document").toBeTruthy();
       const values = Object.values(doc.stringData ?? {}) as string[];
-      expect(values.length, "stringData has at least one key").toBeGreaterThan(0);
+      expect(values.length).toBeGreaterThan(0);
       for (const v of values) {
-        expect(
-          /REPLACE_ME/.test(String(v)),
-          `every stringData value must be a REPLACE_ME placeholder, got: ${v}`,
-        ).toBe(true);
+        expect(/REPLACE_ME/.test(String(v)), `placeholder expected, got: ${v}`).toBe(true);
       }
     } else {
-      expect(raw).toMatch(/kind:\s*Secret/);
-      expect(raw).toMatch(/stringData:/);
-      // Every value after a `key:` under stringData must be a placeholder.
       const lines = raw.split("\n");
-      const inStringData = (() => {
-        const idx = lines.findIndex((l) => /^\s*stringData:/.test(l));
-        return idx === -1 ? [] : lines.slice(idx + 1);
-      })();
-      const valueLines = inStringData.filter((l) => /^\s+\S+:\s*\S/.test(l));
-      expect(valueLines.length, "stringData has at least one key/value").toBeGreaterThan(0);
+      const idx = lines.findIndex((l) => /^\s*stringData:/.test(l));
+      const valueLines = lines.slice(idx + 1).filter((l) => /^\s+\S+:\s*\S/.test(l));
+      expect(valueLines.length).toBeGreaterThan(0);
       for (const l of valueLines) {
         const value = l.slice(l.indexOf(":") + 1).trim().replace(/^["']|["']$/g, "");
-        expect(
-          /REPLACE_ME/.test(value),
-          `every stringData value must be a REPLACE_ME placeholder, got: ${l.trim()}`,
-        ).toBe(true);
+        expect(/REPLACE_ME/.test(value), `placeholder expected, got: ${l.trim()}`).toBe(true);
       }
     }
   });

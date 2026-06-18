@@ -43,15 +43,17 @@ const MAX_CONCURRENT = 3;
 // always-on memory server) so the agent stays focused on SQL over Altius.
 const ANALYTICS_MCP_SERVERS = new Set(["metabase"]);
 
+// The projection skills issue many sequential SQL queries and legitimately
+// exceed the general 180s window (observed ~6 min). A generous finite cap lets
+// them finish while bounding a stuck run so it can't hold a concurrency slot
+// forever on a shared (multi-user) instance.
+const ANALYTICS_TIMEOUT_MS = 10 * 60 * 1000; // 10 min
+
 /** Per-run overrides shared by the analytics Q&A and skill paths. */
 function analyticsRunOptions(): RunClaudeOptions {
   return {
     mcpServers: ANALYTICS_MCP_SERVERS,
-    // No timeout: the projection skills issue many sequential SQL queries and
-    // legitimately exceed the general 180s window. (The general route keeps its
-    // 180s safety net.) Trade-off: a stuck analytics run holds a concurrency
-    // slot until the CLI itself exits.
-    timeoutMs: 0,
+    timeoutMs: ANALYTICS_TIMEOUT_MS,
     ...(config.ANALYTICS_CLAUDE_MODEL ? { model: config.ANALYTICS_CLAUDE_MODEL } : {}),
   };
 }

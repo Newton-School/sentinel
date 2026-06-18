@@ -1,0 +1,122 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentinel
+  labels:
+    app: sentinel
+spec:
+  # Single replica only. Sentinel stores SQLite (single-writer, WAL) and a
+  # shared persistent Chrome profile under /app/data on a ReadWriteOnce PVC, and
+  # holds a single Slack Socket-Mode connection. Two pods would double-process
+  # events and corrupt the DB / Chrome profile.
+  replicas: 1
+  strategy:
+    # Recreate (not RollingUpdate): tear down the old pod before starting the
+    # new one so two pods never hold the same RWO volume / socket at once.
+    type: Recreate
+  selector:
+    matchLabels:
+      app: sentinel
+  template:
+    metadata:
+      labels:
+        app: sentinel
+    spec:
+      serviceAccountName: sentinel
+      # ECR pull credentials. Provide an imagePullSecret named `ecr-registry`
+      # in the namespace, OR remove this and use node IAM / IRSA for ECR.
+      imagePullSecrets:
+        - name: ecr-registry
+      # fsGroup makes the mounted PVC (and emptyDirs) group-writable by the
+      # non-root runtime user (uid 1000, pwuser). WITHOUT it, the mounted volume
+      # is root-owned and SQLite cannot open the DB → crashloop. runAsNonRoot /
+      # runAsUser pin the pwuser identity from the Playwright base image.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      # >= the 25s in-flight drain + the 10s bounded Slack-stop, with headroom
+      # (see src/shutdown.ts). K8s default is 30s, which is too tight.
+      terminationGracePeriodSeconds: 40
+      initContainers:
+        # Seed the Claude CLI login into a WRITABLE ~/.claude. The login lives in
+        # the `claude-cli-creds` Secret (mounted read-only); the CLI refreshes
+        # session state at runtime so it needs a writable config dir — copy the
+        # creds into an emptyDir the main container mounts at $HOME/.claude.
+        # (See k8s/README.md for creating the Secret from a logged-in ~/.claude.)
+        - name: seed-claude-creds
+          image: sentinel:latest
+          command:
+            - sh
+            - -c
+            - "cp -a /creds/. /claude-home/ 2>/dev/null || true; chmod -R u+rwX /claude-home || true"
+          volumeMounts:
+            - name: claude-creds
+              mountPath: /creds
+              readOnly: true
+            - name: claude-home
+              mountPath: /claude-home
+      containers:
+        - name: sentinel
+          # Image NAME `sentinel` — the kustomize overlay's `images:` transformer
+          # rewrites it to the real ECR repo + tag (GitOps sets the tag).
+          image: sentinel:latest
+          ports:
+            - name: http
+              containerPort: 8930
+          envFrom:
+            # Mandatory + optional secret env (tokens, API keys, Google creds).
+            - secretRef:
+                name: sentinel-secrets
+            # Non-secret tunables (LOG_LEVEL, SQLITE_DB_PATH, feature gates, etc.).
+            - configMapRef:
+                name: sentinel-config
+          # Startup probe gates liveness/readiness until the app is actually up
+          # (Slack connect + first CLI warmup can be slow). 5s × 36 ≈ 180s budget;
+          # prevents liveness from killing a slow-but-healthy boot.
+          startupProbe:
+            httpGet:
+              path: /ready
+              port: 8930
+            periodSeconds: 5
+            failureThreshold: 36
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8930
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8930
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            # Sized for up to 3 concurrent `claude` CLI subprocesses + their MCP
+            # servers + a possible Chrome (Meet bot). Tune after observing load.
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "3Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+            - name: claude-home
+              mountPath: /home/pwuser/.claude
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: sentinel-data
+        # Writable Claude CLI config dir, seeded from the creds Secret by the init container.
+        - name: claude-home
+          emptyDir: {}
+        - name: claude-creds
+          secret:
+            secretName: claude-cli-creds

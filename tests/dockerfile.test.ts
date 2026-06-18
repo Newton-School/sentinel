@@ -37,4 +37,22 @@ describe("Dockerfile runtime image", () => {
   it("chowns /app (or /app/data) so the non-root user can write the volume", () => {
     expect(dockerfile).toMatch(/chown\s+(-R\s+)?\S+\s+\/app(\/data)?\b/);
   });
+
+  it("uses dumb-init as PID 1 (zombie reaping + SIGTERM forwarding)", () => {
+    expect(dockerfile).toMatch(/install[^\n]*\bdumb-init\b/);
+    expect(dockerfile).toMatch(/ENTRYPOINT \["dumb-init", "--"\]/);
+  });
+
+  it("sets HOME so the mounted Claude CLI creds (~/.claude) resolve", () => {
+    expect(dockerfile).toMatch(/ENV HOME=\/home\/pwuser/);
+  });
+});
+
+describe(".dockerignore", () => {
+  it("excludes secrets + local state from the build context", () => {
+    const di = readFileSync(join(process.cwd(), ".dockerignore"), "utf8");
+    for (const pat of [".env", "node_modules", "data/", "*.db", ".git"]) {
+      expect(di, `.dockerignore should list ${pat}`).toContain(pat);
+    }
+  });
 });

@@ -24,10 +24,14 @@ export interface ShutdownDeps {
   drainTimeoutMs?: number;
   /** How often to re-check active request count while draining. Default 250ms. */
   drainPollMs?: number;
+  /** Hard cap on `stopSlackApp()`. A hung Socket-Mode close must not eat the
+   *  whole termination grace window. Default 10s. */
+  slackStopTimeoutMs?: number;
 }
 
 const DEFAULT_DRAIN_TIMEOUT_MS = 25_000;
 const DEFAULT_DRAIN_POLL_MS = 250;
+const DEFAULT_SLACK_STOP_TIMEOUT_MS = 10_000;
 
 /**
  * Build an idempotent async shutdown handler. The returned function may be
@@ -39,8 +43,32 @@ export function createGracefulShutdown(
 ): (signal: string) => Promise<void> {
   const drainTimeoutMs = deps.drainTimeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS;
   const drainPollMs = deps.drainPollMs ?? DEFAULT_DRAIN_POLL_MS;
+  const slackStopTimeoutMs = deps.slackStopTimeoutMs ?? DEFAULT_SLACK_STOP_TIMEOUT_MS;
 
   let inProgress: Promise<void> | null = null;
+
+  // Bound stopSlackApp(): a hung Socket-Mode disconnect must not consume the
+  // K8s termination grace window and skip the drain/close steps below. On
+  // timeout (or error) we log and proceed — at-most-once-delivery is best-effort.
+  async function stopSlackBounded(): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        deps.log.warn({ slackStopTimeoutMs }, "Slack app stop timed out — proceeding with shutdown");
+        resolve();
+      }, slackStopTimeoutMs);
+    });
+    const stop = Promise.resolve()
+      .then(() => deps.stopSlackApp())
+      .catch((err) => {
+        deps.log.warn({ err }, "Slack app stop errored — proceeding with shutdown");
+      });
+    try {
+      await Promise.race([stop, timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
 
   async function drain(): Promise<void> {
     const deadline = Date.now() + drainTimeoutMs;
@@ -63,8 +91,8 @@ export function createGracefulShutdown(
     //    Detached joiner subprocesses are intentionally left running.
     deps.stopWatcher();
 
-    // 2. Stop accepting new Slack events.
-    await deps.stopSlackApp();
+    // 2. Stop accepting new Slack events (bounded — never blocks the drain).
+    await stopSlackBounded();
 
     // 3. Drain in-flight requests (bounded by drainTimeoutMs).
     await drain();

@@ -1,0 +1,19 @@
+# Keep the build context lean and prevent secrets/local state from leaking into
+# the image. The Dockerfile uses explicit COPY (package*.json, tsconfig.json,
+# src/) so most of these aren't copied today — this is defense-in-depth in case
+# the COPY logic ever changes to a glob.
+node_modules
+dist
+.env
+.env.*
+*.db
+*.db-wal
+*.db-shm
+data/
+.git
+.gitignore
+*.log
+.DS_Store
+evals/results/
+coverage/
+.claude/
