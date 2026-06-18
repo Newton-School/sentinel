@@ -474,6 +474,36 @@ describe("runClaude", () => {
       await flush();
       expect(child.kill).not.toHaveBeenCalled();
     });
+
+    it("keeps the 180s spawn timeout on the default path", async () => {
+      const { runClaude } = await import("../src/claude/runner.js");
+      const promise = runClaude("sys", "msg");
+      child.emit("close", 0);
+      await promise;
+      const opts = spawnMock.mock.calls[0][2] as { timeout?: number };
+      expect(opts.timeout).toBe(180_000);
+    });
+
+    it("disables the timeout entirely when timeoutMs is 0 (no spawn timeout, no kill)", async () => {
+      vi.useFakeTimers();
+      const { runClaude } = await import("../src/claude/runner.js");
+
+      const promise = runClaude("sys", "msg", undefined, undefined, undefined, { timeoutMs: 0 });
+
+      // No finite spawn timeout was set...
+      const opts = spawnMock.mock.calls[0][2] as { timeout?: number };
+      expect(opts.timeout).toBeUndefined();
+
+      // ...and the child is never killed even far past the default 180s window.
+      vi.advanceTimersByTime(600_000);
+      await flush();
+      expect(child.kill).not.toHaveBeenCalled();
+
+      // settle so the promise doesn't dangle
+      child.stdout.emit("data", Buffer.from(JSON.stringify({ result: "ok" })));
+      child.emit("close", 0);
+      await promise;
+    });
   });
 
   describe("LLM trace recording", () => {
