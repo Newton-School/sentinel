@@ -66,6 +66,15 @@ function convertSegment(text: string): string {
         return `${BOLD_OPEN}${headingMatch[2]}${BOLD_CLOSE}`;
       }
 
+      // Convert `*`/`+` list bullets to `•` — Slack does NOT render Markdown
+      // bullets, so a leading "* " shows literally and reads like broken bold.
+      // (A leading "**" is bold, not a bullet — the \s+ guard excludes it; "- "
+      // bullets already render acceptably and are left untouched.)
+      const bulletMatch = line.match(/^(\s*)[*+]\s+(.*)$/);
+      if (bulletMatch) {
+        return `${bulletMatch[1]}• ${bulletMatch[2]}`;
+      }
+
       return line;
     })
     .join("\n");
@@ -123,6 +132,12 @@ function convertInline(text: string): string {
       // Restore bold placeholders → *bold*
       t = t.replaceAll(BOLD_OPEN, "*");
       t = t.replaceAll(BOLD_CLOSE, "*");
+
+      // Collapse any residual run of 2+ asterisks into one. Malformed/mixed bold
+      // from the model (e.g. "**label: **117**") otherwise leaves a raw "**" that
+      // Slack shows literally; converted bold is single "*" so this only catches
+      // leftovers.
+      t = t.replace(/\*\*+/g, "*");
 
       return t;
     })

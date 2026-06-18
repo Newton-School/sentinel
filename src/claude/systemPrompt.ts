@@ -286,9 +286,9 @@ export function buildAnalyticsSystemPrompt(
     parts.push(`Their role is: ${persona.role}.`);
   }
 
-  parts.push(`\n## Output for Slack`);
+  parts.push(`\n## Output formatting`);
   parts.push(
-    `You are replying in Slack. Lead with the headline number/answer, then the supporting detail. Render wide tables inside a triple-backtick code block so columns stay aligned, and use Slack mrkdwn for emphasis (*bold*, _italic_, <url|text>). Per the brain's rules, always state which database/table you queried and never fabricate numbers — if a query fails or returns nothing, say so.`
+    `Reply in normal Markdown — Sentinel auto-converts it to Slack, so do NOT hand-write Slack syntax. Use **bold**, _italic_, and [text](url) links. ALWAYS put tables AND SQL inside fenced \`\`\` code blocks \`\`\` — Slack can't render Markdown tables, and columns only line up inside a code block. Avoid Markdown headings (##); a short **bold line** is enough. Lead with the headline number/answer, then the supporting detail. Per the brain's rules, always state which database/table you queried and never fabricate numbers — if a query fails or returns nothing, say so.`
   );
 
   return parts.join("\n");
