@@ -36,8 +36,6 @@ describe("routeToExpected", () => {
   it("maps route decisions to dataset route strings", () => {
     expect(routeToExpected({ kind: "analytics" })).toBe("analytics");
     expect(routeToExpected({ kind: "general" })).toBe("general");
-    expect(routeToExpected({ kind: "skill", skill: "open_funnel", month: "May" })).toBe("skill:open_funnel");
-    expect(routeToExpected({ kind: "skill", skill: "m0_rfd", month: "May" })).toBe("skill:m0_rfd");
   });
 });
 
@@ -78,15 +76,13 @@ describe("runAnalyticsCase", () => {
     expect(judgeFn).not.toHaveBeenCalled();
   });
 
-  it("routes skills to the skill prompt and reports the matched skill", async () => {
-    const deps = baseDeps({
-      decide: vi.fn(async () => ({ kind: "skill" as const, skill: "open_funnel" as const, month: "May 2026" })),
-    });
+  it("runs a rubric-graded projection request via the analytics route", async () => {
+    const deps = baseDeps();
     const r = await runAnalyticsCase(
-      analyticsCase({ expectedRoute: "skill:open_funnel", graded: "rubric", groundTruthSql: undefined }),
+      analyticsCase({ expectedRoute: "analytics", graded: "rubric", groundTruthSql: undefined }),
       deps
     );
-    expect(r.route).toBe("skill:open_funnel");
+    expect(r.route).toBe("analytics");
     expect(r.routeOk).toBe(true);
     expect(deps.run).toHaveBeenCalled();
   });

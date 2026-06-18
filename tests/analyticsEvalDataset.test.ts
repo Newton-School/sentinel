@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AnalyticsCase, ExpectedRoute, Graded } from "../evals/analyticsEval.js";
 
-const ROUTES: ExpectedRoute[] = ["analytics", "skill:open_funnel", "skill:m0_rfd", "general"];
+const ROUTES: ExpectedRoute[] = ["analytics", "general"];
 const GRADES: Graded[] = ["ground_truth", "rubric", "routing_only"];
 
 function loadCases(): AnalyticsCase[] {
@@ -49,11 +49,10 @@ describe("analytics eval dataset", () => {
     }
   });
 
-  it("covers routing (skills + general negatives) and the gotcha-sensitive questions", () => {
+  it("covers general routing negatives and the gotcha-sensitive questions", () => {
     const routes = cases.map((c) => c.expectedRoute);
-    expect(routes).toContain("skill:open_funnel");
-    expect(routes).toContain("skill:m0_rfd");
     expect(routes.filter((r) => r === "general").length).toBeGreaterThanOrEqual(2);
+    expect(routes.filter((r) => r === "analytics").length).toBeGreaterThanOrEqual(8);
     // at least a handful of ground-truth analytics questions
     expect(cases.filter((c) => c.graded === "ground_truth").length).toBeGreaterThanOrEqual(6);
   });

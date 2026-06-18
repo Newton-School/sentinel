@@ -20,7 +20,6 @@ import { buildSystemPrompt, buildAnalyticsSystemPrompt } from "./claude/systemPr
 import type { RankedMemory, RetrievalBundle } from "./memory/types.js";
 import { runClaude, type RunClaudeOptions } from "./claude/runner.js";
 import { decideRoute } from "./analytics/router.js";
-import { skillDirective, skillPromptId } from "./analytics/skills.js";
 import { trackQuery } from "./persona/tracker.js";
 import { slackReplyText } from "./slack/formatters.js";
 import { startHealthServer, type HealthStatus } from "./health/server.js";
@@ -141,24 +140,18 @@ async function handleEventInner(
     // too). In founders mode (default) every allowed user sees all rows.
     const viewer = currentViewerScope(envelope.userId);
 
-    // Decide the route: skill (deterministic trigger) > analytics (LLM
-    // classifier) > general. Always on. The classifier is fail-safe (any error →
-    // "general"), so routing can never break a reply.
+    // Decide the route: analytics (LLM classifier) vs general. Always on. The
+    // classifier is fail-safe (any error → "general"), so routing can never
+    // break a reply. Projection requests route to analytics — the brain carries
+    // the §16/§17 skill procedures.
     const route = await decideRoute(envelope.text);
 
     let systemPrompt: string;
     let promptVersion: string;
     let runOptions: RunClaudeOptions | undefined = undefined;
 
-    if (route.kind === "skill") {
-      // Deterministic projection skill: brain + the month-resolved directive.
-      systemPrompt = buildAnalyticsSystemPrompt(persona, traits, {
-        skillDirective: skillDirective(route.skill, route.month),
-      });
-      promptVersion = activePromptVersionId(skillPromptId(route.skill));
-      runOptions = analyticsRunOptions();
-    } else if (route.kind === "analytics") {
-      // Open-ended analytics Q&A over the Atlas brain + Metabase.
+    if (route.kind === "analytics") {
+      // Analytics Q&A (incl. projection requests) over the Atlas brain + Metabase.
       systemPrompt = buildAnalyticsSystemPrompt(persona, traits);
       promptVersion = activePromptVersionId("analytics");
       runOptions = analyticsRunOptions();

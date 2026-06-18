@@ -13,12 +13,6 @@ describe("decideRoute", () => {
     classifyMock.mockReset();
   });
 
-  it("routes a verbatim skill trigger to the skill WITHOUT calling the classifier", async () => {
-    const route = await decideRoute("Run M0 assigned RFD projection for April");
-    expect(route).toEqual({ kind: "skill", skill: "m0_rfd", month: "April" });
-    expect(classifyMock).not.toHaveBeenCalled();
-  });
-
   it("routes a classified-analytics question to the analytics agent", async () => {
     classifyMock.mockResolvedValue("analytics");
     expect(await decideRoute("how many enrollments last month?")).toEqual({ kind: "analytics" });
@@ -30,10 +24,9 @@ describe("decideRoute", () => {
     expect(await decideRoute("what did we decide in standup?")).toEqual({ kind: "general" });
   });
 
-  it("precedence is skill > analytics > general (skill wins even if it reads analytic-ish)", async () => {
+  it("routes a projection request to analytics (no regex skill route anymore)", async () => {
     classifyMock.mockResolvedValue("analytics");
-    const route = await decideRoute("Run open funnel projection for May");
-    expect(route.kind).toBe("skill");
-    expect(classifyMock).not.toHaveBeenCalled();
+    expect(await decideRoute("Run open funnel projection for May")).toEqual({ kind: "analytics" });
+    expect(classifyMock).toHaveBeenCalledTimes(1);
   });
 });
