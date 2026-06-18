@@ -264,8 +264,8 @@ export function buildSystemPrompt(
  * NOT the founders bot's 5-section format. Only the lightweight dynamic
  * sections (current time in IST, current user) are layered on; org-memory
  * recall is deliberately skipped (the brain is its own context) to save
- * latency. When a projection skill is matched, its month-resolved directive is
- * appended AFTER the brain so its "section 16/17 above" references resolve.
+ * latency. Projection requests are handled here too — the brain's §16/§17
+ * procedures fire from their own trigger phrases.
  *
  * `traits` is accepted for signature symmetry with buildSystemPrompt and
  * possible future use; analytics answers are steered by the brain, not by the
@@ -273,8 +273,7 @@ export function buildSystemPrompt(
  */
 export function buildAnalyticsSystemPrompt(
   persona: PersonaProfile,
-  _traits: PersonaTrait[],
-  opts?: { skillDirective?: string }
+  _traits: PersonaTrait[]
 ): string {
   const parts = [ANALYTICS_BRAIN];
 
@@ -291,10 +290,6 @@ export function buildAnalyticsSystemPrompt(
   parts.push(
     `You are replying in Slack. Lead with the headline number/answer, then the supporting detail. Render wide tables inside a triple-backtick code block so columns stay aligned, and use Slack mrkdwn for emphasis (*bold*, _italic_, <url|text>). Per the brain's rules, always state which database/table you queried and never fabricate numbers — if a query fails or returns nothing, say so.`
   );
-
-  if (opts?.skillDirective) {
-    parts.push(`\n${opts.skillDirective}`);
-  }
 
   return parts.join("\n");
 }

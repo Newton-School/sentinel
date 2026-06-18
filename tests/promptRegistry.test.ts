@@ -30,8 +30,6 @@ const PINNED = {
   system: { version: "1.0.0", hash: "89c11ce42da9" },
   analytics: { version: "1.0.0", hash: "96f694187d76" },
   analytics_classifier: { version: "1.1.0", hash: "0890c764def3" },
-  analytics_skill_open_funnel: { version: "1.0.0", hash: "2e93eb304abe" },
-  analytics_skill_m0_rfd: { version: "1.0.0", hash: "771cac051d7c" },
 } as const;
 
 describe("prompt registry — drift gate", () => {
@@ -41,8 +39,6 @@ describe("prompt registry — drift gate", () => {
     "system",
     "analytics",
     "analytics_classifier",
-    "analytics_skill_open_funnel",
-    "analytics_skill_m0_rfd",
   ] as const) {
     it(`${id} version + content hash are pinned`, () => {
       const p = getPrompt(id);

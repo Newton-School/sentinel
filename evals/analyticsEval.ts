@@ -1,11 +1,12 @@
 /**
  * LIVE analytics eval suite. Unlike the offline answer suite, this drives the
  * REAL analytics path for each case — the same building blocks index.ts uses:
- *   decideRoute (real classifier/skill routing)
- *   → buildAnalyticsSystemPrompt (+ skillDirective)
+ *   decideRoute (real classifier routing)
+ *   → buildAnalyticsSystemPrompt
  *   → runClaude with the Metabase-only MCP toolset
  * then grades the answer with the LLM judge against ground truth computed from
- * the brain's canonical SQL (computeGroundTruth → Altius).
+ * the brain's canonical SQL (computeGroundTruth → Altius). Projection requests
+ * route to analytics like any data question (the brain carries the procedures).
  *
  * It therefore needs Metabase creds + the Claude CLI; it is opt-in (never part
  * of the default `npm run eval`). External calls are injectable (deps) so the
@@ -15,13 +16,12 @@
 import { runClaude } from "../src/claude/runner.js";
 import { buildAnalyticsSystemPrompt } from "../src/claude/systemPrompt.js";
 import { decideRoute, type RouteDecision } from "../src/analytics/router.js";
-import { skillDirective, skillPromptId } from "../src/analytics/skills.js";
 import { activePromptVersionId } from "../src/prompts/registry.js";
 import { computeGroundTruth } from "./groundTruth.js";
 import { judgeAnswer, type JudgeDeps } from "./judge.js";
 import type { PersonaProfile, PersonaTrait } from "../src/persona/types.js";
 
-export type ExpectedRoute = "analytics" | "skill:open_funnel" | "skill:m0_rfd" | "general";
+export type ExpectedRoute = "analytics" | "general";
 export type Graded = "ground_truth" | "rubric" | "routing_only";
 
 export interface AnalyticsCase {
@@ -74,11 +74,8 @@ const EVAL_PERSONA: PersonaProfile = {
 const EVAL_TRAITS: PersonaTrait[] = [];
 const ANALYTICS_MCP_SERVERS = new Set(["metabase"]);
 
-/** Map a RouteDecision to the dataset's flat ExpectedRoute string. */
+/** Map a RouteDecision to the dataset's ExpectedRoute string. */
 export function routeToExpected(route: RouteDecision): ExpectedRoute {
-  if (route.kind === "skill") {
-    return route.skill === "open_funnel" ? "skill:open_funnel" : "skill:m0_rfd";
-  }
   return route.kind;
 }
 
@@ -109,18 +106,9 @@ export async function runAnalyticsCase(
     };
   }
 
-  // Build the analytics/skill system prompt with the production helpers.
-  let systemPrompt: string;
-  let promptVersion: string;
-  if (route.kind === "skill") {
-    systemPrompt = buildAnalyticsSystemPrompt(EVAL_PERSONA, EVAL_TRAITS, {
-      skillDirective: skillDirective(route.skill, route.month),
-    });
-    promptVersion = activePromptVersionId(skillPromptId(route.skill));
-  } else {
-    systemPrompt = buildAnalyticsSystemPrompt(EVAL_PERSONA, EVAL_TRAITS);
-    promptVersion = activePromptVersionId("analytics");
-  }
+  // Build the analytics system prompt with the production helper.
+  const systemPrompt = buildAnalyticsSystemPrompt(EVAL_PERSONA, EVAL_TRAITS);
+  const promptVersion = activePromptVersionId("analytics");
 
   const runOpts = {
     mcpServers: ANALYTICS_MCP_SERVERS,

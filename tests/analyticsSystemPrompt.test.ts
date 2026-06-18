@@ -40,16 +40,4 @@ describe("buildAnalyticsSystemPrompt", () => {
     expect(p).toContain("IST");
   });
 
-  it("appends a skill directive when one is provided", () => {
-    const directive = "## Skill invocation — Open Funnel RFD Projection\nfor April";
-    const p = buildAnalyticsSystemPrompt(persona, [], { skillDirective: directive });
-    expect(p).toContain(directive);
-    // directive comes AFTER the brain so its 'section 16 above' reference resolves
-    expect(p.indexOf(directive)).toBeGreaterThan(p.indexOf(ANALYTICS_BRAIN));
-  });
-
-  it("omits the skill section entirely for plain analytics Q&A", () => {
-    const p = buildAnalyticsSystemPrompt(persona, []);
-    expect(p).not.toContain("Skill invocation");
-  });
 });
