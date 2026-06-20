@@ -18,7 +18,8 @@ import type { ReactionEnvelope, FeedbackActionEnvelope } from "./slack/socketCli
 import { buildReplyBlocks, acknowledgedBlocks, type Block } from "./slack/feedbackBlocks.js";
 import { buildSystemPrompt, buildAnalyticsSystemPrompt } from "./claude/systemPrompt.js";
 import type { RankedMemory, RetrievalBundle } from "./memory/types.js";
-import { runClaude, type RunClaudeOptions } from "./claude/runner.js";
+import { type RunClaudeOptions } from "./claude/runner.js";
+import { runReply } from "./agent/replyRunner.js";
 import { decideRoute } from "./analytics/router.js";
 import { trackQuery } from "./persona/tracker.js";
 import { slackReplyText } from "./slack/formatters.js";
@@ -51,10 +52,13 @@ const ANALYTICS_TIMEOUT_MS = 10 * 60 * 1000; // 10 min
 
 /** Per-run overrides shared by the analytics Q&A and skill paths. */
 function analyticsRunOptions(): RunClaudeOptions {
+  // ANALYTICS_MODEL is the current name; ANALYTICS_CLAUDE_MODEL is the
+  // deprecated alias kept one release for back-compat.
+  const analyticsModel = config.ANALYTICS_MODEL ?? config.ANALYTICS_CLAUDE_MODEL;
   return {
     mcpServers: ANALYTICS_MCP_SERVERS,
     timeoutMs: ANALYTICS_TIMEOUT_MS,
-    ...(config.ANALYTICS_CLAUDE_MODEL ? { model: config.ANALYTICS_CLAUDE_MODEL } : {}),
+    ...(analyticsModel ? { model: analyticsModel } : {}),
   };
 }
 
@@ -198,7 +202,7 @@ async function handleEventInner(
       "Processing request"
     );
 
-    const response = await runClaude(
+    const response = await runReply(
       systemPrompt,
       envelope.text,
       threadContext,

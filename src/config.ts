@@ -7,15 +7,30 @@ export const envSchema = z
   SLACK_APP_TOKEN: z.string().startsWith("xapp-"),
   BOT_USER_ID: z.string().min(1),
 
+  // Agentic harness selector. 'cli' = the legacy Claude CLI subprocess;
+  // 'openai' = the in-process OpenAI Agents SDK loop. Defaults to 'cli' so the
+  // migration ships dark until explicitly flipped (see HARNESS in .env.example).
+  HARNESS: z.enum(["cli", "openai"]).default("cli"),
+  // Path to the Claude CLI (legacy 'cli' harness only).
   CLAUDE_BIN: z.string().default("claude"),
-  // OpenAI key — powers BOTH fact extraction (chat completions) and embeddings.
-  // OPENAI_API_KEY is preferred; MEMORY_EMBEDDING_API_KEY remains a fallback so
-  // an embeddings-only config keeps working. (There is no ANTHROPIC_API_KEY.)
+  // OpenAI key — powers the 'openai' harness reply loop AND fact extraction +
+  // embeddings. OPENAI_API_KEY is preferred; MEMORY_EMBEDDING_API_KEY remains a
+  // fallback so an embeddings-only config keeps working. (No ANTHROPIC_API_KEY.)
   OPENAI_API_KEY: z.string().min(1).optional(),
+  // Default model for the 'openai' harness reply loop (GPT-5-class). The SDK's
+  // own default is gpt-5.4-mini; bump to a larger GPT-5-class tier here when you
+  // want more headroom (add its official price to modelPricing.ts first).
+  OPENAI_REPLY_MODEL: z.string().min(1).default("gpt-5.4-mini"),
+  // Agent-loop cost guards (openai harness): hard turn cap + optional cumulative
+  // output-token budget that aborts the loop when exceeded.
+  AGENT_MAX_TURNS: z.coerce.number().int().positive().default(12),
+  AGENT_TOKEN_BUDGET: z.coerce.number().int().positive().optional(),
 
   // Analytics route (Project Atlas brain) — always on. An analytics-classified
-  // message is answered by the Atlas brain over Metabase. ANALYTICS_CLAUDE_MODEL
-  // optionally pins a stronger model for that route.
+  // message is answered by the Atlas brain over Metabase. ANALYTICS_MODEL pins a
+  // (typically stronger) model for that route; ANALYTICS_CLAUDE_MODEL is the
+  // deprecated alias kept one release for back-compat.
+  ANALYTICS_MODEL: z.string().min(1).optional(),
   ANALYTICS_CLAUDE_MODEL: z.string().min(1).optional(),
 
   // Metabase (optional — bot starts without it)
@@ -84,6 +99,15 @@ export const envSchema = z
     {
       message:
         "GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REFRESH_TOKEN must all be set together or all be unset",
+    },
+  )
+  .refine(
+    // The OpenAI harness drives the reply loop through the OpenAI API, so it
+    // needs a key. OPENAI_API_KEY is preferred; MEMORY_EMBEDDING_API_KEY is the
+    // same-account fallback (mirrors openaiApiKey()). The 'cli' harness is exempt.
+    (env) => env.HARNESS !== "openai" || Boolean(env.OPENAI_API_KEY || env.MEMORY_EMBEDDING_API_KEY),
+    {
+      message: "HARNESS=openai requires OPENAI_API_KEY (or MEMORY_EMBEDDING_API_KEY as a fallback)",
     },
   );
 
