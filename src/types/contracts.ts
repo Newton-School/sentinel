@@ -13,17 +13,18 @@ export interface ThreadMessage {
   ts: string;
 }
 
-export interface ClaudeResponse {
-  /** Assistant text. From the CLI's JSON `result` field, or raw stdout on fallback. */
+/** The result of an agent reply run, mapped from the OpenAI Agents SDK result. */
+export interface ReplyResponse {
+  /** Assistant text (the agent run's final output). */
   text: string;
-  /** Wall-clock duration measured by the runner (NOT the CLI-reported duration_ms). */
+  /** Wall-clock duration measured by the runner. */
   durationMs: number;
-  /** Prompt tokens, when the CLI's JSON telemetry was parsed. */
+  /** Prompt tokens across the run, when usage was reported. */
   inputTokens?: number;
-  /** Completion tokens, when the CLI's JSON telemetry was parsed. */
+  /** Completion tokens across the run, when usage was reported. */
   outputTokens?: number;
-  /** Total cost in USD, when the CLI's JSON telemetry was parsed. */
+  /** Total cost in USD, computed from token usage. */
   costUsd?: number;
-  /** Number of agent turns, when the CLI's JSON telemetry was parsed. */
+  /** Number of model requests/turns in the agent loop, when reported. */
   numTurns?: number;
 }

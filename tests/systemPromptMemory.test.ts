@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildSystemPrompt } from "../src/claude/systemPrompt.js";
+import { buildSystemPrompt } from "../src/agent/systemPrompt.js";
 import type { PersonaProfile, PersonaTrait } from "../src/persona/types.js";
 import type { RankedMemory } from "../src/memory/types.js";
 

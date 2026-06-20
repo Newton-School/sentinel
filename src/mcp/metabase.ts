@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 /**
- * Metabase MCP Server — exposes Metabase API as MCP tools for Claude CLI.
- * Runs as a stdio-based MCP server, spawned by Claude via --mcp-config.
+ * Metabase MCP Server — exposes Metabase API as MCP tools for the agent harness.
+ * Runs as a stdio-based MCP server, spawned by the agent harness over stdio MCP.
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -60,9 +60,9 @@ server.tool(
       .describe("Metabase database ID (default: 1)"),
   },
   async ({ sql, database_id }) => {
-    // Enforce read-only access at the tool boundary. The Claude CLI runs with
-    // --dangerously-skip-permissions, so a prompt-injected or hallucinated
-    // mutating statement must be rejected before it reaches the warehouse.
+    // Enforce read-only access at the tool boundary. The agent auto-approves MCP
+    // tool calls, so a prompt-injected or hallucinated mutating statement must be
+    // rejected before it reaches the warehouse.
     try {
       assertReadOnlySql(sql);
     } catch (err) {

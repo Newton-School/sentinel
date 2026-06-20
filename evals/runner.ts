@@ -45,7 +45,7 @@ export interface RunEvalsOptions {
   answers?: AnswerCase[];
   analytics?: AnalyticsCase[];
   deps: { apiKey?: string; fetchImpl?: typeof fetch; now?: () => number; useJudge?: boolean };
-  /** Optional model pin for the analytics route (config.ANALYTICS_CLAUDE_MODEL). */
+  /** Optional model pin for the analytics route (config.ANALYTICS_MODEL). */
   analyticsModel?: string;
   threshold: number;
   persist?: boolean;
@@ -216,7 +216,7 @@ async function main(): Promise<void> {
     answers,
     analytics,
     deps: { apiKey, useJudge: args.useJudge },
-    ...(config.ANALYTICS_CLAUDE_MODEL ? { analyticsModel: config.ANALYTICS_CLAUDE_MODEL } : {}),
+    ...(config.ANALYTICS_MODEL ? { analyticsModel: config.ANALYTICS_MODEL } : {}),
     threshold: args.threshold,
     persist: true,
   });

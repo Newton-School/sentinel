@@ -6,22 +6,23 @@ import { computeCostUsd } from "../llm/modelPricing.js";
 import { openaiApiKey } from "../llm/openaiClient.js";
 import { buildMcpServers } from "./mcpServers.js";
 import type { ViewerScope } from "../access/scope.js";
-import type { ClaudeResponse } from "../types/contracts.js";
-import type { RunClaudeOptions } from "../claude/runner.js";
+import type { ReplyResponse } from "../types/contracts.js";
 
 const log = createLogger("agent-runner");
 
-const TIMEOUT_MS = 180_000; // matches the legacy CLI runner's default window
+const TIMEOUT_MS = 180_000; // default per-reply window
 
-/**
- * Per-call overrides for the OpenAI Agents SDK reply loop. Extends the legacy
- * CLI options with agent-loop cost guards so call sites keep passing the same
- * options object.
- */
-export interface RunReplyOptions extends RunClaudeOptions {
+/** Per-call overrides for the OpenAI Agents SDK reply loop. */
+export interface RunReplyOptions {
+  /** Pin a specific model (default: config.OPENAI_REPLY_MODEL). */
+  model?: string;
+  /** Restrict the MCP toolset to these servers (memory is always included). */
+  mcpServers?: ReadonlySet<string>;
+  /** Per-reply timeout; <= 0 disables it (analytics projections run long). */
+  timeoutMs?: number;
   /** Hard cap on agent turns (tool-call rounds). Defaults to config.AGENT_MAX_TURNS. */
   maxTurns?: number;
-  /** Cumulative output-token budget; reserved for Phase 3 guardrails. */
+  /** Cumulative output-token budget; the loop aborts once exceeded. Defaults to config.AGENT_TOKEN_BUDGET. */
   tokenBudget?: number;
 }
 
@@ -65,23 +66,22 @@ function readUsage(result: unknown): AgentUsage | undefined {
 }
 
 /**
- * The OpenAI-harness reply runner. Contract-compatible with runClaude(): it
- * builds an Agent over per-request stdio MCP servers, runs the agentic loop on
- * the OpenAI API, and maps the result into a ClaudeResponse.
+ * The reply runner: builds an Agent over per-request stdio MCP servers, runs
+ * the agentic loop on the OpenAI API, and maps the result into a ReplyResponse.
  *
  * MCP servers (including the per-request memory server carrying this viewer's
  * ACL scope) are connected before the run and closed in `finally` — they never
  * outlive the request, which is what keeps one user's viewer scope from leaking
  * into another's reply (see mcpServers.resolveServerSpecs).
  */
-export async function runAgentReply(
+export async function runReply(
   systemPrompt: string,
   userMessage: string,
   threadContext?: string,
   viewer?: ViewerScope,
   promptVersion?: string,
   options?: RunReplyOptions
-): Promise<ClaudeResponse> {
+): Promise<ReplyResponse> {
   ensureSdkInitialized();
 
   const start = Date.now();
@@ -197,7 +197,7 @@ export async function runAgentReply(
     const text = String(result.finalOutput ?? "");
     const durationMs = Date.now() - start;
 
-    const response: ClaudeResponse = { text, durationMs };
+    const response: ReplyResponse = { text, durationMs };
     if (usage?.inputTokens !== undefined) response.inputTokens = usage.inputTokens;
     if (usage?.outputTokens !== undefined) response.outputTokens = usage.outputTokens;
     const cost = usage

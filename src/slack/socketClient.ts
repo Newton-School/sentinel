@@ -206,7 +206,7 @@ export function createSlackApp(
     logLevel: bolt.LogLevel.WARN,
   });
 
-  // Slack re-delivers events when a handler is slow (Claude can take up to
+  // Slack re-delivers events when a handler is slow (the agent can take up to
   // 120s), so the same message can arrive multiple times. One deduper per app
   // instance suppresses repeat processing of the same channel+ts.
   const deduper = createMessageDeduper();

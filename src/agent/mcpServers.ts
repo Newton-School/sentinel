@@ -148,3 +148,32 @@ export function buildMcpServers(opts: BuildMcpServersOptions = {}): MCPServerStd
       })
   );
 }
+
+/**
+ * The data sources that are NOT available due to missing credentials. Used by
+ * the health check and to warn the model (in the system prompt) which sources
+ * it can't reach. Harness-agnostic — gating mirrors resolveServerSpecs.
+ */
+export function getUnavailableSources(): string[] {
+  const unavailable: string[] = [];
+
+  const hasMetabase =
+    config.METABASE_URL &&
+    (config.METABASE_API_KEY || (config.METABASE_USERNAME && config.METABASE_PASSWORD));
+  if (!hasMetabase) unavailable.push("Metabase");
+
+  if (!config.GITHUB_TOKEN) unavailable.push("GitHub");
+  if (!config.NOTION_API_KEY) unavailable.push("Notion");
+  if (!config.SLACK_USER_TOKEN) unavailable.push("Slack search");
+
+  const hasGoogle =
+    config.GOOGLE_CLIENT_ID && config.GOOGLE_CLIENT_SECRET && config.GOOGLE_REFRESH_TOKEN;
+  if (!hasGoogle) {
+    unavailable.push("Gmail");
+    unavailable.push("Google Calendar");
+    unavailable.push("Meeting Transcripts");
+    unavailable.push("Google Meet");
+  }
+
+  return unavailable;
+}

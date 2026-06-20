@@ -2,7 +2,7 @@
 
 /**
  * Google Meet Transcripts MCP Server — finds and reads meeting transcripts from Google Drive.
- * Runs as a stdio-based MCP server, spawned by Claude via --mcp-config.
+ * Runs as a stdio-based MCP server, spawned by the agent harness over stdio MCP.
  *
  * Google Meet auto-saves transcripts to Google Drive as Google Docs.
  * This server searches for and reads those transcript documents.

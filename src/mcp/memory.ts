@@ -3,7 +3,7 @@
 /**
  * Memory MCP Server — explicit search/store/forget/supersede access to
  * Sentinel's persistent organizational memory store.
- * Runs as a stdio-based MCP server, spawned by Claude via --mcp-config.
+ * Runs as a stdio-based MCP server, spawned by the agent harness over stdio MCP.
  *
  * Opens its OWN better-sqlite3 connection to the SQLite file owned by the
  * main Sentinel process (all SQL in src/memory/memorySql.ts is
@@ -56,7 +56,7 @@ db.pragma("busy_timeout = 5000");
 
 // Startup guard — NO migrations here: the main process owns the schema. When
 // it has never run against this file, every tool reports that instead of
-// crashing the server (MCP servers are spawned fresh per Claude CLI spawn, so
+// crashing the server (MCP servers are spawned fresh per request, so
 // a one-time startup check is sufficient).
 const schemaReady =
   db

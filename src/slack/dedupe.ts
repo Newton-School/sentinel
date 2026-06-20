@@ -1,9 +1,9 @@
 /**
  * Tiny TTL-based de-duplicator for Slack event delivery.
  *
- * Slack re-delivers an event when our handler is slow to respond (a Claude run
+ * Slack re-delivers an event when our handler is slow to respond (an agent run
  * can take up to 120s, which exceeds Slack's per-event timeout). Without
- * guarding, the same message gets processed multiple times → duplicate Claude
+ * guarding, the same message gets processed multiple times → duplicate agent
  * runs and duplicate replies. This deduper records each key the first time it
  * is seen and rejects repeats within the TTL window, pruning expired keys so
  * it never grows unbounded.

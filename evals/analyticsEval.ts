@@ -14,8 +14,8 @@
  * harness/network.
  */
 
-import { runReply } from "../src/agent/replyRunner.js";
-import { buildAnalyticsSystemPrompt } from "../src/claude/systemPrompt.js";
+import { runReply } from "../src/agent/runner.js";
+import { buildAnalyticsSystemPrompt } from "../src/agent/systemPrompt.js";
 import { decideRoute, type RouteDecision } from "../src/analytics/router.js";
 import { activePromptVersionId } from "../src/prompts/registry.js";
 import { computeGroundTruth } from "./groundTruth.js";

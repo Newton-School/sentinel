@@ -6,7 +6,7 @@
  * inside the `metabase_query` handler BEFORE forwarding SQL to Metabase's
  * `/api/dataset` endpoint, enforcing read-only access at the tool boundary.
  *
- * Rationale: the Claude CLI runs with `--dangerously-skip-permissions`, so a
+ * Rationale: the agent auto-approves MCP tool calls, so a
  * prompt-injected or hallucinated mutating statement could otherwise execute
  * against the warehouse if the account has write grants.
  *

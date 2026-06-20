@@ -18,7 +18,7 @@ import {
   currentViewerScope,
 } from "../src/memory/memoryStore.js";
 import { backfillEntityLinks } from "../src/memory/entityLink.js";
-import { buildSystemPrompt } from "../src/claude/systemPrompt.js";
+import { buildSystemPrompt } from "../src/agent/systemPrompt.js";
 import {
   getRelatedEntities,
   getTeamRoster,

@@ -3,7 +3,7 @@ import {
   allocateInjection,
   renderMemoryLine,
   DEFAULT_TIER_BUDGET,
-} from "../src/claude/injectionBudget.js";
+} from "../src/agent/injectionBudget.js";
 import type { RankedMemory, RetrievalBundle } from "../src/memory/types.js";
 
 function fact(over: Partial<RankedMemory>): RankedMemory {

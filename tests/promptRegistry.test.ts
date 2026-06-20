@@ -14,7 +14,7 @@ vi.mock("../src/config.js", () => ({
 import { getPrompt, activePromptVersionId } from "../src/prompts/registry.js";
 import { EXTRACTION_INSTRUCTIONS } from "../src/prompts/extraction.js";
 import { CONSOLIDATION_SYSTEM_TEMPLATE, consolidationSystem } from "../src/prompts/consolidation.js";
-import { BASE_PROMPT, buildSystemPrompt, buildAnalyticsSystemPrompt } from "../src/claude/systemPrompt.js";
+import { BASE_PROMPT, buildSystemPrompt, buildAnalyticsSystemPrompt } from "../src/agent/systemPrompt.js";
 import { ANALYTICS_BRAIN } from "../src/prompts/atlas-brain.js";
 import { buildExtractionSystemPrompt } from "../src/memory/extractor.js";
 import { buildConsolidationPrompt } from "../src/memory/consolidate.js";

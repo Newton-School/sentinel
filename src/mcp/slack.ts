@@ -2,7 +2,7 @@
 
 /**
  * Slack Search MCP Server — exposes Slack search and channel reading as MCP tools.
- * Runs as a stdio-based MCP server, spawned by Claude via --mcp-config.
+ * Runs as a stdio-based MCP server, spawned by the agent harness over stdio MCP.
  *
  * Requires a user token (xoxp-) with search:read scope for search.messages,
  * and channels:history + groups:history for reading channel history.

@@ -7,15 +7,9 @@ export const envSchema = z
   SLACK_APP_TOKEN: z.string().startsWith("xapp-"),
   BOT_USER_ID: z.string().min(1),
 
-  // Agentic harness selector. 'openai' = the in-process OpenAI Agents SDK loop
-  // (default, post-cutover); 'cli' = the legacy Claude CLI subprocess, retained
-  // as an instant rollback (set HARNESS=cli) until it is retired after soak.
-  HARNESS: z.enum(["cli", "openai"]).default("openai"),
-  // Path to the Claude CLI (legacy 'cli' harness only).
-  CLAUDE_BIN: z.string().default("claude"),
-  // OpenAI key — powers the 'openai' harness reply loop AND fact extraction +
-  // embeddings. OPENAI_API_KEY is preferred; MEMORY_EMBEDDING_API_KEY remains a
-  // fallback so an embeddings-only config keeps working. (No ANTHROPIC_API_KEY.)
+  // OpenAI key — powers the agent reply loop AND fact extraction + embeddings.
+  // OPENAI_API_KEY is preferred; MEMORY_EMBEDDING_API_KEY is accepted as a
+  // fallback. At least one is REQUIRED (enforced by the refine below).
   OPENAI_API_KEY: z.string().min(1).optional(),
   // Default model for the 'openai' harness reply loop (GPT-5-class). The SDK's
   // own default is gpt-5.4-mini; bump to a larger GPT-5-class tier here when you
@@ -38,10 +32,8 @@ export const envSchema = z
 
   // Analytics route (Project Atlas brain) — always on. An analytics-classified
   // message is answered by the Atlas brain over Metabase. ANALYTICS_MODEL pins a
-  // (typically stronger) model for that route; ANALYTICS_CLAUDE_MODEL is the
-  // deprecated alias kept one release for back-compat.
+  // (typically stronger) model for that route.
   ANALYTICS_MODEL: z.string().min(1).optional(),
-  ANALYTICS_CLAUDE_MODEL: z.string().min(1).optional(),
 
   // Metabase (optional — bot starts without it)
   METABASE_URL: z.string().url().optional(),
@@ -112,12 +104,12 @@ export const envSchema = z
     },
   )
   .refine(
-    // The OpenAI harness drives the reply loop through the OpenAI API, so it
-    // needs a key. OPENAI_API_KEY is preferred; MEMORY_EMBEDDING_API_KEY is the
-    // same-account fallback (mirrors openaiApiKey()). The 'cli' harness is exempt.
-    (env) => env.HARNESS !== "openai" || Boolean(env.OPENAI_API_KEY || env.MEMORY_EMBEDDING_API_KEY),
+    // The agent reply loop + fact extraction + embeddings all run on the OpenAI
+    // API, so a key is required. OPENAI_API_KEY is preferred; MEMORY_EMBEDDING_API_KEY
+    // is the same-account fallback (mirrors openaiApiKey()).
+    (env) => Boolean(env.OPENAI_API_KEY || env.MEMORY_EMBEDDING_API_KEY),
     {
-      message: "HARNESS=openai requires OPENAI_API_KEY (or MEMORY_EMBEDDING_API_KEY as a fallback)",
+      message: "An OpenAI key is required: set OPENAI_API_KEY (or MEMORY_EMBEDDING_API_KEY)",
     },
   );
 

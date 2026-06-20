@@ -2,7 +2,7 @@
 
 /**
  * Google Meet MCP Server — exposes Meet REST API v2 for fetching conference records and transcripts.
- * Runs as a stdio-based MCP server, spawned by Claude via --mcp-config.
+ * Runs as a stdio-based MCP server, spawned by the agent harness over stdio MCP.
  *
  * Uses OAuth2 with a refresh token for the Sentinel Google service account.
  * Requires the scope: https://www.googleapis.com/auth/meetings.space.readonly

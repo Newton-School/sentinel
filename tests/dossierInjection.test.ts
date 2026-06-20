@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type Database from "better-sqlite3";
-import { allocateInjection, renderDossier } from "../src/claude/injectionBudget.js";
-import { buildSystemPrompt } from "../src/claude/systemPrompt.js";
+import { allocateInjection, renderDossier } from "../src/agent/injectionBudget.js";
+import { buildSystemPrompt } from "../src/agent/systemPrompt.js";
 import type { EntityDossierRef, RetrievalBundle } from "../src/memory/types.js";
 import type { PersonaProfile } from "../src/persona/types.js";
 
