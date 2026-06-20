@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Mock pino (joinStore.test.ts pattern) — extractor → anthropicClient → logger
+// Mock pino (joinStore.test.ts pattern) — extractor → openaiClient → logger
 // → config, so we mock config too and import the module dynamically.
 vi.mock("pino", () => {
   const noop = () => {};

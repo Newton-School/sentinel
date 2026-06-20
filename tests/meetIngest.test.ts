@@ -56,7 +56,7 @@ function fakeMeetClient(overrides: Record<string, unknown> = {}) {
 
 /**
  * Loads meetIngest with mocked config (in-memory DB), extractor, and
- * anthropicClient. Returns the module plus the mocks and DB helpers.
+ * the OpenAI client. Returns the module plus the mocks and DB helpers.
  */
 async function loadMeetIngest(opts: {
   extractFacts?: ReturnType<typeof vi.fn>;

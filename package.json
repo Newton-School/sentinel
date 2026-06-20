@@ -1,7 +1,7 @@
 {
   "name": "sentinel",
   "version": "0.1.0",
-  "description": "Leadership data bot — business insights via Slack powered by Claude",
+  "description": "Leadership data bot — business insights via Slack powered by the OpenAI Agents SDK",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {

@@ -1,7 +1,8 @@
 # Sentinel
 
-Leadership data bot for Newton School — a Slack bot powered by the Claude CLI with
-MCP tools, plus a Playwright Google Meet auto-join + transcription pipeline.
+Leadership data bot for Newton School — a Slack bot powered by an in-process
+OpenAI Agents SDK agent loop over MCP tools, plus a Playwright Google Meet
+auto-join + transcription pipeline.
 
 > **Full current-state map: see [`ARCHITECTURE.md`](ARCHITECTURE.md). Prioritized
 > backlog (incl. known P0 bugs): see [`TODO.md`](TODO.md).** The older `README.md`,
@@ -19,7 +20,9 @@ MCP tools, plus a Playwright Google Meet auto-join + transcription pipeline.
 ## Architecture
 
 - **Slack Socket Mode** via @slack/bolt — handles mentions, DMs, slash commands
-- **Claude CLI** spawned as subprocess with `--mcp-config` for tool access
+- **OpenAI Agents SDK** (`@openai/agents`, in `src/agent/`) — runs the agentic
+  reply loop in-process on a GPT-5-class model (`OPENAI_REPLY_MODEL`), connecting
+  the MCP servers per request as the MCP client
 - **MCP servers** (up to 8, all gated on config presence): Metabase, Slack-search,
   Gmail, Google Calendar, Meeting-transcripts, and Google Meet (all custom, in
   `src/mcp/`), plus GitHub (`@modelcontextprotocol/server-github`) and Notion

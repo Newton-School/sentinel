@@ -543,7 +543,7 @@ describe("createSlackApp handler routing", () => {
   });
 
   // ------------------------------------------------------------------------
-  // De-duplication: Slack re-delivers an event when a handler is slow (Claude
+  // De-duplication: Slack re-delivers an event when a handler is slow (the agent
   // can take up to 120s). The same channel+ts must not be processed twice.
   // ------------------------------------------------------------------------
 

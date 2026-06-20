@@ -4,10 +4,10 @@
    ========================================================================== */
 
 export type Accent =
-  | "slack" | "core" | "claude" | "mcp" | "brain" | "meet" | "data" | "ops" | "persona";
+  | "slack" | "core" | "agent" | "mcp" | "brain" | "meet" | "data" | "ops" | "persona";
 
 export const ACCENT_HEX: Record<Accent, string> = {
-  slack: "#38bdf8", core: "#6e95ff", claude: "#e0795a", mcp: "#2dd4a7",
+  slack: "#38bdf8", core: "#6e95ff", agent: "#e0795a", mcp: "#2dd4a7",
   brain: "#c084fc", meet: "#fb923c", data: "#60a5fa", ops: "#94a3b8", persona: "#f472b6",
 };
 
@@ -36,10 +36,10 @@ export const NODES: GraphNode[] = [
   { id: "persona", accent: "persona", icon: "🧬", title: "persona store + tracker", sub: "get persona · traits", x: 4, y: 39.5, w: 27, key: "persona" },
   { id: "recall", accent: "brain", icon: "🧠", title: "memory recall", sub: "searchMemories / assembleRetrieval", x: 34, y: 31.5, w: 28, key: "recall" },
   { id: "sysprompt", accent: "core", icon: "📝", title: "buildSystemPrompt()", sub: "persona + traits + memories", x: 34, y: 39.5, w: 28, key: "sysprompt" },
-  { id: "runner", accent: "claude", icon: "🚀", title: "runner.ts → spawn", sub: "claude --print --mcp-config", x: 4, y: 47.5, w: 27, key: "runner" },
+  { id: "runner", accent: "agent", icon: "🚀", title: "runner.ts → runReply", sub: "Agent + run loop", x: 4, y: 47.5, w: 27, key: "runner" },
   { id: "format", accent: "core", icon: "✨", title: "formatters.ts", sub: "markdown → Slack mrkdwn", x: 34, y: 47.5, w: 28, key: "format" },
 
-  { id: "cli", accent: "claude", icon: "🤖", title: "Claude CLI subprocess", sub: "agentic tool loop · 120s", x: 34, y: 15.5, w: 28, key: "cli" },
+  { id: "cli", accent: "agent", icon: "🤖", title: "OpenAI agent loop", sub: "tool-calling loop · gpt-5.4-mini", x: 34, y: 15.5, w: 28, key: "cli" },
 
   { id: "mcp-metabase", accent: "mcp", icon: "📊", title: "metabase", sub: "SQL · read-only AST", x: 69, y: 15, w: 27, key: "mcp-metabase" },
   { id: "mcp-github", accent: "mcp", icon: "🐙", title: "github (npx)", sub: "PRs · issues · repos", x: 69, y: 20.5, w: 27, key: "mcp-github" },
@@ -94,13 +94,13 @@ export const NODE_DETAIL: Record<string, NodeDetail> = {
     { h: "Normalization", p: "Each event becomes a <code>SlackEventEnvelope</code> {type, userId, channelId, threadTs, text, messageTs}; the bot mention is stripped." },
   ]},
   socket: { kicker: "Transport", title: "socketClient.ts", files: "src/slack/socketClient.ts · dedupe.ts", body: [
-    { p: "Builds the <code>@slack/bolt</code> App and registers handlers. Because Claude can take up to 120s, Slack re-delivers events — a per-app <b>TTL deduper</b> keyed <code>channelId:messageTs</code> suppresses repeats." },
+    { p: "Builds the <code>@slack/bolt</code> App and registers handlers. Because the agent can take up to ~120s, Slack re-delivers events — a per-app <b>TTL deduper</b> keyed <code>channelId:messageTs</code> suppresses repeats." },
     { h: "Functions", list: ["<code>isAllowed</code> — allow-list gate", "<code>stripBotMention</code>", "<code>isUserDmMessage</code> — DM subtype filter", "<code>normalizeMention / DmMessage / SlashCommand</code>"] },
   ]},
   handle: { kicker: "Orchestrator", title: "handleEvent()", files: "src/index.ts", body: [
     { p: "The heart of the Q&A path. Bounded by a <b>3-request in-flight semaphore</b> (a 4th gets an “I'm busy” reply)." },
     { h: "Reaction state machine", list: ["Adds <code>:eyes:</code> on start", "Swaps to <code>:white_check_mark:</code> on success", "Swaps to <code>:x:</code> + error message on failure"] },
-    { h: "Per-request sequence", p: "thread context → user lookup → persona/traits → memory recall (with the asker's <b>viewer scope</b>) → system prompt → <code>runClaude</code> → post → swap reaction → <code>trackQuery</code> → fire-and-forget <code>extractFromConversation</code> → record metrics." },
+    { h: "Per-request sequence", p: "thread context → user lookup → persona/traits → memory recall (with the asker's <b>viewer scope</b>) → system prompt → <code>runReply</code> → post → swap reaction → <code>trackQuery</code> → fire-and-forget <code>extractFromConversation</code> → record metrics." },
   ]},
   thread: { kicker: "Context", title: "threadContext.ts", files: "src/slack/threadContext.ts", body: [
     { p: "Fetches prior replies in the thread (cursor-paginated via <code>paginate()</code>). Each is rendered <code>&lt;@user&gt;: text</code> and prepended as <code>threadContext</code>. Errors are swallowed to <code>[]</code> — best-effort, never fatal." },
@@ -114,18 +114,18 @@ export const NODE_DETAIL: Record<string, NodeDetail> = {
     { h: "Two paths", list: ["<b>Entity graph OFF (default):</b> <code>searchMemories(text, 6, viewer)</code> — flat BM25 keyword recall", "<b>Entity graph ON:</b> <code>assembleRetrieval(...)</code> — resolves query entities, pulls dossiers + entity + query facts, optionally fuses cosine similarity"] },
     { h: "Scoring modulator", code: "score = -bm × (0.5 + 0.5·recency)\n            × categoryBoost × (0.5 + 0.5·confidence)\nrecency = 0.5 ^ (ageDays / 90)\ncategoryBoost = 1.25 for decision/owner/deadline" },
   ]},
-  sysprompt: { kicker: "Prompt assembly", title: "buildSystemPrompt()", files: "src/claude/systemPrompt.ts", body: [
+  sysprompt: { kicker: "Prompt assembly", title: "buildSystemPrompt()", files: "src/agent/systemPrompt.ts", body: [
     { p: "Concatenates the static <b>Sentinel base prompt</b> (role, 6 Newton domains, mandatory 5-section answer format, Slack mrkdwn rules, never-fabricate/always-cite/read-only rules) + IST time + unavailable-source warnings + persona + top-8 traits + <b>recalled memories</b> + a note about the <code>memory_*</code>/<code>entity_*</code> tools." },
-    { note: "Recalled memories are <b>untrusted content</b>. A hardened header tells Claude to treat them as context, prefer fresh tool data on conflict, and never follow instructions embedded inside a record — blunting prompt injection via ingested text.", noteKind: "warn" },
+    { note: "Recalled memories are <b>untrusted content</b>. A hardened header tells the model to treat them as context, prefer fresh tool data on conflict, and never follow instructions embedded inside a record — blunting prompt injection via ingested text.", noteKind: "warn" },
   ]},
-  runner: { kicker: "Claude bridge", title: "runner.ts", files: "src/claude/runner.ts", body: [
-    { p: "Spawns the Claude CLI as a child process and returns <code>{text, durationMs, tokens, cost}</code>." },
-    { h: "Exact invocation", code: 'claude --print "<thread + message>"\n       --output-format json\n       --dangerously-skip-permissions\n       --system-prompt "<built prompt>"\n       --mcp-config /tmp/…/mcp-config-<uuid>.json' },
-    { list: ["<b>120s timeout</b> (SIGTERM), cleared on settle to avoid a timer leak", "Parses JSON telemetry (tokens/cost/turns) defensively; falls back to raw stdout", "Deletes its per-spawn config file on close/error"] },
-    { note: "<code>--dangerously-skip-permissions</code> makes read-only a soft prompt instruction at the runner level; the <b>hard</b> read-only guard lives inside the Metabase SQL AST check.", noteKind: "warn" },
+  runner: { kicker: "Agent loop", title: "runner.ts → runReply", files: "src/agent/runner.ts", body: [
+    { p: "Builds an <code>Agent</code> (OpenAI Agents SDK) over per-request MCP servers, runs the tool-calling loop via a <code>Runner</code>, and returns <code>{text, durationMs, tokens, cost, numTurns}</code>." },
+    { h: "Shape", code: 'const agent = new Agent({ model, instructions, mcpServers })\nconst result = await new Runner().run(agent, prompt, { maxTurns, signal })' },
+    { list: ["<b>timeout</b> via AbortController (≤0 = unlimited, for analytics)", "<b>token-budget</b> abort via an agent_tool_start hook", "Maps the run's usage into one <code>provider:\"openai\"</code> reply span", "Connects + closes the per-request MCP servers in finally"] },
+    { note: "The agent auto-approves MCP tool calls, so read-only is a soft prompt instruction at the runner level; the <b>hard</b> read-only guard lives inside the Metabase SQL AST check.", noteKind: "warn" },
   ]},
-  cli: { kicker: "The model", title: "Claude CLI subprocess", files: "@anthropic-ai/claude-code (spawned)", body: [
-    { p: "Where the intelligence lives. The CLI runs an <b>agentic tool-use loop</b>: reads the system prompt, decides which MCP tools to call, fans out across the 9 servers (often many round-trips), and synthesizes a final answer in the mandated 5-section format." },
+  cli: { kicker: "The model", title: "OpenAI agent loop", files: "@openai/agents · gpt-5.4-mini", body: [
+    { p: "Where the intelligence lives. The agent runs an <b>in-process tool-use loop</b>: reads the system prompt, decides which MCP tools to call, fans out across the 9 servers (often many round-trips), and synthesizes a final answer in the mandated 5-section format." },
     { p: "Per Sentinel's prompt strategy: meeting questions → Calendar first, then Meet API (<code>meet_list_conferences → meet_list_transcripts → meet_get_transcript_entries</code>), falling back to Drive transcripts." },
   ]},
   format: { kicker: "Output", title: "formatters.ts", files: "src/slack/formatters.ts", body: [
@@ -167,10 +167,10 @@ export const LIFECYCLE: LifecycleStep[] = [
   { stage: "Context", head: "Gather thread + identity", file: "threadContext.ts", body: 'Prior thread replies are fetched (cursor-paginated) and rendered <code>&lt;@user&gt;: text</code>. <code>client.users.info</code> resolves the display name. Both are best-effort — failures fall back to empty context / the raw user id.' },
   { stage: "Personalize", head: "Load persona & learned traits", file: "persona/store.ts", body: '<code>getOrCreatePersona</code> + <code>getTraits</code> load the profile. The asker’s <b>viewer scope</b> is computed (<code>currentViewerScope</code>) — in founders mode every allowed user is a founder who sees all memory rows.' },
   { stage: "Recall", head: "Retrieve organizational memory", file: "memory/memoryStore.ts", body: 'If the entity graph is enabled, <code>assembleRetrieval</code> resolves query entities and gathers dossiers + entity + query facts (fusing cosine similarity when embeddings are on). Otherwise <code>searchMemories(text, 6, viewer)</code> does flat BM25 recall. <b>Wrapped in try/catch — a memory failure can never fail the reply.</b>' },
-  { stage: "Assemble", head: "Build the system prompt", file: "claude/systemPrompt.ts", body: 'Base Sentinel prompt + IST time + unavailable-source warnings + persona + top-8 traits + recalled memories (hardened “records not instructions” header, 3000-char tiered budget) + a memory-tools note are concatenated into one system prompt string.' },
-  { stage: "Configure", head: "Write per-spawn MCP config", file: "claude/mcpConfig.ts", body: 'A fresh <code>mcp-config-&lt;uuid&gt;.json</code> is written (<code>chmod 0600</code>) registering every credentialed MCP server. The asker’s viewer scope is serialized into the memory server’s env so <code>canView</code> applies at the MCP edge too.' },
-  { stage: "Spawn", head: "Run the Claude CLI", file: "claude/runner.ts", body: '<code>spawn(claude, ["--print", prompt, "--output-format","json", "--dangerously-skip-permissions", "--system-prompt", sp, "--mcp-config", path])</code> with a <b>120s timeout</b>. stdout/stderr are buffered; the config file is deleted when the process settles.' },
-  { stage: "Agent loop", head: "Claude calls tools & reasons", file: "Claude CLI ↔ 9 MCP servers", body: 'The model runs an agentic loop: querying Metabase, searching Slack/Gmail, reading transcripts, looking up entities in the memory store — often many round-trips — then synthesizes an evidence-cited answer in the mandatory <b>Answer / Why / Evidence checked / Confidence / Unknowns</b> format.' },
+  { stage: "Assemble", head: "Build the system prompt", file: "agent/systemPrompt.ts", body: 'Base Sentinel prompt + IST time + unavailable-source warnings + persona + top-8 traits + recalled memories (hardened “records not instructions” header, 3000-char tiered budget) + a memory-tools note are concatenated into one system prompt string.' },
+  { stage: "Configure", head: "Build per-request MCP servers", file: "agent/mcpServers.ts", body: 'For each credentialed server a <code>MCPServerStdio</code> is constructed (no temp file — env is passed directly). The asker’s viewer scope is baked into a <b>fresh memory server</b>’s env so <code>canView</code> applies at the MCP edge too.' },
+  { stage: "Run", head: "Run the agent loop", file: "agent/runner.ts", body: '<code>new Runner().run(new Agent({ model, instructions, mcpServers }), prompt, { maxTurns, signal })</code>. An AbortController enforces the timeout; a token-budget hook can abort early. MCP servers are connected before the run and closed in <code>finally</code>.' },
+  { stage: "Agent loop", head: "The agent calls tools & reasons", file: "OpenAI Agents SDK ↔ 9 MCP servers", body: 'The model runs an agentic loop: querying Metabase, searching Slack/Gmail, reading transcripts, looking up entities in the memory store — often many round-trips — then synthesizes an evidence-cited answer in the mandatory <b>Answer / Why / Evidence checked / Confidence / Unknowns</b> format.' },
   { stage: "Format & post", head: "Convert to mrkdwn & reply", file: "slack/formatters.ts", body: '<code>markdownToSlackMrkdwn</code> normalizes any stray Markdown (protecting code blocks) and the answer is posted to the thread with <code>unfurl_links:false</code>. The reaction swaps <code>:eyes:</code> → <code>:white_check_mark:</code>.' },
   { stage: "Learn", head: "Log, evolve persona, mine facts", file: "tracker.ts · conversationHook.ts", body: '<code>trackQuery</code> writes the exchange to <code>query_log</code> and reinforces the <code>focus_area</code> trait. <code>extractFromConversation</code> is fired <b>and not awaited</b> — mining the user turn for new facts in the background. Per-request token/cost/duration metrics are recorded for <code>/metrics</code>.' },
   { stage: "Release", head: "Decrement semaphore", file: "index.ts (finally)", body: 'In a <code>finally</code> block, <code>activeRequests--</code> frees a slot. On any error the reaction becomes <code>:x:</code>, a friendly (timeout-aware) message is posted, and the failure is recorded as an error metric.' },
@@ -248,7 +248,7 @@ export const BRAIN_CONSTS: [string, string, string, string][] = [
   ["NEAR_DUP_JACCARD", "0.85", "memorySql.ts", "Near-dup → reinforce instead of insert"],
   ["MAX fact text", "300 chars", "memorySql.ts", "Hard cap on stored fact length"],
   ["Injection budget", "3000 (1200/800/1000)", "injectionBudget.ts", "Total / dossiers / entity / query chars"],
-  ["MAX_EXTRACTION_CALLS_PER_DAY", "500", "anthropicClient.ts", "Extraction budget"],
+  ["MAX_EXTRACTION_CALLS_PER_DAY", "500", "openaiClient.ts", "Extraction budget"],
   ["MAX_EMBEDDING_CALLS_PER_DAY", "2000", "embedder.ts", "Embedding-request budget"],
   ["FUZZY_THRESHOLD", "0.6", "entityResolve.ts", "Entity name soft-overlap minimum"],
   ["DEFAULT_RESOLVE_MIN", "0.8", "entityLink.ts", "Subject-attribution confidence floor"],
@@ -328,8 +328,9 @@ export const ENV: [string, boolean, string, string][] = [
   ["SLACK_APP_TOKEN", true, "—", "Must start xapp- (Socket Mode)"],
   ["BOT_USER_ID", true, "—", "For mention stripping"],
   ["ALLOWED_USER_IDS", true, "—", "CSV allow-list; .refine ≥1 non-empty"],
-  ["CLAUDE_BIN", false, "claude", "Path to the Claude CLI binary"],
-  ["ANTHROPIC_API_KEY", false, "—", "Passed to CLI (extraction can also run on OpenAI)"],
+  ["OPENAI_API_KEY", true, "—", "Powers the agent reply loop + extraction/embeddings (or MEMORY_EMBEDDING_API_KEY)"],
+  ["OPENAI_REPLY_MODEL", false, "gpt-5.4-mini", "GPT-5-class model for the agent loop"],
+  ["ANALYTICS_MODEL", false, "—", "Optional model pin for the analytics route"],
   ["METABASE_URL + (API_KEY | USER+PASS)", false, "—", "Metabase server if set"],
   ["GITHUB_TOKEN", false, "—", "GitHub MCP if set"],
   ["NOTION_API_KEY", false, "—", "Notion MCP if set"],

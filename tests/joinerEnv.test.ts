@@ -17,7 +17,7 @@ describe("buildJoinerEnv", () => {
       PATH: "/usr/bin",
       SLACK_BOT_TOKEN: "xoxb-secret",
       SLACK_APP_TOKEN: "xapp-secret",
-      ANTHROPIC_API_KEY: "sk-ant-secret",
+      OPENAI_API_KEY: "sk-openai-secret",
       METABASE_PASSWORD: "metabase-secret",
       GITHUB_TOKEN: "ghp-secret",
       NOTION_API_KEY: "notion-secret",
@@ -28,7 +28,7 @@ describe("buildJoinerEnv", () => {
 
     expect(result.SLACK_BOT_TOKEN).toBeUndefined();
     expect(result.SLACK_APP_TOKEN).toBeUndefined();
-    expect(result.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(result.OPENAI_API_KEY).toBeUndefined();
     expect(result.METABASE_PASSWORD).toBeUndefined();
     expect(result.GITHUB_TOKEN).toBeUndefined();
     expect(result.NOTION_API_KEY).toBeUndefined();
