@@ -37,7 +37,10 @@ import type http from "node:http";
 
 const log = createLogger("main");
 
-// Simple semaphore for concurrency limiting
+// Simple semaphore for concurrency limiting. Under the OpenAI harness each
+// in-flight request also holds its per-request MCP stdio children (≤9) open for
+// the duration of the run, so 3 concurrent replies ⇒ up to ~27 child processes —
+// comfortably bounded on a normal host. Kept at 3 (conservative) post-cutover.
 let activeRequests = 0;
 const MAX_CONCURRENT = 3;
 

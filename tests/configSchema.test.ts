@@ -8,6 +8,9 @@ process.env.SLACK_BOT_TOKEN = "xoxb-test";
 process.env.SLACK_APP_TOKEN = "xapp-test";
 process.env.BOT_USER_ID = "U123";
 process.env.ALLOWED_USER_IDS = "U123"; // non-empty so refine A passes
+// HARNESS now defaults to 'openai' (requires an OpenAI key) — provide one so the
+// import-time loadConfig() in src/config.ts succeeds.
+process.env.MEMORY_EMBEDDING_API_KEY = "sk-test-embed";
 // No Google vars set, so refine B (all-or-none) passes.
 delete process.env.GOOGLE_CLIENT_ID;
 delete process.env.GOOGLE_CLIENT_SECRET;
@@ -22,12 +25,17 @@ beforeAll(async () => {
 });
 
 describe("real envSchema validation", () => {
+  // HARNESS defaults to 'openai', which requires an OpenAI key — include one in
+  // the shared base so success-expecting cases pass. baseNoKey drops it for the
+  // key-requirement assertions.
   const base = {
     SLACK_BOT_TOKEN: "xoxb-test",
     SLACK_APP_TOKEN: "xapp-test",
     BOT_USER_ID: "U123",
     ALLOWED_USER_IDS: "U123",
+    MEMORY_EMBEDDING_API_KEY: "sk-test-embed",
   };
+  const { MEMORY_EMBEDDING_API_KEY: _omitKey, ...baseNoKey } = base;
 
   describe("ALLOWED_USER_IDS must be non-empty", () => {
     it("fails when ALLOWED_USER_IDS is empty string", () => {
@@ -53,10 +61,10 @@ describe("real envSchema validation", () => {
   });
 
   describe("HARNESS selection + agent config", () => {
-    it("defaults HARNESS to 'cli'", () => {
+    it("defaults HARNESS to 'openai' (post-cutover)", () => {
       const result = envSchema.safeParse({ ...base });
       expect(result.success).toBe(true);
-      if (result.success) expect(result.data.HARNESS).toBe("cli");
+      if (result.success) expect(result.data.HARNESS).toBe("openai");
     });
 
     it("defaults OPENAI_REPLY_MODEL to a GPT-5-class model", () => {
@@ -70,19 +78,24 @@ describe("real envSchema validation", () => {
       expect(result.success).toBe(false);
     });
 
-    it("requires an OpenAI key when HARNESS=openai", () => {
-      const result = envSchema.safeParse({ ...base, HARNESS: "openai" });
+    it("requires an OpenAI key when HARNESS=openai (the default)", () => {
+      const result = envSchema.safeParse({ ...baseNoKey });
       expect(result.success).toBe(false);
     });
 
+    it("accepts HARNESS=cli with no OpenAI key (the rollback path)", () => {
+      const result = envSchema.safeParse({ ...baseNoKey, HARNESS: "cli" });
+      expect(result.success).toBe(true);
+    });
+
     it("accepts HARNESS=openai with OPENAI_API_KEY set", () => {
-      const result = envSchema.safeParse({ ...base, HARNESS: "openai", OPENAI_API_KEY: "sk-x" });
+      const result = envSchema.safeParse({ ...baseNoKey, HARNESS: "openai", OPENAI_API_KEY: "sk-x" });
       expect(result.success).toBe(true);
     });
 
     it("accepts HARNESS=openai with MEMORY_EMBEDDING_API_KEY as the fallback key", () => {
       const result = envSchema.safeParse({
-        ...base,
+        ...baseNoKey,
         HARNESS: "openai",
         MEMORY_EMBEDDING_API_KEY: "sk-y",
       });

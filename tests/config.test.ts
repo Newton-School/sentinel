@@ -9,6 +9,9 @@ process.env.SLACK_BOT_TOKEN = "xoxb-test";
 process.env.SLACK_APP_TOKEN = "xapp-test";
 process.env.BOT_USER_ID = "U123";
 process.env.ALLOWED_USER_IDS = "U123"; // non-empty so the ALLOWED_USER_IDS refine passes
+// HARNESS now defaults to 'openai', which requires an OpenAI key — provide one
+// so the import-time loadConfig() succeeds.
+process.env.MEMORY_EMBEDDING_API_KEY = "sk-test-embed";
 // No Google vars set, so the all-or-none Google refine passes.
 delete process.env.GOOGLE_CLIENT_ID;
 delete process.env.GOOGLE_CLIENT_SECRET;
@@ -204,11 +207,13 @@ describe("config envSchema (real module)", () => {
   });
 
   describe("optional Metabase/GitHub/Notion/Google fields", () => {
+    // HARNESS=cli needs no OpenAI key, so this is the true minimal valid config.
     const minimalEnv = {
       SLACK_BOT_TOKEN: "xoxb-test-token",
       SLACK_APP_TOKEN: "xapp-test-token",
       BOT_USER_ID: "U123456",
       ALLOWED_USER_IDS: "U123",
+      HARNESS: "cli",
     };
 
     it("parses with only required Slack vars (everything optional unset)", () => {

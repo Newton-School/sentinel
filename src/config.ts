@@ -7,10 +7,10 @@ export const envSchema = z
   SLACK_APP_TOKEN: z.string().startsWith("xapp-"),
   BOT_USER_ID: z.string().min(1),
 
-  // Agentic harness selector. 'cli' = the legacy Claude CLI subprocess;
-  // 'openai' = the in-process OpenAI Agents SDK loop. Defaults to 'cli' so the
-  // migration ships dark until explicitly flipped (see HARNESS in .env.example).
-  HARNESS: z.enum(["cli", "openai"]).default("cli"),
+  // Agentic harness selector. 'openai' = the in-process OpenAI Agents SDK loop
+  // (default, post-cutover); 'cli' = the legacy Claude CLI subprocess, retained
+  // as an instant rollback (set HARNESS=cli) until it is retired after soak.
+  HARNESS: z.enum(["cli", "openai"]).default("openai"),
   // Path to the Claude CLI (legacy 'cli' harness only).
   CLAUDE_BIN: z.string().default("claude"),
   // OpenAI key — powers the 'openai' harness reply loop AND fact extraction +
