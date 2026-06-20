@@ -9,16 +9,14 @@ RUN npm run build
 # Runtime stage: the Playwright base image bundles browsers + all system
 # libraries Chrome needs, so the Meet bot can actually launch Chrome.
 FROM mcr.microsoft.com/playwright:v1.59.1-jammy
-RUN npm install -g @anthropic-ai/claude-code
 # curl: HEALTHCHECK below. dumb-init: PID-1 init so the node process reaps the
-# claude CLI / MCP / detached Chrome-joiner children and forwards SIGTERM
-# (K8s graceful shutdown) instead of leaving zombies / ignoring the signal.
+# per-request stdio MCP servers + detached Chrome-joiner children and forwards
+# SIGTERM (K8s graceful shutdown) instead of leaving zombies / ignoring the signal.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends curl dumb-init \
   && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-# pwuser's home — the Claude CLI reads its login from $HOME/.claude (mounted as
-# a Secret in K8s). Make it explicit so the runtime resolves ~ to /home/pwuser.
+# pwuser's home — Playwright/Chrome resolves ~ to /home/pwuser for its profile.
 ENV HOME=/home/pwuser
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev

@@ -136,7 +136,7 @@ describe("k8s/base/deployment.yaml", () => {
     }
   });
 
-  it("mounts /app/data (PVC) and the writable Claude creds dir (~/.claude)", () => {
+  it("mounts /app/data (PVC) and has no Claude-CLI creds wiring", () => {
     const raw = readBase("deployment.yaml");
     if (parseAll) {
       const podSpec = deploymentDoc().spec.template.spec;
@@ -145,11 +145,14 @@ describe("k8s/base/deployment.yaml", () => {
       expect(dataMount).toBeTruthy();
       const vol = podSpec.volumes.find((v: any) => v.name === dataMount.name);
       expect(vol.persistentVolumeClaim?.claimName).toBeTruthy();
-      expect(c.volumeMounts.some((m: any) => m.mountPath === "/home/pwuser/.claude")).toBe(true);
+      // The Claude CLI is gone — no ~/.claude mount, no seed init container.
+      expect(c.volumeMounts.some((m: any) => m.mountPath === "/home/pwuser/.claude")).toBe(false);
+      expect(podSpec.initContainers ?? []).toHaveLength(0);
     } else {
       expect(raw).toMatch(/mountPath:\s*\/app\/data/);
       expect(raw).toMatch(/claimName:/);
-      expect(raw).toMatch(/mountPath:\s*\/home\/pwuser\/\.claude/);
+      expect(raw).not.toMatch(/\.claude/);
+      expect(raw).not.toMatch(/claude-cli-creds/);
     }
   });
 
