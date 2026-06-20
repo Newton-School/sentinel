@@ -8,8 +8,7 @@ namespace: sentinel-staging
 resources:
   - ../../base
 
-# Rewrites the base image NAME `sentinel` (used by both the app container and
-# the seed-claude-creds init container) to the real ECR image. GitOps
+# Rewrites the base image NAME `sentinel` to the real ECR image. GitOps
 # (ArgoCD image-updater / flux) overrides `newTag` to the deployed SHA.
 images:
   - name: sentinel
@@ -19,5 +18,4 @@ images:
 # Real Secrets live in the sentinel-staging namespace, applied out-of-band /
 # via sealed-secrets — NOT generated here:
 #   - sentinel-secrets   (from k8s/base/secret.example.yaml)
-#   - claude-cli-creds   (from a logged-in ~/.claude — see k8s/README.md)
 #   - ecr-registry       (imagePullSecret, unless using node IAM/IRSA)

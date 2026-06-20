@@ -20,4 +20,4 @@ data:
   # Access gate: the Slack user-group handle whose members may use the bot.
   SENTINEL_ACCESS_GROUP_HANDLE: "sentinel-access-group"
   # Optional: pin a stronger model for the analytics route, e.g.:
-  # ANALYTICS_CLAUDE_MODEL: "claude-opus-4-8"
+  # ANALYTICS_MODEL: "gpt-5.4"

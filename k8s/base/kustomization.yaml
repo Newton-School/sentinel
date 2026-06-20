@@ -2,9 +2,9 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 # Base (environment-agnostic) resources. Overlays (e.g. overlays/staging) set the
-# namespace + image. Real Secrets — `sentinel-secrets` and `claude-cli-creds` —
-# are NOT generated here; they're applied out-of-band / via sealed-secrets.
-# `secret.example.yaml` is a template and is intentionally excluded.
+# namespace + image. The real `sentinel-secrets` Secret is NOT generated here;
+# it's applied out-of-band / via sealed-secrets. `secret.example.yaml` is a
+# template and is intentionally excluded.
 resources:
   - serviceaccount.yaml
   - configmap.yaml

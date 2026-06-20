@@ -36,23 +36,14 @@ events and corrupt state — so it's **1 replica**, **`Recreate`**, **RWO PVC**.
 - `terminationGracePeriodSeconds: 40` — covers the 25s in-flight drain + 10s
   bounded Slack-stop (see `src/shutdown.ts`); `dumb-init` (Dockerfile) reaps
   subprocess zombies and forwards SIGTERM.
-- `startupProbe` on `/ready` — gates liveness/readiness during slow boot/CLI
-  warmup so a healthy-but-slow start isn't killed.
+- `startupProbe` on `/ready` — gates liveness/readiness during slow boot so a
+  healthy-but-slow start isn't killed.
 
 ## Secrets you must create (out-of-band / sealed-secrets) in the namespace
 | Secret | From | Why |
 | --- | --- | --- |
-| `sentinel-secrets` | `base/secret.example.yaml` | Slack/Metabase/OpenAI/Google env + `SENTINEL_OWNER_USER_ID`. |
-| `claude-cli-creds` | a logged-in machine's `~/.claude` | The `claude` CLI authenticates via its **own login**, NOT an env var. The init container seeds it into a writable `~/.claude`. |
+| `sentinel-secrets` | `base/secret.example.yaml` | Slack/Metabase/OpenAI/Google env + `SENTINEL_OWNER_USER_ID`. `OPENAI_API_KEY` (or `MEMORY_EMBEDDING_API_KEY`) is required — the agent reply loop runs on it. |
 | `ecr-registry` | ECR docker-registry secret | Image pull (or remove `imagePullSecrets` and use node IAM/IRSA). |
-
-Create the Claude creds Secret, e.g.:
-```sh
-kubectl -n sentinel-staging create secret generic claude-cli-creds \
-  --from-file=$HOME/.claude/        # the exact files vary — verify on a logged-in box
-```
-> ⚠️ Verify the precise `~/.claude` contents/filenames the installed CLI uses,
-> and plan rotation (subscription logins expire). This is the #1 deploy blocker.
 
 ## Meet bot (kept enabled)
 The Playwright joiner needs a **Google-signed-in Chrome profile** — it can't log
@@ -62,9 +53,9 @@ from object storage). Without it the joiner can't join meetings.
 
 ## Cluster prerequisites
 - A default (or named) RWO `StorageClass` for the PVC (`base/pvc.yaml`).
-- **Egress** to: Slack, Anthropic (the CLI), OpenAI, the Metabase host, Google
-  APIs, and the npm registry (the GitHub/Notion MCP servers `npx`-install at
-  runtime — or leave their tokens unset to disable them).
+- **Egress** to: Slack, OpenAI, the Metabase host, Google APIs, and the npm
+  registry (the GitHub/Notion MCP servers `npx`-install at runtime — or leave
+  their tokens unset to disable them).
 - **Prometheus Operator** CRD for `servicemonitor.yaml` (else drop it from
   `base/kustomization.yaml` and use a static scrape job for `:8930/metrics`).
 - A **staging Slack app** (separate Socket-Mode app + tokens, `usergroups:read`

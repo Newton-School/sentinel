@@ -39,24 +39,6 @@ spec:
       # >= the 25s in-flight drain + the 10s bounded Slack-stop, with headroom
       # (see src/shutdown.ts). K8s default is 30s, which is too tight.
       terminationGracePeriodSeconds: 40
-      initContainers:
-        # Seed the Claude CLI login into a WRITABLE ~/.claude. The login lives in
-        # the `claude-cli-creds` Secret (mounted read-only); the CLI refreshes
-        # session state at runtime so it needs a writable config dir — copy the
-        # creds into an emptyDir the main container mounts at $HOME/.claude.
-        # (See k8s/README.md for creating the Secret from a logged-in ~/.claude.)
-        - name: seed-claude-creds
-          image: sentinel:latest
-          command:
-            - sh
-            - -c
-            - "cp -a /creds/. /claude-home/ 2>/dev/null || true; chmod -R u+rwX /claude-home || true"
-          volumeMounts:
-            - name: claude-creds
-              mountPath: /creds
-              readOnly: true
-            - name: claude-home
-              mountPath: /claude-home
       containers:
         - name: sentinel
           # Image NAME `sentinel` — the kustomize overlay's `images:` transformer
@@ -73,8 +55,8 @@ spec:
             - configMapRef:
                 name: sentinel-config
           # Startup probe gates liveness/readiness until the app is actually up
-          # (Slack connect + first CLI warmup can be slow). 5s × 36 ≈ 180s budget;
-          # prevents liveness from killing a slow-but-healthy boot.
+          # (Slack connect can be slow). 5s × 36 ≈ 180s budget; prevents liveness
+          # from killing a slow-but-healthy boot.
           startupProbe:
             httpGet:
               path: /ready
@@ -97,8 +79,9 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 3
           resources:
-            # Sized for up to 3 concurrent `claude` CLI subprocesses + their MCP
-            # servers + a possible Chrome (Meet bot). Tune after observing load.
+            # Sized for up to 3 concurrent agent replies — each holding its
+            # per-request stdio MCP servers — plus a possible Chrome (Meet bot).
+            # Tune after observing load.
             requests:
               cpu: "500m"
               memory: "1Gi"
@@ -108,15 +91,7 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /app/data
-            - name: claude-home
-              mountPath: /home/pwuser/.claude
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: sentinel-data
-        # Writable Claude CLI config dir, seeded from the creds Secret by the init container.
-        - name: claude-home
-          emptyDir: {}
-        - name: claude-creds
-          secret:
-            secretName: claude-cli-creds

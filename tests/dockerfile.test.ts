@@ -13,8 +13,8 @@ describe("Dockerfile runtime image", () => {
     expect(dockerfile).toMatch(/playwright install (--with-deps )?chrome/);
   });
 
-  it("still installs the claude-code CLI globally", () => {
-    expect(dockerfile).toMatch(/npm install -g @anthropic-ai\/claude-code/);
+  it("does NOT install the Claude CLI (migrated to the OpenAI Agents SDK)", () => {
+    expect(dockerfile).not.toMatch(/@anthropic-ai\/claude-code/);
   });
 
   it("keeps the curl-based HEALTHCHECK against /health", () => {
@@ -43,7 +43,7 @@ describe("Dockerfile runtime image", () => {
     expect(dockerfile).toMatch(/ENTRYPOINT \["dumb-init", "--"\]/);
   });
 
-  it("sets HOME so the mounted Claude CLI creds (~/.claude) resolve", () => {
+  it("sets HOME for the Playwright/Chrome profile to resolve", () => {
     expect(dockerfile).toMatch(/ENV HOME=\/home\/pwuser/);
   });
 });
