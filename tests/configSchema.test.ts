@@ -52,6 +52,51 @@ describe("real envSchema validation", () => {
     });
   });
 
+  describe("HARNESS selection + agent config", () => {
+    it("defaults HARNESS to 'cli'", () => {
+      const result = envSchema.safeParse({ ...base });
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.HARNESS).toBe("cli");
+    });
+
+    it("defaults OPENAI_REPLY_MODEL to a GPT-5-class model", () => {
+      const result = envSchema.safeParse({ ...base });
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.OPENAI_REPLY_MODEL).toMatch(/^gpt-5/);
+    });
+
+    it("rejects an unknown HARNESS value", () => {
+      const result = envSchema.safeParse({ ...base, HARNESS: "bedrock" });
+      expect(result.success).toBe(false);
+    });
+
+    it("requires an OpenAI key when HARNESS=openai", () => {
+      const result = envSchema.safeParse({ ...base, HARNESS: "openai" });
+      expect(result.success).toBe(false);
+    });
+
+    it("accepts HARNESS=openai with OPENAI_API_KEY set", () => {
+      const result = envSchema.safeParse({ ...base, HARNESS: "openai", OPENAI_API_KEY: "sk-x" });
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts HARNESS=openai with MEMORY_EMBEDDING_API_KEY as the fallback key", () => {
+      const result = envSchema.safeParse({
+        ...base,
+        HARNESS: "openai",
+        MEMORY_EMBEDDING_API_KEY: "sk-y",
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("coerces and defaults AGENT_MAX_TURNS", () => {
+      const result = envSchema.safeParse({ ...base });
+      if (result.success) expect(result.data.AGENT_MAX_TURNS).toBe(12);
+      const overridden = envSchema.safeParse({ ...base, AGENT_MAX_TURNS: "7" });
+      if (overridden.success) expect(overridden.data.AGENT_MAX_TURNS).toBe(7);
+    });
+  });
+
   describe("Google OAuth creds are all-or-none", () => {
     it("succeeds when all three Google vars are set", () => {
       const result = envSchema.safeParse({

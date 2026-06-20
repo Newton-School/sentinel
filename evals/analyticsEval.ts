@@ -3,17 +3,18 @@
  * REAL analytics path for each case — the same building blocks index.ts uses:
  *   decideRoute (real classifier routing)
  *   → buildAnalyticsSystemPrompt
- *   → runClaude with the Metabase-only MCP toolset
+ *   → runReply (the configured harness) with the Metabase-only MCP toolset
  * then grades the answer with the LLM judge against ground truth computed from
  * the brain's canonical SQL (computeGroundTruth → Altius). Projection requests
  * route to analytics like any data question (the brain carries the procedures).
  *
- * It therefore needs Metabase creds + the Claude CLI; it is opt-in (never part
- * of the default `npm run eval`). External calls are injectable (deps) so the
- * unit test exercises the control flow with no real CLI/network.
+ * It therefore needs Metabase creds + a live reply harness (OpenAI or CLI); it
+ * is opt-in (never part of the default `npm run eval`). External calls are
+ * injectable (deps) so the unit test exercises the control flow with no real
+ * harness/network.
  */
 
-import { runClaude } from "../src/claude/runner.js";
+import { runReply } from "../src/agent/replyRunner.js";
 import { buildAnalyticsSystemPrompt } from "../src/claude/systemPrompt.js";
 import { decideRoute, type RouteDecision } from "../src/analytics/router.js";
 import { activePromptVersionId } from "../src/prompts/registry.js";
@@ -56,10 +57,10 @@ export interface AnalyticsCaseResult {
 export interface AnalyticsDeps {
   /** Judge + classifier credentials (OpenAI). */
   judge: JudgeDeps;
-  /** Optional model pin for the analytics route (config.ANALYTICS_CLAUDE_MODEL). */
+  /** Optional model pin for the analytics route (config.ANALYTICS_MODEL). */
   model?: string;
   decide?: typeof decideRoute;
-  run?: typeof runClaude;
+  run?: typeof runReply;
   judgeFn?: typeof judgeAnswer;
   groundTruthFn?: typeof computeGroundTruth;
 }
@@ -84,7 +85,7 @@ export async function runAnalyticsCase(
   deps: AnalyticsDeps
 ): Promise<AnalyticsCaseResult> {
   const decide = deps.decide ?? decideRoute;
-  const run = deps.run ?? runClaude;
+  const run = deps.run ?? runReply;
   const judge = deps.judgeFn ?? judgeAnswer;
   const groundTruthFn = deps.groundTruthFn ?? computeGroundTruth;
 
