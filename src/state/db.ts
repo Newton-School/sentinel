@@ -372,7 +372,7 @@ function runMigrations(db: Database.Database): void {
     log.info("Added scope_team_id column to memories");
   }
 
-  // Migration: LLMOps trace sink. One row per LLM call (Claude reply +
+  // Migration: LLMOps trace sink. One row per LLM call (agent reply +
   // OpenAI extract/consolidate/embed/summary), correlated by trace_id across a
   // request's fan-out. Token/cost/latency are nullable (telemetry can be
   // absent; no-key/budget skips are not recorded here). created_at is an ISO
@@ -382,7 +382,7 @@ function runMigrations(db: Database.Database): void {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       call_id TEXT NOT NULL,
       trace_id TEXT NOT NULL,
-      provider TEXT NOT NULL CHECK (provider IN ('anthropic','openai')),
+      provider TEXT NOT NULL CHECK (provider = 'openai'),
       model TEXT NOT NULL,
       operation TEXT NOT NULL CHECK (operation IN ('reply','extract','consolidate','embed','summary')),
       input_tokens INTEGER,
@@ -409,6 +409,61 @@ function runMigrations(db: Database.Database): void {
   if (!new Set(llmColumns.map((c) => c.name)).has("prompt_version")) {
     db.exec(`ALTER TABLE llm_calls ADD COLUMN prompt_version TEXT`);
     log.info("Added prompt_version column to llm_calls");
+  }
+
+  // Migration: drop the legacy 'anthropic' provider. SQLite can't ALTER a CHECK
+  // in place, so rebuild the table when an existing DB still carries the old
+  // `CHECK (provider IN ('anthropic','openai'))`. Historical anthropic rows
+  // (pre-OpenAI-cutover CLI replies) are dropped. Idempotent: once rebuilt, the
+  // table SQL no longer contains 'anthropic' and this is a no-op. Runs after the
+  // prompt_version ALTER so the column set is current.
+  const llmTableSql =
+    (
+      db
+        .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'llm_calls'")
+        .get() as { sql?: string } | undefined
+    )?.sql ?? "";
+  if (llmTableSql.includes("'anthropic'")) {
+    const dropped = (
+      db.prepare("SELECT COUNT(*) AS n FROM llm_calls WHERE provider <> 'openai'").get() as {
+        n: number;
+      }
+    ).n;
+    const rebuild = db.transaction(() => {
+      db.exec(`
+        CREATE TABLE llm_calls_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          call_id TEXT NOT NULL,
+          trace_id TEXT NOT NULL,
+          provider TEXT NOT NULL CHECK (provider = 'openai'),
+          model TEXT NOT NULL,
+          operation TEXT NOT NULL CHECK (operation IN ('reply','extract','consolidate','embed','summary')),
+          input_tokens INTEGER,
+          output_tokens INTEGER,
+          cost_usd REAL,
+          latency_ms INTEGER,
+          status TEXT NOT NULL DEFAULT 'ok' CHECK (status IN ('ok','error')),
+          error_kind TEXT,
+          num_turns INTEGER,
+          user_id TEXT,
+          prompt_version TEXT,
+          created_at TEXT NOT NULL
+        );
+        INSERT INTO llm_calls_new
+          (id, call_id, trace_id, provider, model, operation, input_tokens, output_tokens,
+           cost_usd, latency_ms, status, error_kind, num_turns, user_id, prompt_version, created_at)
+          SELECT id, call_id, trace_id, provider, model, operation, input_tokens, output_tokens,
+                 cost_usd, latency_ms, status, error_kind, num_turns, user_id, prompt_version, created_at
+          FROM llm_calls WHERE provider = 'openai';
+        DROP TABLE llm_calls;
+        ALTER TABLE llm_calls_new RENAME TO llm_calls;
+        CREATE INDEX IF NOT EXISTS idx_llm_calls_trace ON llm_calls(trace_id);
+        CREATE INDEX IF NOT EXISTS idx_llm_calls_created_at ON llm_calls(created_at);
+        CREATE INDEX IF NOT EXISTS idx_llm_calls_op_model ON llm_calls(operation, model);
+      `);
+    });
+    rebuild();
+    log.info({ droppedAnthropicRows: dropped }, "Rebuilt llm_calls with provider='openai' CHECK");
   }
 
   // Migration: offline eval-harness run history. One row per suite per run; the

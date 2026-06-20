@@ -1,17 +1,16 @@
 /**
  * Request-scoped LLM trace propagation via AsyncLocalStorage (ALS).
  *
- * One Slack request fans out into a Claude reply plus several in-process OpenAI
+ * One Slack request fans out into the agent reply plus several in-process OpenAI
  * calls (query embedding, then the fire-and-forget fact extraction + its
  * embeddings). All of these run IN-PROCESS, so an ALS store established at the
  * top of `handleEvent` is inherited by every downstream call — including the
  * detached extraction launched in the `finally` block — with no need to thread
  * a trace id through every function signature.
  *
- * LIMITATION: the Claude CLI runs as a spawned subprocess, so ALS cannot reach
- * inside it. The `reply` span is recorded as one aggregate row for the whole
- * invocation; its internal MCP/sub-agent tool calls are opaque. OpenAI spans
- * (in-process) are fully attributable.
+ * The agent reply runs in-process (OpenAI Agents SDK), so it too is covered by
+ * the ALS scope. The `reply` span is still recorded as one aggregate row for the
+ * whole run (the loop's total usage); per-tool-call spans are not broken out.
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";

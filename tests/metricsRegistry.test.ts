@@ -159,13 +159,13 @@ describe("metrics registry", () => {
     it("emits labeled call counters by provider/model/operation/status", () => {
       recordLlmMetric({ provider: "openai", model: "gpt-4o-mini", operation: "extract", status: "ok", inputTokens: 100, outputTokens: 50, costUsd: 0.01, latencyMs: 120 });
       recordLlmMetric({ provider: "openai", model: "gpt-4o-mini", operation: "extract", status: "error", latencyMs: 50 });
-      recordLlmMetric({ provider: "anthropic", model: "claude", operation: "reply", status: "ok", inputTokens: 1000, outputTokens: 200, costUsd: 0.02, latencyMs: 3000 });
+      recordLlmMetric({ provider: "openai", model: "gpt-5.4-mini", operation: "reply", status: "ok", inputTokens: 1000, outputTokens: 200, costUsd: 0.02, latencyMs: 3000 });
 
       const text = renderPrometheus();
       expect(text).toMatch(/# TYPE sentinel_llm_calls_total counter/);
       expect(text).toContain('sentinel_llm_calls_total{provider="openai",model="gpt-4o-mini",operation="extract",status="ok"} 1');
       expect(text).toContain('sentinel_llm_calls_total{provider="openai",model="gpt-4o-mini",operation="extract",status="error"} 1');
-      expect(text).toContain('sentinel_llm_calls_total{provider="anthropic",model="claude",operation="reply",status="ok"} 1');
+      expect(text).toContain('sentinel_llm_calls_total{provider="openai",model="gpt-5.4-mini",operation="reply",status="ok"} 1');
     });
 
     it("accumulates token + cost counters by provider/model/operation", () => {
@@ -199,9 +199,9 @@ describe("metrics registry", () => {
     });
 
     it("counts latencies above the largest finite bucket only in +Inf", () => {
-      recordLlmMetric({ provider: "anthropic", model: "claude", operation: "reply", status: "ok", latencyMs: 200000 });
+      recordLlmMetric({ provider: "openai", model: "gpt-5.4-mini", operation: "reply", status: "ok", latencyMs: 200000 });
       const text = renderPrometheus();
-      const labels = 'provider="anthropic",model="claude",operation="reply"';
+      const labels = 'provider="openai",model="gpt-5.4-mini",operation="reply"';
       expect(text).toContain(`sentinel_llm_latency_ms_bucket{${labels},le="120000"} 0`);
       expect(text).toContain(`sentinel_llm_latency_ms_bucket{${labels},le="+Inf"} 1`);
       expect(text).toContain(`sentinel_llm_latency_ms_count{${labels}} 1`);

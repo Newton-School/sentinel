@@ -188,7 +188,7 @@ export function record(input: RecordInput): void {
 }
 
 /**
- * Record one LLM call (Claude reply or OpenAI extract/embed/...) into the
+ * Record one LLM call (agent reply or OpenAI extract/embed/...) into the
  * labeled LLM series. Distinct from {@link record}: that aggregates per Slack
  * request; this is per individual provider call. Call counts carry a status
  * label; token/cost/latency are keyed by provider|model|operation only.
@@ -388,7 +388,7 @@ export function renderPrometheus(): string {
     labels: `type="${type}"`,
     value,
   }));
-  metric("sentinel_requests_total", "counter", "Total Claude requests handled", [
+  metric("sentinel_requests_total", "counter", "Total agent requests handled", [
     { value: s.totalRequests },
     ...byTypeSamples,
   ]);
