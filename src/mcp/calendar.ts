@@ -2,7 +2,7 @@
 
 /**
  * Google Calendar MCP Server — exposes calendar events as MCP tools.
- * Runs as a stdio-based MCP server, spawned by Claude via --mcp-config.
+ * Runs as a stdio-based MCP server, spawned by the agent harness over stdio MCP.
  *
  * Uses OAuth2 with a refresh token for the Sentinel Google service account.
  */

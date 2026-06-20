@@ -14,7 +14,7 @@ export const EMPTY_REPLY_FALLBACK =
 
 /**
  * Formats an assistant reply for Slack, guaranteeing a non-empty message: a
- * blank / whitespace / undefined result (e.g. the Claude CLI returned an empty
+ * blank / whitespace / undefined result (e.g. the agent returned an empty
  * `result`) falls back to a notice instead of posting an empty Slack message.
  */
 export function slackReplyText(text: string | undefined): string {
@@ -126,7 +126,7 @@ function convertInline(text: string): string {
 
       // Note: we intentionally do NOT convert *text* → _text_
       // In Slack mrkdwn, *text* is bold (which is the desired output).
-      // Claude may use *text* for either Markdown italic or Slack bold —
+      // The model may use *text* for either Markdown italic or Slack bold —
       // either way, Slack renders it as bold, which is acceptable.
 
       // Restore bold placeholders → *bold*

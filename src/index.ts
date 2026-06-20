@@ -1,7 +1,7 @@
 import { config } from "./config.js";
 import { createLogger } from "./logging/logger.js";
 import { getDb, closeDb } from "./state/db.js";
-import { getMcpConfigPath, getUnavailableSources, cleanupMcpConfig } from "./claude/mcpConfig.js";
+import { getUnavailableSources } from "./agent/mcpServers.js";
 import { createSlackApp } from "./slack/socketClient.js";
 import { fetchThreadContext } from "./slack/threadContext.js";
 import { getOrCreatePersona, getTraits } from "./persona/store.js";
@@ -16,11 +16,9 @@ import { activePromptVersionId } from "./prompts/registry.js";
 import { recordReply, recordFeedback, recordButtonFeedback } from "./feedback/store.js";
 import type { ReactionEnvelope, FeedbackActionEnvelope } from "./slack/socketClient.js";
 import { buildReplyBlocks, acknowledgedBlocks, type Block } from "./slack/feedbackBlocks.js";
-import { buildSystemPrompt, buildAnalyticsSystemPrompt } from "./claude/systemPrompt.js";
+import { buildSystemPrompt, buildAnalyticsSystemPrompt } from "./agent/systemPrompt.js";
 import type { RankedMemory, RetrievalBundle } from "./memory/types.js";
-import { type RunClaudeOptions } from "./claude/runner.js";
-import { runReply } from "./agent/replyRunner.js";
-import { initAgentHarness } from "./agent/runner.js";
+import { runReply, initAgentHarness, type RunReplyOptions } from "./agent/runner.js";
 import { decideRoute } from "./analytics/router.js";
 import { trackQuery } from "./persona/tracker.js";
 import { slackReplyText } from "./slack/formatters.js";
@@ -55,20 +53,17 @@ const ANALYTICS_MCP_SERVERS = new Set(["metabase"]);
 const ANALYTICS_TIMEOUT_MS = 10 * 60 * 1000; // 10 min
 
 /** Per-run overrides shared by the analytics Q&A and skill paths. */
-function analyticsRunOptions(): RunClaudeOptions {
-  // ANALYTICS_MODEL is the current name; ANALYTICS_CLAUDE_MODEL is the
-  // deprecated alias kept one release for back-compat.
-  const analyticsModel = config.ANALYTICS_MODEL ?? config.ANALYTICS_CLAUDE_MODEL;
+function analyticsRunOptions(): RunReplyOptions {
   return {
     mcpServers: ANALYTICS_MCP_SERVERS,
     timeoutMs: ANALYTICS_TIMEOUT_MS,
-    ...(analyticsModel ? { model: analyticsModel } : {}),
+    ...(config.ANALYTICS_MODEL ? { model: config.ANALYTICS_MODEL } : {}),
   };
 }
 
 /**
  * Establishes a per-request LLM trace, then handles the event. Every LLM call
- * in the fan-out — the Claude reply AND the fire-and-forget fact extraction
+ * in the fan-out — the agent reply AND the fire-and-forget fact extraction
  * launched in the `finally` (which inherits this AsyncLocalStorage scope) —
  * records an `llm_calls` row sharing this trace id.
  */
@@ -97,7 +92,7 @@ async function handleEventInner(
 
   activeRequests++;
   // Wall-clock start for the error-path metric (the success path uses the
-  // CLI-measured response.durationMs instead).
+  // runner-measured response.durationMs instead).
   const requestStart = Date.now();
   // Hoisted so the post-reply fact extraction in `finally` runs whether or not
   // the answer succeeded — a timed-out/failed answer must still capture durable
@@ -159,7 +154,7 @@ async function handleEventInner(
 
     let systemPrompt: string;
     let promptVersion: string;
-    let runOptions: RunClaudeOptions | undefined = undefined;
+    let runOptions: RunReplyOptions | undefined = undefined;
 
     if (route.kind === "analytics") {
       // Analytics Q&A (incl. projection requests) over the Atlas brain + Metabase.
@@ -200,7 +195,7 @@ async function handleEventInner(
       }
     }
 
-    // Run Claude
+    // Run the agent
     log.info(
       {
         userId: envelope.userId,
@@ -222,7 +217,7 @@ async function handleEventInner(
     responseText = response.text ?? "";
 
     // Post response (convert Markdown to Slack mrkdwn; never post an empty
-    // message — an empty/looped Claude result falls back to a notice).
+    // message — an empty/looped agent result falls back to a notice).
     const slackText = slackReplyText(response.text);
     // Render the answer with 👍/👎 feedback buttons (the trace id rides on each
     // button so a click is attributable). `text` stays as the notification
@@ -414,16 +409,10 @@ async function main(): Promise<void> {
   getDb();
   log.info("Database initialized");
 
-  // Prepare the agentic backend. The OpenAI harness connects MCP servers
-  // per-request (no temp config file), so skip the CLI-only secrets-file warmup
-  // and eagerly init the SDK instead (fail-fast + no first-request latency).
-  if (config.HARNESS === "openai") {
-    initAgentHarness();
-    log.info({ model: config.OPENAI_REPLY_MODEL }, "OpenAI agent harness initialized");
-  } else {
-    getMcpConfigPath();
-    log.info("MCP config generated");
-  }
+  // Eagerly init the OpenAI Agents SDK (fail-fast on misconfig + no first-request
+  // latency). MCP servers are connected per-request inside the runner.
+  initAgentHarness();
+  log.info({ model: config.OPENAI_REPLY_MODEL }, "OpenAI agent harness initialized");
 
   // Start health check server
   const unavailableSources = getUnavailableSources();
@@ -515,7 +504,6 @@ const shutdown = createGracefulShutdown({
     }),
   closeDb: () => {
     closeDb();
-    cleanupMcpConfig();
   },
   getActiveRequests: () => activeRequests,
   exit: (code) => process.exit(code),

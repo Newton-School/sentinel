@@ -9,8 +9,7 @@ process.env.SLACK_BOT_TOKEN = "xoxb-test";
 process.env.SLACK_APP_TOKEN = "xapp-test";
 process.env.BOT_USER_ID = "U123";
 process.env.ALLOWED_USER_IDS = "U123"; // non-empty so the ALLOWED_USER_IDS refine passes
-// HARNESS now defaults to 'openai', which requires an OpenAI key — provide one
-// so the import-time loadConfig() succeeds.
+// An OpenAI key is required — provide one so the import-time loadConfig() succeeds.
 process.env.MEMORY_EMBEDDING_API_KEY = "sk-test-embed";
 // No Google vars set, so the all-or-none Google refine passes.
 delete process.env.GOOGLE_CLIENT_ID;
@@ -48,7 +47,7 @@ describe("config envSchema (real module)", () => {
       expect(result.data.ALLOWED_USER_IDS).toEqual(["U123", "U456"]);
       expect(result.data.LOG_LEVEL).toBe("info");
       expect(result.data.SQLITE_DB_PATH).toBe("./sentinel.db");
-      expect(result.data.CLAUDE_BIN).toBe("claude");
+      expect(result.data.OPENAI_REPLY_MODEL).toMatch(/^gpt-5/);
     }
   });
 
@@ -190,30 +189,31 @@ describe("config envSchema (real module)", () => {
     });
   });
 
-  describe("ANALYTICS_CLAUDE_MODEL", () => {
-    it("defaults ANALYTICS_CLAUDE_MODEL to undefined when unset", () => {
+  describe("ANALYTICS_MODEL", () => {
+    it("defaults ANALYTICS_MODEL to undefined when unset", () => {
       const result = envSchema.safeParse(validEnv);
       expect(result.success).toBe(true);
       if (result.success) {
-        expect(result.data.ANALYTICS_CLAUDE_MODEL).toBeUndefined();
+        expect(result.data.ANALYTICS_MODEL).toBeUndefined();
       }
     });
 
-    it("accepts an optional ANALYTICS_CLAUDE_MODEL override", () => {
-      const r = envSchema.safeParse({ ...validEnv, ANALYTICS_CLAUDE_MODEL: "claude-opus-4-8" });
+    it("accepts an optional ANALYTICS_MODEL override", () => {
+      const r = envSchema.safeParse({ ...validEnv, ANALYTICS_MODEL: "gpt-5.4" });
       expect(r.success).toBe(true);
-      if (r.success) expect(r.data.ANALYTICS_CLAUDE_MODEL).toBe("claude-opus-4-8");
+      if (r.success) expect(r.data.ANALYTICS_MODEL).toBe("gpt-5.4");
     });
   });
 
   describe("optional Metabase/GitHub/Notion/Google fields", () => {
-    // HARNESS=cli needs no OpenAI key, so this is the true minimal valid config.
+    // An OpenAI key is always required now; MEMORY_EMBEDDING_API_KEY satisfies it
+    // without setting OPENAI_API_KEY, so the "optional unset" assertions still hold.
     const minimalEnv = {
       SLACK_BOT_TOKEN: "xoxb-test-token",
       SLACK_APP_TOKEN: "xapp-test-token",
       BOT_USER_ID: "U123456",
       ALLOWED_USER_IDS: "U123",
-      HARNESS: "cli",
+      MEMORY_EMBEDDING_API_KEY: "sk-embed",
     };
 
     it("parses with only required Slack vars (everything optional unset)", () => {
@@ -305,7 +305,6 @@ describe("loadConfig (real module)", () => {
     expect(result.ALLOWED_USER_IDS).toEqual(["U123"]);
     expect(result.LOG_LEVEL).toBe("info");
     expect(result.HEALTH_CHECK_PORT).toBe(8930);
-    expect(result.CLAUDE_BIN).toBe("claude");
     expect(result.SQLITE_DB_PATH).toBe("./sentinel.db");
   });
 

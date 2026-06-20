@@ -43,7 +43,7 @@ vi.mock("../src/llm/traceStore.js", () => ({ recordLlmCall: (...a: unknown[]) =>
 vi.mock("../src/llm/modelPricing.js", () => ({ computeCostUsd: (...a: unknown[]) => h.computeCostUsd(...a) }));
 vi.mock("../src/agent/mcpServers.js", () => ({ buildMcpServers: (...a: unknown[]) => h.buildMcpServers(...a) }));
 
-import { runAgentReply, initAgentHarness, __resetAgentRunnerForTests } from "../src/agent/runner.js";
+import { runReply, initAgentHarness, __resetAgentRunnerForTests } from "../src/agent/runner.js";
 
 interface FakeServer {
   name: string;
@@ -61,7 +61,7 @@ const OK_RESULT = {
   state: { usage: { requests: 3, inputTokens: 100, outputTokens: 40, totalTokens: 140 } },
 };
 
-describe("runAgentReply", () => {
+describe("runReply", () => {
   beforeEach(() => {
     __resetAgentRunnerForTests();
     for (const k of Object.keys(h) as (keyof typeof h)[]) (h[k] as ReturnType<typeof vi.fn>).mockReset();
@@ -74,7 +74,7 @@ describe("runAgentReply", () => {
     const servers = [makeServer("metabase"), makeServer("memory")];
     h.buildMcpServers.mockReturnValue(servers);
 
-    const res = await runAgentReply("SYS PROMPT", "hello", undefined, undefined, "system@1.0.0");
+    const res = await runReply("SYS PROMPT", "hello", undefined, undefined, "system@1.0.0");
 
     expect(h.agentCtor).toHaveBeenCalledTimes(1);
     const agentOpts = h.agentCtor.mock.calls[0][0] as { instructions: string; model: string; mcpServers: FakeServer[] };
@@ -96,7 +96,7 @@ describe("runAgentReply", () => {
   });
 
   it("prepends thread context in the same shape as the CLI runner", async () => {
-    await runAgentReply("SYS", "latest msg", "<@U1>: earlier");
+    await runReply("SYS", "latest msg", "<@U1>: earlier");
     const input = (h.runMock.mock.calls[0] as [unknown, string])[1];
     expect(input).toBe("<@U1>: earlier\n\nLatest message:\nlatest msg");
   });
@@ -104,7 +104,7 @@ describe("runAgentReply", () => {
   it("connects every MCP server before the run and closes them after", async () => {
     const servers = [makeServer("metabase"), makeServer("memory")];
     h.buildMcpServers.mockReturnValue(servers);
-    await runAgentReply("SYS", "x");
+    await runReply("SYS", "x");
     for (const s of servers) {
       expect(s.connect).toHaveBeenCalledTimes(1);
       expect(s.close).toHaveBeenCalledTimes(1);
@@ -115,7 +115,7 @@ describe("runAgentReply", () => {
     const servers = [makeServer("memory")];
     h.buildMcpServers.mockReturnValue(servers);
     h.runMock.mockRejectedValue(new Error("boom"));
-    await expect(runAgentReply("SYS", "x")).rejects.toThrow("boom");
+    await expect(runReply("SYS", "x")).rejects.toThrow("boom");
     expect(servers[0].close).toHaveBeenCalledTimes(1);
     expect(h.recordLlmCall).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "openai", operation: "reply", status: "error" })
@@ -123,7 +123,7 @@ describe("runAgentReply", () => {
   });
 
   it("records one openai 'reply' span with the usage mapping on success", async () => {
-    await runAgentReply("SYS", "x", "ctx", undefined, "system@1.0.0");
+    await runReply("SYS", "x", "ctx", undefined, "system@1.0.0");
     expect(h.recordLlmCall).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",
@@ -140,27 +140,27 @@ describe("runAgentReply", () => {
 
   it("threads the viewer scope + server allowlist into buildMcpServers", async () => {
     const viewer = { userId: "U1" } as never;
-    await runAgentReply("SYS", "x", undefined, viewer, undefined, {
+    await runReply("SYS", "x", undefined, viewer, undefined, {
       mcpServers: new Set(["metabase"]),
     });
     expect(h.buildMcpServers).toHaveBeenCalledWith({ viewer, servers: new Set(["metabase"]) });
   });
 
   it("honors an explicit model override", async () => {
-    await runAgentReply("SYS", "x", undefined, undefined, undefined, { model: "gpt-5.4" });
+    await runReply("SYS", "x", undefined, undefined, undefined, { model: "gpt-5.4" });
     expect((h.agentCtor.mock.calls[0][0] as { model: string }).model).toBe("gpt-5.4");
   });
 
   it("initializes the OpenAI key and disables tracing exactly once", async () => {
-    await runAgentReply("SYS", "x");
-    await runAgentReply("SYS", "y");
+    await runReply("SYS", "x");
+    await runReply("SYS", "y");
     expect(h.setKeyMock).toHaveBeenCalledWith("sk-test");
     expect(h.setTracingMock).toHaveBeenCalledWith(true);
     expect(h.setKeyMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not arm a timeout when timeoutMs<=0 (analytics unlimited)", async () => {
-    await runAgentReply("SYS", "x", undefined, undefined, undefined, { timeoutMs: 0 });
+    await runReply("SYS", "x", undefined, undefined, undefined, { timeoutMs: 0 });
     const runOpts = h.runMock.mock.calls[0][2] as { signal?: AbortSignal };
     expect(runOpts.signal).toBeUndefined();
   });
@@ -173,7 +173,7 @@ describe("runAgentReply", () => {
   });
 
   it("does not register a budget hook when no tokenBudget is set", async () => {
-    await runAgentReply("SYS", "x");
+    await runReply("SYS", "x");
     const registered = h.onMock.mock.calls.map((c) => c[0]);
     expect(registered).not.toContain("agent_tool_start");
   });
@@ -189,7 +189,7 @@ describe("runAgentReply", () => {
         })
     );
 
-    const p = runAgentReply("SYS", "x", undefined, undefined, undefined, { tokenBudget: 500 });
+    const p = runReply("SYS", "x", undefined, undefined, undefined, { tokenBudget: 500 });
     const assertion = expect(p).rejects.toThrow(/budget/i);
 
     // Let connect() resolve and the Runner hook register, then fire it over budget.
@@ -220,7 +220,7 @@ describe("runAgentReply", () => {
           })
       );
 
-      const p = runAgentReply("SYS", "x", undefined, undefined, undefined, { timeoutMs: 1000 });
+      const p = runReply("SYS", "x", undefined, undefined, undefined, { timeoutMs: 1000 });
       const assertion = expect(p).rejects.toThrow(/timed out/);
       await vi.advanceTimersByTimeAsync(1000);
       await assertion;

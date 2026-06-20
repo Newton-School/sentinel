@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildAnalyticsSystemPrompt, BASE_PROMPT } from "../src/claude/systemPrompt.js";
+import { buildAnalyticsSystemPrompt, BASE_PROMPT } from "../src/agent/systemPrompt.js";
 import { ANALYTICS_BRAIN } from "../src/prompts/atlas-brain.js";
 import type { PersonaProfile } from "../src/persona/types.js";
 

@@ -18,7 +18,7 @@
 import { promptHash } from "./hash.js";
 import { EXTRACTION_INSTRUCTIONS } from "./extraction.js";
 import { CONSOLIDATION_SYSTEM_TEMPLATE } from "./consolidation.js";
-import { BASE_PROMPT } from "../claude/systemPrompt.js";
+import { BASE_PROMPT } from "../agent/systemPrompt.js";
 import { ANALYTICS_BRAIN } from "./atlas-brain.js";
 import { ANALYTICS_CLASSIFIER_INSTRUCTIONS } from "./analytics.js";
 
