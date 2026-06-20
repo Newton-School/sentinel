@@ -4,6 +4,11 @@
 > adversarial verification). Each P0 below was re-verified by hand against the
 > source. See `ARCHITECTURE.md` for the current-state map.
 >
+> **Note (2026-06):** the reply path migrated from the Claude CLI to an in-process
+> **OpenAI Agents SDK** loop (PRs #114–#121). Items below that cite `src/claude/*`
+> paths or `--dangerously-skip-permissions` are historical — that code now lives in
+> `src/agent/` and the CLI is gone.
+>
 > Status snapshot at audit time: build clean (`tsc --noEmit`), 150/150 tests
 > green, 1 open PR (#18 memory monitor), local `main` 1 behind `origin/main`,
 > 10 local feature branches fully merged and safe to delete.

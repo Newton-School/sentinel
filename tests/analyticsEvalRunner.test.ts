@@ -62,11 +62,11 @@ describe("runner — analytics suite wiring", () => {
       ranAt: "t",
       analytics: [{ id: "a" }] as never,
       deps: { apiKey: "k" },
-      analyticsModel: "claude-opus-4-8",
+      analyticsModel: "gpt-5.4",
       threshold: 0.7,
       persist: false,
     });
-    expect(runAnalyticsCaseMock.mock.calls[0][1]).toMatchObject({ model: "claude-opus-4-8" });
+    expect(runAnalyticsCaseMock.mock.calls[0][1]).toMatchObject({ model: "gpt-5.4" });
   });
 
   it("produces no analytics suite when no analytics cases are supplied (back-compat)", async () => {

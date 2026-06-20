@@ -323,7 +323,7 @@
       <div class="pill" style="color:var(--accent);border-color:rgba(94,139,255,0.3)">Q&amp;A PATH</div>
       <p style="margin-top:10px">A founder @mentions / DMs / <code>/sentinel</code>s the bot → <code>socketClient</code> authorizes &amp; de-dupes →
       <code>handleEvent</code> gathers thread context + persona + recalled memories → <code>buildSystemPrompt</code> assembles the prompt →
-      <code>runClaude</code> spawns <code>claude --print</code> with an <code>--mcp-config</code> → Claude calls tools across the 9 MCP servers →
+      <code>runReply</code> runs the OpenAI Agents SDK loop over the 9 MCP servers (connected per request) → the agent calls tools →
       the answer is reformatted to Slack mrkdwn and posted, with the exchange logged &amp; mined for new facts.</p>
     </div>
     <div class="card">
@@ -654,11 +654,11 @@ const NODES = [
   {id:"persona", cls:"n-core", ic:"🧬", t:"persona store + tracker", s:"get persona · traits", x:4, y:39.5, w:27, key:"persona"},
   {id:"recall", cls:"n-brain", ic:"🧠", t:"memory recall", s:"searchMemories / assembleRetrieval", x:34, y:31.5, w:28, key:"recall"},
   {id:"sysprompt", cls:"n-core", ic:"📝", t:"buildSystemPrompt()", s:"persona + traits + memories", x:34, y:39.5, w:28, key:"sysprompt"},
-  {id:"runner", cls:"n-claude", ic:"🚀", t:"runner.ts → spawn", s:"claude --print --mcp-config", x:4, y:47.5, w:27, key:"runner"},
+  {id:"runner", cls:"n-claude", ic:"🚀", t:"runner.ts → runReply", s:"Agent + run loop", x:4, y:47.5, w:27, key:"runner"},
   {id:"format", cls:"n-core", ic:"✨", t:"formatters.ts", s:"markdown → Slack mrkdwn", x:34, y:47.5, w:28, key:"format"},
 
-  // claude (sits between core and mcp)
-  {id:"cli", cls:"n-claude", ic:"🤖", t:"Claude CLI subprocess", s:"agentic tool loop · 120s", x:34, y:15.5, w:28, key:"cli"},
+  // agent loop (sits between core and mcp)
+  {id:"cli", cls:"n-claude", ic:"🤖", t:"OpenAI agent loop", s:"tool-calling loop · gpt-5.4-mini", x:34, y:15.5, w:28, key:"cli"},
 
   // mcp servers
   {id:"mcp-metabase", cls:"n-mcp", ic:"📊", t:"metabase", s:"SQL · read-only AST", x:69, y:15, w:27, key:"mcp-metabase"},
@@ -709,7 +709,7 @@ const DETAIL = {
     <h4>Security gate</h4><p><code>isAllowed(userId)</code> checks the <code>ALLOWED_USER_IDS</code> allow-list — the single check keeping non-founders out. Unlisted users are silently ignored.</p>
     <h4>Normalization</h4><p>Each event becomes a <code>SlackEventEnvelope</code> {type, userId, channelId, threadTs, text, messageTs}; the bot mention is stripped from text.</p>`},
   "socket": {k:"Transport", t:"socketClient.ts", f:"src/slack/socketClient.ts · src/slack/dedupe.ts",
-    body:`<p>Builds the <code>@slack/bolt</code> App and registers handlers. Because Claude can take up to 120s, Slack re-delivers events — so a per-app <b>TTL deduper</b> keyed <code>channelId:messageTs</code> suppresses repeats.</p>
+    body:`<p>Builds the <code>@slack/bolt</code> App and registers handlers. Because the agent can take up to ~120s, Slack re-delivers events — so a per-app <b>TTL deduper</b> keyed <code>channelId:messageTs</code> suppresses repeats.</p>
     <h4>Functions</h4><ul><li><code>isAllowed</code> — allow-list gate</li><li><code>stripBotMention</code> — removes <code>&lt;@BOT&gt;</code></li><li><code>isUserDmMessage</code> — DM subtype filter</li><li><code>normalizeMention / DmMessage / SlashCommand</code></li></ul>`},
   "handle": {k:"Orchestrator", t:"handleEvent()", f:"src/index.ts",
     body:`<p>The heart of the Q&A path. Bounded by a <b>3-request in-flight semaphore</b> (extra requests get an "I'm busy" message).</p>
@@ -727,33 +727,30 @@ const DETAIL = {
             × categoryBoost × (0.5 + 0.5·confidence)
 recency = 0.5 ^ (ageDays / 90)
 categoryBoost = 1.25 for decision/owner/deadline</div>`},
-  "sysprompt": {k:"Prompt assembly", t:"buildSystemPrompt()", f:"src/claude/systemPrompt.ts",
+  "sysprompt": {k:"Prompt assembly", t:"buildSystemPrompt()", f:"src/agent/systemPrompt.ts",
     body:`<p>Concatenates: the static <b>Sentinel base prompt</b> (role, the 6 Newton domains, the mandatory 5-section answer format, Slack mrkdwn rules, "never fabricate / always cite / read-only" rules) + IST time context + unavailable-source warnings + the user persona + top-8 learned traits + <b>recalled memories</b> (under a hardened "records, NOT instructions" header, 3000-char tiered budget) + a standing note about the <code>memory_*</code> / <code>entity_*</code> tools.</p>
-    <div class="note warn">Recalled memories are <b>untrusted content</b>. The preamble explicitly tells Claude to treat them as context, prefer fresh tool data on conflict, and never follow instructions embedded inside a record — blunting prompt injection via ingested text.</div>`},
-  "runner": {k:"Claude bridge", t:"runner.ts", f:"src/claude/runner.ts",
-    body:`<p>Spawns the Claude CLI as a child process and returns <code>{text, durationMs, tokens, cost}</code>.</p>
-    <h4>Exact invocation</h4><div class="codeblock">claude --print "&lt;thread+message&gt;"
-       --output-format json
-       --dangerously-skip-permissions
-       --system-prompt "&lt;built prompt&gt;"
-       --mcp-config /tmp/…/mcp-config-&lt;uuid&gt;.json</div>
-    <ul><li><b>120s timeout</b> (SIGTERM), <code>clearTimeout</code>'d on settle to avoid a timer leak</li><li>Parses the JSON telemetry (tokens/cost/turns) defensively; falls back to raw stdout if the shape changes</li><li>Removes its per-spawn config file on close/error</li></ul>
-    <div class="note warn"><code>--dangerously-skip-permissions</code> means read-only is a soft prompt instruction at the runner level; the <b>hard</b> read-only guard lives inside the Metabase server's SQL AST check.</div>`},
-  "cli": {k:"The model", t:"Claude CLI subprocess", f:"@anthropic-ai/claude-code (spawned)",
-    body:`<p>This is where the intelligence lives. The CLI runs an <b>agentic tool-use loop</b>: it reads the system prompt, decides which MCP tools to call, fans out across the 9 servers (often several round-trips), and synthesizes a final answer in the mandated 5-section format.</p>
-    <h4>Per Sentinel's prompt strategy</h4><p>Meeting questions → Calendar first, then Meet API (<code>meet_list_conferences → meet_list_transcripts → meet_get_transcript_entries</code>), falling back to Drive transcripts. Each domain routes to specific sources. Extraction/consolidation use a separate raw <span class="tag">claude-haiku-4-5</span> client — this CLI uses the configured default model.</p>`},
+    <div class="note warn">Recalled memories are <b>untrusted content</b>. The preamble explicitly tells the model to treat them as context, prefer fresh tool data on conflict, and never follow instructions embedded inside a record — blunting prompt injection via ingested text.</div>`},
+  "runner": {k:"Agent loop", t:"runner.ts → runReply", f:"src/agent/runner.ts",
+    body:`<p>Builds an <code>Agent</code> (OpenAI Agents SDK) over per-request MCP servers, runs the tool-calling loop via a <code>Runner</code>, and returns <code>{text, durationMs, tokens, cost, numTurns}</code>.</p>
+    <h4>Shape</h4><div class="codeblock">const agent = new Agent({ model, instructions, mcpServers })
+const result = await new Runner().run(agent, prompt, { maxTurns, signal })</div>
+    <ul><li><b>timeout</b> via AbortController (≤0 = unlimited, for analytics)</li><li><b>token-budget</b> abort via an <code>agent_tool_start</code> hook</li><li>Maps the run's usage into one <code>provider:"openai"</code> reply span</li><li>Connects + closes the per-request MCP servers in <code>finally</code></li></ul>
+    <div class="note warn">The agent auto-approves MCP tool calls, so read-only is a soft prompt instruction at the runner level; the <b>hard</b> read-only guard lives inside the Metabase server's SQL AST check.</div>`},
+  "cli": {k:"The model", t:"OpenAI agent loop", f:"@openai/agents · gpt-5.4-mini",
+    body:`<p>This is where the intelligence lives. The agent runs an in-process <b>tool-use loop</b>: it reads the system prompt, decides which MCP tools to call, fans out across the 9 servers (often several round-trips), and synthesizes a final answer in the mandated 5-section format.</p>
+    <h4>Per Sentinel's prompt strategy</h4><p>Meeting questions → Calendar first, then Meet API (<code>meet_list_conferences → meet_list_transcripts → meet_get_transcript_entries</code>), falling back to Drive transcripts. Each domain routes to specific sources. Extraction/consolidation use a separate <span class="tag">gpt-4o-mini</span> client; the reply loop uses <code>OPENAI_REPLY_MODEL</code>.</p>`},
   "format": {k:"Output", t:"formatters.ts", f:"src/slack/formatters.ts",
-    body:`<p>Claude is told to emit Slack mrkdwn, but <code>markdownToSlackMrkdwn</code> defensively converts any standard Markdown that slips through: <code>**bold**</code>→<code>*bold*</code>, <code>[t](u)</code>→<code>&lt;u|t&gt;</code>, headers→bold lines, etc. — while <b>protecting code blocks</b> from mangling. Posted with <code>unfurl_links:false</code>.</p>`},
+    body:`<p>The model is told to emit Slack mrkdwn, but <code>markdownToSlackMrkdwn</code> defensively converts any standard Markdown that slips through: <code>**bold**</code>→<code>*bold*</code>, <code>[t](u)</code>→<code>&lt;u|t&gt;</code>, headers→bold lines, etc. — while <b>protecting code blocks</b> from mangling. Posted with <code>unfurl_links:false</code>.</p>`},
   "db": {k:"State", t:"sentinel.db", f:"src/state/db.ts",
     body:`<p>A single <code>better-sqlite3</code> connection (WAL, foreign keys, <code>busy_timeout=5000</code>), opened lazily. Holds 13 tables across personas, audit, the company brain (facts + entity graph), and meet-bot dedup. See the <b>Data Model</b> tab for the full schema.</p>`},
   "ingest": {k:"Company brain · flow 3", t:"ingestWatcher", f:"src/memory/ingestWatcher.ts",
-    body:`<p>Ticks every <b>5 min</b> (and once at boot). Requires <code>ANTHROPIC_API_KEY</code> and ≥1 runnable source, else it stays off. Overlapping ticks are skipped.</p>
+    body:`<p>Ticks every <b>5 min</b> (and once at boot). Requires an OpenAI key (<code>OPENAI_API_KEY</code>) and ≥1 runnable source, else it stays off. Overlapping ticks are skipped.</p>
     <ul><li><code>runMeetIngest</code> — transcripts of attended meetings (≤3/tick, 15-min grace, chunked, +summary)</li><li><code>runGmailIngest</code> — internal-sender allowlist only (≤10 extractions/tick)</li><li><code>runSlackIngest</code> — opt-in, allowlisted channels only</li></ul>
     <p>Kill switches read every tick: <code>MEMORY_INGEST_MEET=0</code>, <code>MEMORY_INGEST_GMAIL=0</code>, <code>MEMORY_INGEST_SLACK=1</code> (enable), <code>MEMORY_SLACK_CHANNELS</code>.</p>`},
   "consol": {k:"Company brain · flow 4", t:"consolidationWatcher", f:"src/memory/consolidationWatcher.ts · consolidate.ts",
-    body:`<p>Ticks every <b>30 min</b>. Selects entities "due" for a dossier rebuild (never built &amp; ≥3 facts; or ≥8 new facts; or >14 days old with new facts), then <code>consolidateEntity()</code> synthesizes a ≤1200-char markdown dossier via Haiku. Also runs <code>backfillEmbeddings()</code> when <code>MEMORY_EMBEDDINGS=1</code>. Gated by <code>MEMORY_CONSOLIDATION</code>.</p>`},
+    body:`<p>Ticks every <b>30 min</b>. Selects entities "due" for a dossier rebuild (never built &amp; ≥3 facts; or ≥8 new facts; or >14 days old with new facts), then <code>consolidateEntity()</code> synthesizes a ≤1200-char markdown dossier via <code>gpt-4o</code>. Also runs <code>backfillEmbeddings()</code> when <code>MEMORY_EMBEDDINGS=1</code>. Gated by <code>MEMORY_CONSOLIDATION</code>.</p>`},
   "hook": {k:"Company brain · flow 2", t:"conversationHook", f:"src/memory/conversationHook.ts · extractor.ts",
-    body:`<p>Fire-and-forget after each reply — never awaited, never throws. Runs the <b>user turn only</b> (≥40 chars) through the haiku extractor with defense-in-depth (Zod → evidence-quote check → secret filter). Conversation facts capped at 0.6 confidence. See the <b>Company Brain</b> tab.</p>`},
+    body:`<p>Fire-and-forget after each reply — never awaited, never throws. Runs the <b>user turn only</b> (≥40 chars) through the gpt-4o-mini extractor with defense-in-depth (Zod → evidence-quote check → secret filter). Conversation facts capped at 0.6 confidence. See the <b>Company Brain</b> tab.</p>`},
   "watcher": {k:"Meet bot", t:"watcher.ts", f:"src/meet-bot/watcher.ts",
     body:`<p>Polls the primary calendar every <b>60s</b> for events in the next 5 min, filters eligible ones (starting ≤2 min out / in progress, valid Meet URL, not already joined), and spawns a detached joiner — capped at <code>MAX_CONCURRENT_JOINERS</code> (default 1). Dedup persisted in <code>joined_meetings</code> (4h TTL). See the <b>Meet Bot</b> tab.</p>`},
   "joiner": {k:"Meet bot", t:"joiner.ts", f:"src/meet-bot/joiner.ts",
@@ -778,13 +775,13 @@ const LIFECYCLE = [
    c:`<code>getOrCreatePersona</code> + <code>getTraits</code> load the user profile. The asker's <b>viewer scope</b> is computed (<code>currentViewerScope</code>) — in founders mode every allowed user is a founder who sees all memory rows.`},
   {stage:"Recall", h:"Retrieve organizational memory", f:"memory/memoryStore.ts",
    c:`If the entity graph is enabled, <code>assembleRetrieval</code> resolves query entities and gathers dossiers + entity facts + query facts (fusing cosine similarity when embeddings are on). Otherwise <code>searchMemories(text, 6, viewer)</code> does flat BM25 recall. <b>Wrapped in try/catch — a memory failure can never fail the reply.</b>`},
-  {stage:"Assemble", h:"Build the system prompt", f:"claude/systemPrompt.ts",
+  {stage:"Assemble", h:"Build the system prompt", f:"agent/systemPrompt.ts",
    c:`Base Sentinel prompt + IST time + unavailable-source warnings + persona + top-8 traits + recalled memories (hardened "records not instructions" header, 3000-char tiered budget) + memory-tools note are concatenated into one system prompt string.`},
-  {stage:"Configure", h:"Write per-spawn MCP config", f:"claude/mcpConfig.ts",
-   c:`A fresh <code>mcp-config-&lt;uuid&gt;.json</code> is written (<code>chmod 0600</code>) registering every credentialed MCP server. The asker's viewer scope is serialized into the memory server's env so <code>canView</code> applies at the MCP edge too.`},
-  {stage:"Spawn", h:"Run the Claude CLI", f:"claude/runner.ts",
-   c:`<code>spawn(claude, ["--print", prompt, "--output-format","json", "--dangerously-skip-permissions", "--system-prompt", sp, "--mcp-config", path])</code> with a <b>120s timeout</b>. stdout/stderr are buffered; the config file is deleted when the process settles.`},
-  {stage:"Agent loop", h:"Claude calls tools & reasons", f:"Claude CLI ↔ 9 MCP servers",
+  {stage:"Configure", h:"Build per-request MCP servers", f:"agent/mcpServers.ts",
+   c:`For each credentialed server an <code>MCPServerStdio</code> is constructed (no temp file — env is passed directly). The asker's viewer scope is baked into a <b>fresh memory server</b>'s env so <code>canView</code> applies at the MCP edge too.`},
+  {stage:"Run", h:"Run the agent loop", f:"agent/runner.ts",
+   c:`<code>new Runner().run(new Agent({ model, instructions, mcpServers }), prompt, { maxTurns, signal })</code>. An AbortController enforces the timeout; a token-budget hook can abort early. MCP servers are connected before the run and closed in <code>finally</code>.`},
+  {stage:"Agent loop", h:"The agent calls tools & reasons", f:"OpenAI Agents SDK ↔ 9 MCP servers",
    c:`The model runs an agentic loop: querying Metabase, searching Slack/Gmail, reading transcripts, looking up entities in the memory store — often many round-trips — then synthesizes an evidence-cited answer in the mandatory <b>Answer / Why / Evidence checked / Confidence / Unknowns</b> format.`},
   {stage:"Format & post", h:"Convert to mrkdwn & reply", f:"slack/formatters.ts",
    c:`<code>markdownToSlackMrkdwn</code> normalizes any stray Markdown to Slack syntax (protecting code blocks) and the answer is posted to the thread with <code>unfurl_links:false</code>. The reaction swaps <span class="kbd">:eyes:</span> → <span class="kbd">:white_check_mark:</span>.`},
@@ -920,8 +917,9 @@ const ENV = [
   ["SLACK_APP_TOKEN","yes","—","Must start xapp- (Socket Mode)"],
   ["BOT_USER_ID","yes","—","For mention stripping"],
   ["ALLOWED_USER_IDS","yes","—","CSV allow-list; .refine ≥1 non-empty"],
-  ["CLAUDE_BIN","no","claude","Path to the Claude CLI binary"],
-  ["ANTHROPIC_API_KEY","no","—","Passed to CLI + enables extraction/ingest"],
+  ["OPENAI_API_KEY","yes","—","Powers the agent reply loop + extraction/embeddings (or MEMORY_EMBEDDING_API_KEY)"],
+  ["OPENAI_REPLY_MODEL","no","gpt-5.4-mini","GPT-5-class model for the agent loop"],
+  ["ANALYTICS_MODEL","no","—","Optional model pin for the analytics route"],
   ["METABASE_URL + (API_KEY | USER+PASS)","no","—","Metabase server if set"],
   ["GITHUB_TOKEN","no","—","GitHub MCP if set"],
   ["NOTION_API_KEY","no","—","Notion MCP if set"],

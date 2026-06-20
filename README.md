@@ -3,6 +3,11 @@
 > **This README documents the original 3-source POC and is partly stale.**
 > For the current architecture see [`ARCHITECTURE.md`](ARCHITECTURE.md); for the
 > prioritized backlog (including known P0 bugs) see [`TODO.md`](TODO.md).
+>
+> **Note (2026-06):** the reply path no longer uses the Claude CLI — it runs an
+> in-process **OpenAI Agents SDK** loop (`src/agent/`) on `OPENAI_API_KEY`. The
+> "Claude Code CLI" / `ANTHROPIC_API_KEY` / `claude-haiku` mentions below are
+> historical; extraction + embeddings + the reply loop all run on OpenAI.
 
 ## Context
 

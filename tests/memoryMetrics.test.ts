@@ -28,8 +28,8 @@ vi.mock("pino", () => {
  *  - sentinel_memory_facts_total{source}        → memoryStore.insertFact
  *  - sentinel_memory_injected_total             → memoryStore.searchMemories
  *  - sentinel_memory_retrieval_empty_total      → memoryStore.searchMemories
- *  - sentinel_memory_extract_budget_exhausted_total → anthropicClient.extractJson
- *  - sentinel_memory_extract_errors_total       → anthropicClient.extractJson
+ *  - sentinel_memory_extract_budget_exhausted_total → openaiClient.extractJson
+ *  - sentinel_memory_extract_errors_total       → openaiClient.extractJson
  *                                                 (+ conversationHook catch)
  */
 
@@ -39,7 +39,7 @@ function mockConfig(extra: Record<string, unknown> = {}): void {
   }));
 }
 
-/** Response-like fake for the injected fetch (anthropicClient.test.ts pattern). */
+/** Response-like fake for the injected fetch (openaiClient.test.ts pattern). */
 function apiResponse(body: unknown, status = 200): Response {
   return {
     ok: status >= 200 && status < 300,
@@ -301,7 +301,7 @@ describe("memory metrics", () => {
     });
   });
 
-  describe("anthropicClient increments budget-exhausted and extract errors", () => {
+  describe("openaiClient increments budget-exhausted and extract errors", () => {
     it("counts one extract error on a non-ok HTTP response", async () => {
       mockConfig();
       const reg = await import("../src/metrics/registry.js");

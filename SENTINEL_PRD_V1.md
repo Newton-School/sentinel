@@ -10,7 +10,9 @@
 > longer strictly true: a background **calendar watcher** (`src/meet-bot/watcher.ts`) now
 > polls Google Calendar every 60s and auto-launches the Meet bot. The founder-facing Q&A
 > surface is still read-only and request-driven; this background watcher is the lone
-> proactive job. See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the current-state map.
+> proactive job. (3) The reply engine is now an in-process **OpenAI Agents SDK** loop
+> (`src/agent/`), not the Claude CLI — any "Claude-CLI" references below are historical.
+> See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the current-state map.
 
 **Status:** Draft v1.0  
 **Owner:** TBD  

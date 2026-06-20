@@ -1,7 +1,7 @@
 /**
  * Answer-quality eval suite: judge a candidate answer (a previously captured
  * bot reply, or a reference answer) against a goal question + rubric using the
- * LLM judge. Offline and CI-safe — it does not spawn the Claude CLI; it scores
+ * LLM judge. Offline and CI-safe — it does not run the live agent; it scores
  * answers that already exist in the dataset (PR #4's feedback harvest will grow
  * this dataset from real 👎'd replies).
  */

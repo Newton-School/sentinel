@@ -6,6 +6,11 @@
 > calendar watcher, a health server, and an audit log. For the current architecture
 > see [`ARCHITECTURE.md`](ARCHITECTURE.md) (source of truth) and the backlog in
 > [`TODO.md`](TODO.md). Sections below are annotated where they diverge from reality.
+>
+> **Note (2026-06):** the Claude-CLI runner described below was replaced by an
+> in-process **OpenAI Agents SDK** loop (`src/agent/`). The `claude --print` /
+> `CLAUDE_BIN` / `ANTHROPIC_API_KEY` / `@anthropic-ai/claude-code` references are
+> historical.
 
 ## Context
 

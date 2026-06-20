@@ -25,7 +25,7 @@ import { runAnalyticsCase, type AnalyticsCase } from "./analyticsEval.js";
 import { judgePromptVersionId } from "./judge.js";
 import { recordEvalRun } from "./store.js";
 
-// "analytics" is LIVE (spawns the Claude CLI + hits Metabase) and is therefore
+// "analytics" is LIVE (runs the live agent + hits Metabase) and is therefore
 // opt-in only — it is intentionally NOT part of "all" so `npm run eval` stays
 // offline + CI-safe.
 export type SuiteName = "extraction" | "answers" | "analytics" | "all";
