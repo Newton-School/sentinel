@@ -189,6 +189,11 @@ async function handleEventInner(
       const unavailableSources = getUnavailableSources();
       systemPrompt = buildSystemPrompt(persona, traits, unavailableSources, memories, bundle);
       promptVersion = activePromptVersionId("system");
+      // Optional cap on the general route's MCP tool surface (memory is always
+      // included by the config/server factory). Unset → every credentialed server.
+      if (config.GENERAL_MCP_SERVERS) {
+        runOptions = { mcpServers: config.GENERAL_MCP_SERVERS };
+      }
     }
 
     // Run Claude
