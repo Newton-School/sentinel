@@ -18,6 +18,9 @@ export interface ModelPrice {
 export const MODEL_PRICES: Record<string, ModelPrice> = {
   "gpt-4o-mini": { inputPer1k: 0.00015, outputPer1k: 0.0006 },
   "gpt-4o": { inputPer1k: 0.0025, outputPer1k: 0.01 },
+  // OpenAI Agents harness reply model. Official pricing (developers.openai.com,
+  // 2026-06): $0.75/1M input, $4.50/1M output.
+  "gpt-5.4-mini": { inputPer1k: 0.00075, outputPer1k: 0.0045 },
   "text-embedding-3-small": { inputPer1k: 0.00002, outputPer1k: 0 },
 };
 

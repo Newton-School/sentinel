@@ -25,6 +25,16 @@ export const envSchema = z
   // output-token budget that aborts the loop when exceeded.
   AGENT_MAX_TURNS: z.coerce.number().int().positive().default(12),
   AGENT_TOKEN_BUDGET: z.coerce.number().int().positive().optional(),
+  // Optional allowlist of MCP servers for the GENERAL route (analytics has its
+  // own {metabase} allowlist), to cap the tool surface GPT sees. Comma-separated
+  // server names; the always-on memory server is included regardless. Unset =
+  // every credentialed server (unchanged behaviour). Harness-agnostic.
+  GENERAL_MCP_SERVERS: z
+    .string()
+    .optional()
+    .transform((s) =>
+      s ? new Set(s.split(",").map((x) => x.trim()).filter(Boolean)) : undefined
+    ),
 
   // Analytics route (Project Atlas brain) — always on. An analytics-classified
   // message is answered by the Atlas brain over Metabase. ANALYTICS_MODEL pins a

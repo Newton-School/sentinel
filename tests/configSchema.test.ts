@@ -95,6 +95,22 @@ describe("real envSchema validation", () => {
       const overridden = envSchema.safeParse({ ...base, AGENT_MAX_TURNS: "7" });
       if (overridden.success) expect(overridden.data.AGENT_MAX_TURNS).toBe(7);
     });
+
+    it("parses GENERAL_MCP_SERVERS into a set (or leaves it undefined)", () => {
+      const none = envSchema.safeParse({ ...base });
+      if (none.success) expect(none.data.GENERAL_MCP_SERVERS).toBeUndefined();
+
+      const set = envSchema.safeParse({ ...base, GENERAL_MCP_SERVERS: "metabase, memory ,github" });
+      expect(set.success).toBe(true);
+      if (set.success) {
+        expect(set.data.GENERAL_MCP_SERVERS).toBeInstanceOf(Set);
+        expect([...(set.data.GENERAL_MCP_SERVERS as Set<string>)].sort()).toEqual([
+          "github",
+          "memory",
+          "metabase",
+        ]);
+      }
+    });
   });
 
   describe("Google OAuth creds are all-or-none", () => {

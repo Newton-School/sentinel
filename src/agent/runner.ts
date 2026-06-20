@@ -1,4 +1,4 @@
-import { Agent, run, setDefaultOpenAIKey, setTracingDisabled } from "@openai/agents";
+import { Agent, Runner, setDefaultOpenAIKey, setTracingDisabled } from "@openai/agents";
 import { config } from "../config.js";
 import { createLogger } from "../logging/logger.js";
 import { recordLlmCall } from "../llm/traceStore.js";
@@ -79,6 +79,8 @@ export async function runAgentReply(
   const maxTurns = options?.maxTurns ?? config.AGENT_MAX_TURNS;
   const timeoutMs = options?.timeoutMs ?? TIMEOUT_MS;
   const timeoutEnabled = timeoutMs > 0;
+  // Cumulative-token cost guard (cost runaway protection on top of maxTurns).
+  const tokenBudget = options?.tokenBudget ?? config.AGENT_TOKEN_BUDGET;
 
   const fullPrompt = threadContext
     ? `${threadContext}\n\nLatest message:\n${userMessage}`
@@ -93,6 +95,7 @@ export async function runAgentReply(
   // projection skills legitimately run longer than the default window).
   const abort = new AbortController();
   let timedOut = false;
+  let budgetExceeded = false;
   const timer = timeoutEnabled
     ? setTimeout(() => {
         timedOut = true;
@@ -159,9 +162,25 @@ export async function runAgentReply(
       mcpServers: connected,
     });
 
-    const result = await run(agent, fullPrompt, {
+    // A Runner (rather than the functional run()) lets us attach a token-budget
+    // hook. agent_tool_start fires before each tool call — i.e. after the model
+    // produced its latest usage — so aborting there stops further (expensive)
+    // turns once cumulative usage crosses the budget.
+    const runner = new Runner();
+    if (tokenBudget && tokenBudget > 0) {
+      runner.on("agent_tool_start", (ctx: { usage?: { totalTokens?: number } }) => {
+        const used = ctx?.usage?.totalTokens ?? 0;
+        if (used >= tokenBudget) {
+          budgetExceeded = true;
+          abort.abort();
+        }
+      });
+    }
+
+    const result = await runner.run(agent, fullPrompt, {
       maxTurns,
-      ...(timeoutEnabled ? { signal: abort.signal } : {}),
+      // The budget hook needs a signal to abort even when no timeout is set.
+      ...(timeoutEnabled || (tokenBudget && tokenBudget > 0) ? { signal: abort.signal } : {}),
     });
 
     const usage = readUsage(result);
@@ -196,6 +215,10 @@ export async function runAgentReply(
     if (timedOut) {
       recordReply("error", undefined, "timeout");
       throw new Error(`OpenAI agent timed out after ${timeoutMs}ms`);
+    }
+    if (budgetExceeded) {
+      recordReply("error", undefined, "budget");
+      throw new Error(`OpenAI agent stopped: token budget (${tokenBudget}) exceeded`);
     }
     recordReply("error", undefined, "run");
     log.error({ err }, "OpenAI agent run failed");

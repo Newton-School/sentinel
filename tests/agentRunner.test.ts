@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const h = vi.hoisted(() => ({
   agentCtor: vi.fn(),
   runMock: vi.fn(),
+  onMock: vi.fn(),
   setKeyMock: vi.fn(),
   setTracingMock: vi.fn(),
   recordLlmCall: vi.fn(),
@@ -11,13 +12,23 @@ const h = vi.hoisted(() => ({
   buildMcpServers: vi.fn(),
 }));
 
+// The runner uses a Runner instance (so it can attach a token-budget hook via
+// .on). The mock Runner records hook registrations and delegates run() to runMock.
 vi.mock("@openai/agents", () => ({
   Agent: class {
     constructor(opts: unknown) {
       h.agentCtor(opts);
     }
   },
-  run: (...a: unknown[]) => h.runMock(...a),
+  Runner: class {
+    on(event: string, listener: (...a: unknown[]) => void) {
+      h.onMock(event, listener);
+      return this;
+    }
+    run(...a: unknown[]) {
+      return h.runMock(...a);
+    }
+  },
   setDefaultOpenAIKey: (...a: unknown[]) => h.setKeyMock(...a),
   setTracingDisabled: (...a: unknown[]) => h.setTracingMock(...a),
 }));
@@ -152,6 +163,40 @@ describe("runAgentReply", () => {
     await runAgentReply("SYS", "x", undefined, undefined, undefined, { timeoutMs: 0 });
     const runOpts = h.runMock.mock.calls[0][2] as { signal?: AbortSignal };
     expect(runOpts.signal).toBeUndefined();
+  });
+
+  it("does not register a budget hook when no tokenBudget is set", async () => {
+    await runAgentReply("SYS", "x");
+    const registered = h.onMock.mock.calls.map((c) => c[0]);
+    expect(registered).not.toContain("agent_tool_start");
+  });
+
+  it("aborts with a budget error when cumulative tokens exceed tokenBudget", async () => {
+    const servers = [makeServer("memory")];
+    h.buildMcpServers.mockReturnValue(servers);
+    // run() hangs until aborted; reject when the signal fires (as a real run would).
+    h.runMock.mockImplementation(
+      (_a: unknown, _i: unknown, opts: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          opts.signal?.addEventListener("abort", () => reject(new Error("aborted by signal")));
+        })
+    );
+
+    const p = runAgentReply("SYS", "x", undefined, undefined, undefined, { tokenBudget: 500 });
+    const assertion = expect(p).rejects.toThrow(/budget/i);
+
+    // Let connect() resolve and the Runner hook register, then fire it over budget.
+    await new Promise((r) => setTimeout(r, 0));
+    const entry = h.onMock.mock.calls.find((c) => c[0] === "agent_tool_start");
+    expect(entry).toBeDefined();
+    const hook = entry![1] as (ctx: unknown) => void;
+    hook({ usage: { totalTokens: 600, inputTokens: 500, outputTokens: 100 } });
+
+    await assertion;
+    expect(servers[0].close).toHaveBeenCalledTimes(1);
+    expect(h.recordLlmCall).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "openai", status: "error", errorKind: "budget" })
+    );
   });
 
   describe("timeout", () => {
