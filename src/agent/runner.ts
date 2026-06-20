@@ -42,6 +42,16 @@ export function __resetAgentRunnerForTests(): void {
   sdkInitialized = false;
 }
 
+/**
+ * Eagerly initialize the OpenAI Agents SDK (key + tracing-off) at boot, so a
+ * configuration problem surfaces at startup and the first reply doesn't pay the
+ * init. Returns true when an OpenAI key was found. Safe to call repeatedly.
+ */
+export function initAgentHarness(): boolean {
+  ensureSdkInitialized();
+  return Boolean(openaiApiKey());
+}
+
 interface AgentUsage {
   requests?: number;
   inputTokens?: number;

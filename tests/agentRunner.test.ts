@@ -43,7 +43,7 @@ vi.mock("../src/llm/traceStore.js", () => ({ recordLlmCall: (...a: unknown[]) =>
 vi.mock("../src/llm/modelPricing.js", () => ({ computeCostUsd: (...a: unknown[]) => h.computeCostUsd(...a) }));
 vi.mock("../src/agent/mcpServers.js", () => ({ buildMcpServers: (...a: unknown[]) => h.buildMcpServers(...a) }));
 
-import { runAgentReply, __resetAgentRunnerForTests } from "../src/agent/runner.js";
+import { runAgentReply, initAgentHarness, __resetAgentRunnerForTests } from "../src/agent/runner.js";
 
 interface FakeServer {
   name: string;
@@ -163,6 +163,13 @@ describe("runAgentReply", () => {
     await runAgentReply("SYS", "x", undefined, undefined, undefined, { timeoutMs: 0 });
     const runOpts = h.runMock.mock.calls[0][2] as { signal?: AbortSignal };
     expect(runOpts.signal).toBeUndefined();
+  });
+
+  it("initAgentHarness eagerly sets the key + disables tracing and reports a key was found", () => {
+    const found = initAgentHarness();
+    expect(found).toBe(true);
+    expect(h.setKeyMock).toHaveBeenCalledWith("sk-test");
+    expect(h.setTracingMock).toHaveBeenCalledWith(true);
   });
 
   it("does not register a budget hook when no tokenBudget is set", async () => {
