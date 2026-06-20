@@ -87,7 +87,7 @@ export function extractFromConversation(opts: ConversationHookOptions): void {
       );
     }
   })().catch((err) => {
-    // LLM-call failures are already counted inside anthropicClient (which
+    // LLM-call failures are already counted inside the OpenAI client (which
     // resolves null instead of throwing) — this catch counts the disjoint
     // pipeline failures (extractor throw, SQLite insert error), so no event
     // is double-counted.

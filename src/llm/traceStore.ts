@@ -1,6 +1,6 @@
 /**
  * The single best-effort sink for LLM-call telemetry. `recordLlmCall` is the
- * one entry point every instrumented LLM path uses (the Claude runner, the
+ * one entry point every instrumented LLM path uses (the agent reply runner, the
  * OpenAI extractor/embedder/consolidator). It:
  *   1. forwards to the in-memory Prometheus registry (recordLlmMetric), and
  *   2. writes one durable `llm_calls` row, correlated by the active trace id.
@@ -11,8 +11,8 @@
  * `main()` opens the DB at startup, so the sink is live by the time any LLM
  * call happens; in tests an un-opened DB simply skips the durable row.
  *
- * The Claude CLI runs as a subprocess, so its internal tool calls are opaque:
- * the `reply` row is one aggregate span for the whole invocation.
+ * The agent reply records one aggregate `reply` span (the run's total usage)
+ * for the whole invocation.
  */
 
 import { randomUUID } from "node:crypto";
@@ -24,7 +24,7 @@ import { createLogger } from "../logging/logger.js";
 const log = createLogger("trace-store");
 
 export interface LlmCallRecord {
-  provider: "anthropic" | "openai";
+  provider: "openai";
   model: string;
   operation: "reply" | "extract" | "consolidate" | "embed" | "summary";
   inputTokens?: number;
@@ -33,9 +33,9 @@ export interface LlmCallRecord {
   latencyMs?: number;
   /** Defaults to "ok". */
   status?: "ok" | "error";
-  /** Coarse failure class, e.g. http|timeout|parse|network|subprocess. */
+  /** Coarse failure class, e.g. http|timeout|parse|network|run. */
   errorKind?: string;
-  /** Anthropic reply only — agent turn count. */
+  /** Reply only — agent loop turn count. */
   numTurns?: number;
   /** Versioned prompt id ("<id>@<version>+<hash>"), when the call used one. */
   promptVersion?: string;

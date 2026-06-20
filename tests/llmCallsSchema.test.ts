@@ -106,6 +106,20 @@ describe("llm_calls schema", () => {
     closeDb();
   });
 
+  it("rejects the legacy 'anthropic' provider (openai-only after the cutover)", async () => {
+    const { getDb, closeDb } = await loadFreshDb();
+    const db = getDb();
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO llm_calls (call_id, trace_id, provider, model, operation, status, created_at)
+           VALUES ('c1','t1','anthropic','claude','reply','ok','2026-06-14T00:00:00.000Z')`
+        )
+        .run()
+    ).toThrow();
+    closeDb();
+  });
+
   it("rejects an invalid operation via CHECK", async () => {
     const { getDb, closeDb } = await loadFreshDb();
     const db = getDb();

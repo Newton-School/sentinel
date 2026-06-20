@@ -159,6 +159,91 @@ describe("database migrations", () => {
 
     closeDb();
   });
+
+  it("rebuilds llm_calls to drop the legacy 'anthropic' provider (file-backed)", async () => {
+    const dbPath = join(
+      tmpdir(),
+      `sentinel-llm-migrate-${process.pid}-${Math.floor(performance.now())}.db`
+    );
+    const loadAt = async (path: string) => {
+      vi.resetModules();
+      vi.doMock("pino", () => {
+        const noop = () => {};
+        const logger = { info: noop, warn: noop, error: noop, debug: noop, fatal: noop, trace: noop, child: () => logger };
+        const pino = () => logger;
+        pino.stdTimeFunctions = { isoTime: () => "" };
+        return { default: pino };
+      });
+      vi.doMock("../src/config.js", () => ({
+        config: { SQLITE_DB_PATH: path, LOG_LEVEL: "silent" },
+      }));
+      return import("../src/state/db.js");
+    };
+
+    try {
+      // Seed an OLD-schema DB: the legacy CHECK + one anthropic + one openai row.
+      const seed = new Database(dbPath);
+      seed.exec(`
+        CREATE TABLE llm_calls (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          call_id TEXT NOT NULL,
+          trace_id TEXT NOT NULL,
+          provider TEXT NOT NULL CHECK (provider IN ('anthropic','openai')),
+          model TEXT NOT NULL,
+          operation TEXT NOT NULL CHECK (operation IN ('reply','extract','consolidate','embed','summary')),
+          input_tokens INTEGER, output_tokens INTEGER, cost_usd REAL, latency_ms INTEGER,
+          status TEXT NOT NULL DEFAULT 'ok' CHECK (status IN ('ok','error')),
+          error_kind TEXT, num_turns INTEGER, user_id TEXT, prompt_version TEXT,
+          created_at TEXT NOT NULL
+        );
+      `);
+      const ins = seed.prepare(
+        `INSERT INTO llm_calls (call_id, trace_id, provider, model, operation, status, created_at)
+         VALUES (?, ?, ?, ?, 'reply', 'ok', ?)`
+      );
+      ins.run("c-a", "t", "anthropic", "claude", "2026-06-01T00:00:00.000Z");
+      ins.run("c-o", "t", "openai", "gpt-5.4-mini", "2026-06-02T00:00:00.000Z");
+      seed.close();
+
+      // Boot → the migration detects the legacy CHECK and rebuilds the table.
+      const m = await loadAt(dbPath);
+      const db = m.getDb();
+
+      // Legacy anthropic row dropped; openai row preserved.
+      const rows = db.prepare("SELECT provider FROM llm_calls").all() as Array<{ provider: string }>;
+      expect(rows).toEqual([{ provider: "openai" }]);
+
+      // The tightened CHECK now rejects anthropic.
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO llm_calls (call_id, trace_id, provider, model, operation, status, created_at)
+             VALUES ('c2','t','anthropic','claude','reply','ok','2026-06-03T00:00:00.000Z')`
+          )
+          .run()
+      ).toThrow();
+
+      // Indexes were recreated on the rebuilt table.
+      const idx = (
+        db
+          .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='llm_calls'")
+          .all() as Array<{ name: string }>
+      ).map((i) => i.name);
+      expect(idx).toContain("idx_llm_calls_trace");
+      expect(idx).toContain("idx_llm_calls_created_at");
+      expect(idx).toContain("idx_llm_calls_op_model");
+
+      m.closeDb();
+    } finally {
+      for (const suffix of ["", "-wal", "-shm"]) {
+        try {
+          rmSync(dbPath + suffix);
+        } catch {
+          /* best-effort cleanup */
+        }
+      }
+    }
+  });
 });
 
 describe("company brain — entity graph schema", () => {

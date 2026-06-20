@@ -1,8 +1,6 @@
 /**
  * OpenAI client for structured JSON extraction (fact extraction + dossier
- * consolidation). Replaces the former Anthropic Messages client — Sentinel has
- * no ANTHROPIC_API_KEY; the same OpenAI key used for embeddings powers
- * extraction here.
+ * consolidation). The same OpenAI key used for embeddings powers extraction here.
  *
  * Dependency-free (no openai SDK): transport reuses the existing
  * `fetchWithRetry` (timeout + bounded retry), errors are logged via

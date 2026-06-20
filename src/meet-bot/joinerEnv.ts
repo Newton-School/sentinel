@@ -4,7 +4,7 @@
  * The joiner (`joiner.ts`) drives Chromium via Playwright and authenticates purely
  * through the pre-signed-in persistent Chrome profile (`data/sentinel-chrome-profile`).
  * It imports no config and reads no application secrets. Forwarding the parent's full
- * environment would leak every Slack/Anthropic/Metabase/GitHub/Notion/Google token into
+ * environment would leak every Slack/OpenAI/Metabase/GitHub/Notion/Google token into
  * a long-lived, detached process that never needs them.
  *
  * `buildJoinerEnv` returns a NEW object containing only an allowlist of non-secret

@@ -1,8 +1,6 @@
 /**
- * Static price table for the OpenAI models Sentinel calls (extraction,
- * consolidation, embeddings). The Claude CLI already reports `total_cost_usd`
- * for the main bot, so Anthropic models are intentionally absent here — this
- * table exists to give the previously cost-blind OpenAI paths a USD figure.
+ * Static price table for the OpenAI models Sentinel calls (the agent reply loop,
+ * extraction, consolidation, embeddings).
  *
  * Prices are USD per 1K tokens, as of 2026-06. An unknown model yields
  * `undefined` (callers store NULL) rather than a fabricated cost.

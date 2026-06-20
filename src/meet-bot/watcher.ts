@@ -317,7 +317,7 @@ function spawnJoiner(meetUrl: string, durationSec: number): void {
     stdio: ["ignore", logFd, logFd],
     // The joiner authenticates via the persistent Chrome profile, not env vars.
     // Pass only a minimal non-secret runtime env so we don't leak app secrets
-    // (Slack/Anthropic/Metabase/GitHub/Notion/Google) into a detached process.
+    // (Slack/OpenAI/Metabase/GitHub/Notion/Google) into a detached process.
     env: buildJoinerEnv(),
   });
 

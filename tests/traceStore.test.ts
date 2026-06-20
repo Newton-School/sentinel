@@ -78,7 +78,7 @@ describe("traceStore.recordLlmCall", () => {
   it("uses an 'untraced' trace id outside any trace scope and defaults status to ok", async () => {
     const { db, traceStore } = await load();
     db.getDb();
-    traceStore.recordLlmCall({ provider: "anthropic", model: "claude", operation: "reply", numTurns: 3 });
+    traceStore.recordLlmCall({ provider: "openai", model: "gpt-5.4-mini", operation: "reply", numTurns: 3 });
     const row = db.getDb().prepare("SELECT trace_id, status, num_turns FROM llm_calls").get() as Record<string, unknown>;
     expect(row.trace_id).toBe("untraced");
     expect(row.status).toBe("ok");
@@ -104,7 +104,7 @@ describe("traceStore.recordLlmCall", () => {
   it("persists error status + error_kind", async () => {
     const { db, traceStore } = await load();
     db.getDb();
-    traceStore.recordLlmCall({ provider: "anthropic", model: "claude", operation: "reply", status: "error", errorKind: "timeout", latencyMs: 1000 });
+    traceStore.recordLlmCall({ provider: "openai", model: "gpt-5.4-mini", operation: "reply", status: "error", errorKind: "timeout", latencyMs: 1000 });
     const row = db.getDb().prepare("SELECT status, error_kind FROM llm_calls").get() as Record<string, unknown>;
     expect(row.status).toBe("error");
     expect(row.error_kind).toBe("timeout");
