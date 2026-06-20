@@ -20,6 +20,7 @@ import { buildSystemPrompt, buildAnalyticsSystemPrompt } from "./claude/systemPr
 import type { RankedMemory, RetrievalBundle } from "./memory/types.js";
 import { type RunClaudeOptions } from "./claude/runner.js";
 import { runReply } from "./agent/replyRunner.js";
+import { initAgentHarness } from "./agent/runner.js";
 import { decideRoute } from "./analytics/router.js";
 import { trackQuery } from "./persona/tracker.js";
 import { slackReplyText } from "./slack/formatters.js";
@@ -410,9 +411,16 @@ async function main(): Promise<void> {
   getDb();
   log.info("Database initialized");
 
-  // Generate MCP config
-  getMcpConfigPath();
-  log.info("MCP config generated");
+  // Prepare the agentic backend. The OpenAI harness connects MCP servers
+  // per-request (no temp config file), so skip the CLI-only secrets-file warmup
+  // and eagerly init the SDK instead (fail-fast + no first-request latency).
+  if (config.HARNESS === "openai") {
+    initAgentHarness();
+    log.info({ model: config.OPENAI_REPLY_MODEL }, "OpenAI agent harness initialized");
+  } else {
+    getMcpConfigPath();
+    log.info("MCP config generated");
+  }
 
   // Start health check server
   const unavailableSources = getUnavailableSources();
