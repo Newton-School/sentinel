@@ -28,7 +28,7 @@ const PINNED = {
   extraction: { version: "1.0.0", hash: "7d9323b8ba5a" },
   consolidation: { version: "1.0.0", hash: "4f47602a149a" },
   system: { version: "1.0.0", hash: "89c11ce42da9" },
-  analytics: { version: "1.0.0", hash: "96f694187d76" },
+  analytics: { version: "1.0.1", hash: "4d5b2210afd1" },
   analytics_classifier: { version: "1.1.0", hash: "0890c764def3" },
 } as const;
 

@@ -3,7 +3,7 @@
  *
  * VENDORED, verbatim domain knowledge (DB topology, status codes, lead stages,
  * SCD/MoM-funnel gotchas, query patterns, and two projection skills) sourced
- * from the shared claude.ai "Project Atlas" project (owner: Devansh), which
+ * from the shared "Project Atlas" analytics project (owner: Devansh), which
  * remains the authoring surface. Embedded as a string constant (not a .md
  * asset) because the prod Docker image ships only dist/.
  *
@@ -13,7 +13,7 @@
 
 export const ANALYTICS_BRAIN = `# Newton School — Analytics Brain Document
 
-**Project Atlas | Claude System Prompt**
+**Project Atlas | Analytics System Prompt**
 *Scope: Online Business Lines only (excludes Newton School of Technology - offline)*
 
 ---
@@ -23,13 +23,13 @@ export const ANALYTICS_BRAIN = `# Newton School — Analytics Brain Document
 | Version | Date | Changed by | What changed |
 |---------|------|------------|--------------|
 | 1.0 | Original | Human | Initial brain doc created |
-| 1.1 | Mar 15 2026 | Claude (session: MoM funnel deep dive) | Added Sections 14 full rewrite, SCD tables (9534 + 9601), Agentic AI line, Advantage sunset, gotchas 15–20, version history, timestamps. Corrected mx_course_enrolled values. Corrected Tab 197 vs 198 distinction. |
+| 1.1 | Mar 15 2026 | Assistant (session: MoM funnel deep dive) | Added Sections 14 full rewrite, SCD tables (9534 + 9601), Agentic AI line, Advantage sunset, gotchas 15–20, version history, timestamps. Corrected mx_course_enrolled values. Corrected Tab 197 vs 198 distinction. |
 
 ⚠️ **Sections stamped \`[Verified Mar 15 2026]\` were reviewed against live Altius data in the session above. Unstamped sections are carried forward from the original doc and have not been independently verified.**
 
 ---
 
-## 0. HOW CLAUDE SHOULD BEHAVE
+## 0. HOW THE ASSISTANT SHOULD BEHAVE
 
 *[Carried forward — not modified in v1.1]*
 
@@ -655,7 +655,7 @@ Non-Diploma/12th graduates, graduation year 2013–2025 inclusive.
 
 ### ⚠️ MANDATORY CLARIFICATION RULE
 
-If anyone uses **M0, M-1, M-2** (or any M-N), Claude MUST ask:
+If anyone uses **M0, M-1, M-2** (or any M-N), you MUST ask:
 
 > "Do you mean **Assigned** or **Captured**? These are different — please specify."
 

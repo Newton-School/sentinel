@@ -33,7 +33,7 @@ const out = `/**
  *
  * VENDORED, verbatim domain knowledge (DB topology, status codes, lead stages,
  * SCD/MoM-funnel gotchas, query patterns, and two projection skills) sourced
- * from the shared claude.ai "Project Atlas" project (owner: Devansh), which
+ * from the shared "Project Atlas" analytics project (owner: Devansh), which
  * remains the authoring surface. Embedded as a string constant (not a .md
  * asset) because the prod Docker image ships only dist/.
  *
