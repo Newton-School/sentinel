@@ -5,10 +5,10 @@ metadata:
   labels:
     app: sentinel
 spec:
-  # Single replica only. Sentinel stores SQLite (single-writer, WAL) and a
-  # shared persistent Chrome profile under /app/data on a ReadWriteOnce PVC, and
-  # holds a single Slack Socket-Mode connection. Two pods would double-process
-  # events and corrupt the DB / Chrome profile.
+  # Single replica only. Persistence now lives in ParadeDB (Postgres), but the
+  # pod still holds a single Slack Socket-Mode connection and a shared Chrome
+  # profile under /app/data on a ReadWriteOnce PVC — two pods would
+  # double-process Slack events and corrupt the Chrome profile.
   replicas: 1
   strategy:
     # Recreate (not RollingUpdate): tear down the old pod before starting the
@@ -27,10 +27,9 @@ spec:
       # in the namespace, OR remove this and use node IAM / IRSA for ECR.
       imagePullSecrets:
         - name: ecr-registry
-      # fsGroup makes the mounted PVC (and emptyDirs) group-writable by the
-      # non-root runtime user (uid 1000, pwuser). WITHOUT it, the mounted volume
-      # is root-owned and SQLite cannot open the DB → crashloop. runAsNonRoot /
-      # runAsUser pin the pwuser identity from the Playwright base image.
+      # fsGroup makes the mounted PVC (the Chrome profile) group-writable by the
+      # non-root runtime user (uid 1000, pwuser). runAsNonRoot / runAsUser pin
+      # the pwuser identity from the Playwright base image.
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -39,6 +38,22 @@ spec:
       # >= the 25s in-flight drain + the 10s bounded Slack-stop, with headroom
       # (see src/shutdown.ts). K8s default is 30s, which is too tight.
       terminationGracePeriodSeconds: 40
+      # Block startup until ParadeDB accepts connections — the bot runs schema
+      # migrations on boot (src/state/db.ts initDb) and would crashloop if the
+      # DB isn't up yet.
+      initContainers:
+        - name: wait-for-paradedb
+          image: paradedb/paradedb:latest
+          command:
+            - /bin/sh
+            - -c
+            - 'until pg_isready -d "$DATABASE_URL"; do echo "waiting for paradedb..."; sleep 2; done'
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: sentinel-secrets
+                  key: DATABASE_URL
       containers:
         - name: sentinel
           # Image NAME `sentinel` — the kustomize overlay's `images:` transformer
@@ -51,7 +66,8 @@ spec:
             # Mandatory + optional secret env (tokens, API keys, Google creds).
             - secretRef:
                 name: sentinel-secrets
-            # Non-secret tunables (LOG_LEVEL, SQLITE_DB_PATH, feature gates, etc.).
+            # Non-secret tunables (LOG_LEVEL, PG_POOL_MAX, feature gates, etc.).
+            # DATABASE_URL is a secret key, pulled in via the secretRef above.
             - configMapRef:
                 name: sentinel-config
           # Startup probe gates liveness/readiness until the app is actually up

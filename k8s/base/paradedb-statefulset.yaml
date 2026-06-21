@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: sentinel-paradedb
+  labels:
+    app: sentinel-paradedb
+spec:
+  serviceName: sentinel-paradedb        # headless service (see paradedb-service.yaml)
+  replicas: 1                           # single-writer; HA is out of scope for staging
+  selector:
+    matchLabels:
+      app: sentinel-paradedb
+  template:
+    metadata:
+      labels:
+        app: sentinel-paradedb
+    spec:
+      securityContext:
+        # The ParadeDB/Postgres image runs as uid 999 (postgres); fsGroup makes
+        # the mounted PVC writable by it.
+        fsGroup: 999
+      containers:
+        - name: paradedb
+          # ParadeDB = Postgres + pg_search (true BM25) + pgvector, all in one.
+          # PIN to a specific released tag before production — check
+          # https://hub.docker.com/r/paradedb/paradedb/tags (e.g. 0.18.x-pg17).
+          image: paradedb/paradedb:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            # Superuser + default DB. Credentials come from the paradedb-credentials
+            # Secret (see secret.example.yaml additions). PGDATA lives one level
+            # below the mount so the lost+found dir on the volume root is tolerated.
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: paradedb-credentials
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: paradedb-credentials
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: paradedb-credentials
+                  key: POSTGRES_DB
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi

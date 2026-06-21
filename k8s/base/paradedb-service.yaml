@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: sentinel-paradedb
+  labels:
+    app: sentinel-paradedb
+spec:
+  # Headless: the StatefulSet pod is addressable at
+  #   sentinel-paradedb-0.sentinel-paradedb.<namespace>.svc.cluster.local
+  # and the service name `sentinel-paradedb` also resolves (single replica), so
+  # DATABASE_URL can use host `sentinel-paradedb`.
+  clusterIP: None
+  selector:
+    app: sentinel-paradedb
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432

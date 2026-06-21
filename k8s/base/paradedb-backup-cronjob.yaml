@@ -1,0 +1,55 @@
+# Nightly logical backup of the ParadeDB database to S3 — the durability win of
+# moving off a single SQLite file. Restore with:
+#   aws s3 cp s3://$BACKUP_BUCKET/<file>.sql.gz - | gunzip | psql "$DATABASE_URL"
+#
+# Requires:
+#   - the `sentinel` ServiceAccount annotated with an IRSA role that can
+#     s3:PutObject into $BACKUP_BUCKET (see serviceaccount.yaml).
+#   - BACKUP_BUCKET in the sentinel-config ConfigMap.
+#   - DATABASE_URL in the sentinel-secrets Secret (same one the bot uses).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: sentinel-paradedb-backup
+  labels:
+    app: sentinel-paradedb
+spec:
+  schedule: "0 2 * * *"          # 02:00 UTC daily
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      template:
+        spec:
+          serviceAccountName: sentinel     # IRSA: S3 write access
+          restartPolicy: Never
+          containers:
+            - name: pgdump-s3
+              # Postgres client (pg_dump) + aws cli. Pin a real tag in prod.
+              image: paradedb/paradedb:latest
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -euo pipefail
+                  TS=$(date -u +%Y%m%dT%H%M%SZ)
+                  FILE="sentinel-${TS}.sql.gz"
+                  echo "Dumping to ${FILE} ..."
+                  pg_dump --no-owner --no-privileges "$DATABASE_URL" | gzip -9 > "/tmp/${FILE}"
+                  echo "Uploading to s3://${BACKUP_BUCKET}/paradedb/${FILE}"
+                  aws s3 cp "/tmp/${FILE}" "s3://${BACKUP_BUCKET}/paradedb/${FILE}"
+                  echo "Backup complete."
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: sentinel-secrets
+                      key: DATABASE_URL
+                - name: BACKUP_BUCKET
+                  valueFrom:
+                    configMapKeyRef:
+                      name: sentinel-config
+                      key: BACKUP_BUCKET
