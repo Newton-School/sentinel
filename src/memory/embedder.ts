@@ -62,6 +62,27 @@ export function blobToFloat(b: Buffer): Float32Array {
   return new Float32Array(copy.buffer, copy.byteOffset, Math.floor(copy.byteLength / 4));
 }
 
+/**
+ * Encodes a vector as a pgvector text literal (`[1,2,3]`) for binding to a
+ * `$n::vector` parameter. pgvector accepts this form on insert/update.
+ */
+export function toVectorLiteral(v: Float32Array | number[]): string {
+  return `[${Array.from(v).join(",")}]`;
+}
+
+/**
+ * Parses a pgvector value back into a Float32Array. node-postgres returns a
+ * `vector` column as its text form (`"[1,2,3]"`); accepts a number[] too.
+ * Returns null for SQL NULL.
+ */
+export function parseVector(value: string | number[] | null | undefined): Float32Array | null {
+  if (value == null) return null;
+  if (Array.isArray(value)) return Float32Array.from(value);
+  const inner = value.replace(/^\[|\]$/g, "").trim();
+  if (!inner) return new Float32Array(0);
+  return Float32Array.from(inner.split(",").map(Number));
+}
+
 /** Cosine similarity in [-1, 1]; 0 when either vector is zero/empty/mismatched. */
 export function cosine(a: Float32Array, b: Float32Array): number {
   if (a.length === 0 || a.length !== b.length) return 0;

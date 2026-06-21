@@ -1,4 +1,4 @@
-import { getDb } from "../state/db.js";
+import { getPool } from "../state/db.js";
 import { createLogger } from "../logging/logger.js";
 import { upsertTrait } from "./store.js";
 import type { QueryCategory } from "./types.js";
@@ -84,28 +84,29 @@ export interface TrackQueryOptions {
   sourcesUsed?: string[];
 }
 
-export function trackQuery(opts: TrackQueryOptions): void {
-  const db = getDb();
+export async function trackQuery(opts: TrackQueryOptions): Promise<void> {
+  const pool = getPool();
   const category = categorizeQuery(opts.queryText);
   const now = new Date().toISOString();
 
-  db.prepare(
+  await pool.query(
     `INSERT INTO query_log (user_id, channel_id, thread_ts, query_text, category, response_text, response_duration_ms, sources_used, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    opts.userId,
-    opts.channelId,
-    opts.threadTs,
-    opts.queryText,
-    category,
-    opts.responseText ?? null,
-    opts.responseDurationMs ?? null,
-    opts.sourcesUsed ? JSON.stringify(opts.sourcesUsed) : null,
-    now
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [
+      opts.userId,
+      opts.channelId,
+      opts.threadTs,
+      opts.queryText,
+      category,
+      opts.responseText ?? null,
+      opts.responseDurationMs ?? null,
+      opts.sourcesUsed ? JSON.stringify(opts.sourcesUsed) : null,
+      now,
+    ]
   );
 
   if (category !== "general") {
-    upsertTrait(opts.userId, "focus_area", category);
+    await upsertTrait(opts.userId, "focus_area", category);
     log.info({ userId: opts.userId, category }, "Tracked query and updated persona trait");
   } else {
     log.debug({ userId: opts.userId }, "Tracked general query (no trait update)");

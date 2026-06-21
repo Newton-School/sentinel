@@ -13,14 +13,14 @@
  * still works — avoiding a risky rebuild of the FTS-backed memories table just
  * to add an enum value.
  *
- * Restart safety mirrors gmailIngest: a per-channel SQLite cursor
+ * Restart safety mirrors gmailIngest: a per-channel Postgres cursor
  * (`ingest_cursors.slack:<channel>` = last-processed ts) plus per-message dedup
  * (`ingested_docs`, `slack:<channel>:<ts>`). Oldest-first processing means the
  * cursor only advances over fully-processed messages; extraction-cap deferrals
  * stay unmarked and ahead of the cursor.
  */
 
-import { getDb } from "../state/db.js";
+import { getPool } from "../state/db.js";
 import { createLogger } from "../logging/logger.js";
 import { extractFacts } from "./extractor.js";
 import { insertFact } from "./memoryStore.js";
@@ -121,14 +121,14 @@ const tsNum = (ts: string): number => {
 export async function runSlackIngest(deps: SlackIngestDeps): Promise<void> {
   const now = (deps.now ?? (() => new Date()))();
   const nowMs = now.getTime();
-  const db = getDb();
+  const pool = getPool();
 
   let extractions = 0;
   const channels = deps.channels.slice(0, MAX_CHANNELS_PER_TICK);
 
   for (const channelId of channels) {
     const cursorSource = `slack:${channelId}`;
-    const cursor = getCursor(db, cursorSource) ?? undefined;
+    const cursor = (await getCursor(pool, cursorSource)) ?? undefined;
 
     let messages: SlackHistoryMessage[];
     try {
@@ -144,11 +144,11 @@ export async function runSlackIngest(deps: SlackIngestDeps): Promise<void> {
 
     for (const msg of messages) {
       const docId = `${cursorSource}:${msg.ts}`;
-      if (isIngested(db, docId)) continue;
+      if (await isIngested(pool, docId)) continue;
 
       const decision = shouldIngestSlackMessage(msg);
       if (!decision.ingest) {
-        markIngested(db, docId, nowMs);
+        await markIngested(pool, docId, nowMs);
         maxProcessed = Math.max(maxProcessed, tsNum(msg.ts));
         continue;
       }
@@ -171,7 +171,7 @@ export async function runSlackIngest(deps: SlackIngestDeps): Promise<void> {
       extractions++;
 
       for (const fact of facts) {
-        insertFact({
+        await insertFact({
           text: fact.text,
           category: fact.category,
           entities: fact.entities,
@@ -189,14 +189,14 @@ export async function runSlackIngest(deps: SlackIngestDeps): Promise<void> {
         log.info({ channelId, ts: msg.ts, count: facts.length }, "Stored Slack facts");
       }
 
-      markIngested(db, docId, nowMs);
+      await markIngested(pool, docId, nowMs);
       maxProcessed = Math.max(maxProcessed, tsNum(msg.ts));
     }
 
     // Advance the cursor only over fully-processed messages. If we deferred,
     // maxProcessed already excludes the deferred (and later) messages.
     if (maxProcessed > (cursor ? tsNum(cursor) : 0)) {
-      setCursor(db, cursorSource, String(maxProcessed), now);
+      await setCursor(pool, cursorSource, String(maxProcessed), now);
     }
     if (deferred) {
       log.info({ channelId }, "Extraction cap reached — deferring remaining Slack messages");

@@ -35,8 +35,21 @@ vi.mock("pino", () => {
 
 function mockConfig(extra: Record<string, unknown> = {}): void {
   vi.doMock("../src/config.js", () => ({
-    config: { SQLITE_DB_PATH: ":memory:", LOG_LEVEL: "silent", ...extra },
+    config: {
+      DATABASE_URL: process.env.DATABASE_URL,
+      PG_POOL_MAX: 5,
+      LOG_LEVEL: "silent",
+      ...extra,
+    },
   }));
+}
+
+/** Opens the per-worker Postgres pool + truncates — for tests that touch memoryStore. */
+async function initStoreDb(): Promise<void> {
+  const { initDb } = await import("../src/state/db.js");
+  await initDb();
+  const { resetTestDb } = await import("./helpers/pgTest.js");
+  await resetTestDb();
 }
 
 /** Response-like fake for the injected fetch (openaiClient.test.ts pattern). */
@@ -70,7 +83,7 @@ describe("memory metrics", () => {
 
   afterEach(async () => {
     const { closeDb } = await import("../src/state/db.js");
-    closeDb();
+    await closeDb();
   });
 
   describe("registry counters + Prometheus rendering", () => {
@@ -206,11 +219,12 @@ describe("memory metrics", () => {
   describe("memoryStore wrappers increment facts/injected/empty", () => {
     it("insertFact counts one stored event per call, labelled by source — dedup included", async () => {
       mockConfig();
+      await initStoreDb();
       const reg = await import("../src/metrics/registry.js");
       reg.reset();
       const store = await import("../src/memory/memoryStore.js");
 
-      const first = store.insertFact({
+      const first = await store.insertFact({
         text: "Q3 placement target is 250 offers",
         category: "decision",
         sourceType: "meeting",
@@ -219,7 +233,7 @@ describe("memory metrics", () => {
 
       // Exact re-assertion dedups at the SQL layer but still counts as one
       // stored event (inserted + deduped are both "stored").
-      const second = store.insertFact({
+      const second = await store.insertFact({
         text: "Q3 placement target is 250 offers",
         category: "decision",
         sourceType: "conversation",
@@ -233,35 +247,37 @@ describe("memory metrics", () => {
 
     it("a failed insert does not count", async () => {
       mockConfig();
+      await initStoreDb();
       const reg = await import("../src/metrics/registry.js");
       reg.reset();
       const store = await import("../src/memory/memoryStore.js");
 
-      expect(() =>
+      await expect(
         store.insertFact({ text: "   ", category: "fact", sourceType: "manual" })
-      ).toThrow();
+      ).rejects.toThrow();
 
       expect(reg.snapshot().memory.factsTotal).toBe(0);
     });
 
     it("searchMemories with hits increments injected by the hit count (not retrieval_empty)", async () => {
       mockConfig();
+      await initStoreDb();
       const reg = await import("../src/metrics/registry.js");
       reg.reset();
       const store = await import("../src/memory/memoryStore.js");
 
-      store.insertFact({
+      await store.insertFact({
         text: "Average CTC for the 2026 placements batch is 12 LPA",
         category: "metric",
         sourceType: "meeting",
       });
-      store.insertFact({
+      await store.insertFact({
         text: "Placements team closed 45 offers in May",
         category: "metric",
         sourceType: "meeting",
       });
 
-      const hits = store.searchMemories("how are placements doing?");
+      const hits = await store.searchMemories("how are placements doing?");
       expect(hits.length).toBeGreaterThan(0);
 
       const s = reg.snapshot();
@@ -271,17 +287,18 @@ describe("memory metrics", () => {
 
     it("searchMemories with zero hits increments retrieval_empty (not injected)", async () => {
       mockConfig();
+      await initStoreDb();
       const reg = await import("../src/metrics/registry.js");
       reg.reset();
       const store = await import("../src/memory/memoryStore.js");
 
-      store.insertFact({
+      await store.insertFact({
         text: "Average CTC for the 2026 placements batch is 12 LPA",
         category: "metric",
         sourceType: "meeting",
       });
 
-      const hits = store.searchMemories("xylophone quarterly zeppelin");
+      const hits = await store.searchMemories("xylophone quarterly zeppelin");
       expect(hits).toHaveLength(0);
 
       const s = reg.snapshot();
@@ -291,11 +308,12 @@ describe("memory metrics", () => {
 
     it("a query that sanitizes to nothing also counts as retrieval_empty", async () => {
       mockConfig();
+      await initStoreDb();
       const reg = await import("../src/metrics/registry.js");
       reg.reset();
       const store = await import("../src/memory/memoryStore.js");
 
-      const hits = store.searchMemories("   ");
+      const hits = await store.searchMemories("   ");
       expect(hits).toHaveLength(0);
       expect(reg.snapshot().memory.retrievalEmpty).toBe(1);
     });

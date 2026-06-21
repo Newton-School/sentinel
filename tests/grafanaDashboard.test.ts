@@ -28,25 +28,30 @@ async function emittedMetricNames(): Promise<Set<string>> {
     pino.stdTimeFunctions = { isoTime: () => "" };
     return { default: pino };
   });
-  vi.doMock("../src/config.js", () => ({ config: { SQLITE_DB_PATH: ":memory:", LOG_LEVEL: "silent" } }));
+  vi.doMock("../src/config.js", () => ({
+    config: { DATABASE_URL: process.env.DATABASE_URL, PG_POOL_MAX: 5, LOG_LEVEL: "silent" },
+  }));
   const db = await import("../src/state/db.js");
   const registry = await import("../src/metrics/registry.js");
   const store = await import("../evals/store.js");
   const gauges = await import("../src/metrics/evalGauges.js");
 
-  db.getDb();
+  await db.initDb();
+  const { resetTestDb } = await import("./helpers/pgTest.js");
+  await resetTestDb();
+
   registry.reset();
   registry.record({ type: "mention", durationMs: 1, inputTokens: 1, outputTokens: 1, costUsd: 0.01 });
   registry.recordLlmMetric({ provider: "openai", model: "gpt-4o-mini", operation: "extract", status: "ok", inputTokens: 1, outputTokens: 1, costUsd: 0.01, latencyMs: 10 });
   registry.recordFeedback("positive");
-  store.recordEvalRun({ runId: "r", suite: "extraction", nCases: 1, nPass: 1, meanScore: 1, ranAt: "2026-06-28T00:00:00.000Z" });
+  await store.recordEvalRun({ runId: "r", suite: "extraction", nCases: 1, nPass: 1, meanScore: 1, ranAt: "2026-06-28T00:00:00.000Z" });
 
-  const text = registry.renderPrometheus() + gauges.renderEvalGauges();
+  const text = registry.renderPrometheus() + (await gauges.renderEvalGauges());
   const names = new Set<string>();
   for (const m of text.match(/sentinel_[a-z0-9_]+/g) ?? []) {
     names.add(m.replace(/_(bucket|sum|count)$/, ""));
   }
-  db.closeDb();
+  await db.closeDb();
   return names;
 }
 

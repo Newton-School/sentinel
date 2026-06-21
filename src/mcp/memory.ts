@@ -5,17 +5,19 @@
  * Sentinel's persistent organizational memory store.
  * Runs as a stdio-based MCP server, spawned by the agent harness over stdio MCP.
  *
- * Opens its OWN better-sqlite3 connection to the SQLite file owned by the
- * main Sentinel process (all SQL in src/memory/memorySql.ts is
- * db-handle-parameterized for exactly this reason). It NEVER runs migrations:
- * the main process owns the schema. When the `memories` table is absent every
- * tool returns a friendly text error instead of crashing.
+ * Opens its OWN pg Pool to the Postgres database owned by the main Sentinel
+ * process (all SQL in src/memory/memorySql.ts is `Queryable`-parameterized for
+ * exactly this reason). It NEVER runs migrations: the main process owns the
+ * schema. When the `memories` table is absent every tool returns a friendly
+ * text error instead of crashing. It does NOT call getPool()/initDb() — that is
+ * the main app's singleton; this subprocess binds its own pool to the same DB.
  */
 
-import Database from "better-sqlite3";
+import pg from "pg";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { isFtsAvailable, type Queryable } from "../state/db.js";
 import {
   insertFact,
   searchCandidates,
@@ -41,40 +43,43 @@ import { entityDigest, orgDigest } from "../memory/digest.js";
 import { isEntityGraphEnabled, linkFactEntities, retractFactEdges } from "../memory/entityLink.js";
 import { assertEnv } from "./requireEnv.js";
 
+const { Pool } = pg;
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Validate required env up front so a misconfigured server fails with a clear
-// named message instead of opening a database at path `undefined`.
-assertEnv(["SQLITE_DB_PATH"], process.env, { serverName: "memory MCP server" });
+// named message instead of opening a database against `undefined`.
+assertEnv(["DATABASE_URL"], process.env, { serverName: "memory MCP server" });
 
-const db = new Database(process.env.SQLITE_DB_PATH!);
-// Match the main process's concurrency settings (src/state/db.ts): WAL is
-// idempotent (persisted in the file), and busy_timeout waits out brief
-// checkpoint lock contention instead of throwing SQLITE_BUSY.
-db.pragma("journal_mode = WAL");
-db.pragma("busy_timeout = 5000");
+// Open this subprocess's OWN pool (NOT the main app's getPool() singleton). The
+// main process owns the schema/migrations — we only read/write against it.
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+// A pool 'error' on an idle client must never crash the server process.
+pool.on("error", (err) => {
+  console.error("memory MCP idle pg client error (non-fatal):", err);
+});
 
-// Startup guard — NO migrations here: the main process owns the schema. When
-// it has never run against this file, every tool reports that instead of
-// crashing the server (MCP servers are spawned fresh per request, so
-// a one-time startup check is sufficient).
-const schemaReady =
-  db
-    .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='memories'`)
-    .get() !== undefined;
+// Startup guards — NO migrations here: the main process owns the schema. When
+// it has never run against this database, every tool reports that instead of
+// crashing the server. These are populated once in main() before the server
+// accepts requests (MCP servers are spawned fresh per request, so a one-time
+// startup check is sufficient).
+let schemaReady = false;
+let entitiesReady = false;
 
 const UNINITIALIZED_MSG =
   "memory store not initialized — run the Sentinel bot once to create the schema";
 
-// Company-brain entity graph guard (separate from `memories`): the brain tools
-// degrade independently if the entity tables are absent.
-const entitiesReady =
-  db
-    .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='entities'`)
-    .get() !== undefined;
-
 const ENTITY_UNINITIALIZED_MSG =
   "entity graph not initialized — run the Sentinel bot once to create the schema";
+
+/** True when `table` exists in the current database. */
+async function tableExists(q: Queryable, table: string): Promise<boolean> {
+  const row = (await q.query(`SELECT to_regclass($1) AS reg`, [table])).rows[0] as
+    | { reg: string | null }
+    | undefined;
+  return row?.reg != null;
+}
 
 const CATEGORIES = [
   "decision",
@@ -104,10 +109,10 @@ function jsonResult(payload: unknown): ToolText {
  * Wraps a tool body with the uninitialized-schema guard and a catch-all that
  * turns any thrown error into a text error message (never crash the server).
  */
-function guarded(body: () => ToolText): ToolText {
+async function guarded(body: () => Promise<ToolText>): Promise<ToolText> {
   if (!schemaReady) return textResult(UNINITIALIZED_MSG);
   try {
-    return body();
+    return await body();
   } catch (err) {
     return textResult(
       `memory tool error: ${err instanceof Error ? err.message : String(err)}`
@@ -116,10 +121,10 @@ function guarded(body: () => ToolText): ToolText {
 }
 
 /** As {@link guarded}, but gated on the entity-graph tables. */
-function guardedEntity(body: () => ToolText): ToolText {
+async function guardedEntity(body: () => Promise<ToolText>): Promise<ToolText> {
   if (!entitiesReady) return textResult(ENTITY_UNINITIALIZED_MSG);
   try {
-    return body();
+    return await body();
   } catch (err) {
     return textResult(
       `entity tool error: ${err instanceof Error ? err.message : String(err)}`
@@ -133,13 +138,13 @@ function guardedEntity(body: () => ToolText): ToolText {
  * `includeSensitive` — mirroring memory_search, so the entity tools don't leak
  * sensitive text to the model on an ordinary profile lookup.
  */
-function entityFactsPayload(
+async function entityFactsPayload(
   entityId: number,
   limit: number,
   includeSensitive = false
-): Record<string, unknown>[] {
-  const ids = getEntityMemoryIds(db, entityId);
-  const rows = getMemoriesByIds(db, ids)
+): Promise<Record<string, unknown>[]> {
+  const ids = await getEntityMemoryIds(pool, entityId);
+  const rows = (await getMemoriesByIds(pool, ids))
     .filter((r) => (includeSensitive || r.sensitivity !== "sensitive") && viewerCanSee(r))
     .sort((a, b) => (a.assertedAt ?? a.createdAt) < (b.assertedAt ?? b.createdAt) ? 1 : -1)
     .slice(0, limit);
@@ -197,13 +202,29 @@ const INACTIVE_FIELDS = `m.id, m.text, m.category, m.source_type, m.source_label
    m.asserted_at, m.created_at, m.confidence, m.status, m.superseded_by`;
 
 /**
+ * Extracts the bare significant tokens from a sanitized FTS query string (the
+ * `"a" OR "b"` form produced by sanitizeFtsQuery).
+ */
+function extractTokens(ftsQuery: string): string[] {
+  const quoted = [...ftsQuery.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  if (quoted.length > 0) return quoted;
+  return ftsQuery.split(/\s+/).filter((t) => t && !/^(AND|OR|NOT)$/i.test(t));
+}
+
+/**
  * Superseded/forgotten rows matching the (sanitized) query — needed so
  * forget/supersede flows can locate records that are no longer active.
- * Status-only updates don't touch the FTS index, so retired rows are still
- * MATCHable; falls back to a LIKE scan when FTS is unavailable.
+ * Tiered like searchCandidates (pg_search BM25 → portable ts_rank → ILIKE),
+ * but scoped to `status != 'active'` rows. Never throws for full-text reasons:
+ * any tier failure degrades to the next.
  */
-function searchInactive(ftsQuery: string, limit: number): Array<Record<string, unknown>> {
+async function searchInactive(
+  ftsQuery: string,
+  limit: number
+): Promise<Array<Record<string, unknown>>> {
   if (!ftsQuery.trim()) return [];
+  const tokens = extractTokens(ftsQuery);
+  if (tokens.length === 0) return [];
 
   const shape = (r: InactiveDbRow): Record<string, unknown> => ({
     id: r.id,
@@ -218,34 +239,51 @@ function searchInactive(ftsQuery: string, limit: number): Array<Record<string, u
     supersededBy: r.superseded_by,
   });
 
-  try {
-    const rows = db
-      .prepare(
+  // 1. pg_search BM25 (ParadeDB only)
+  if (isFtsAvailable()) {
+    try {
+      const rows = (await pool.query(
         `SELECT ${INACTIVE_FIELDS}
-         FROM memories_fts
-         JOIN memories m ON m.id = memories_fts.rowid
-         WHERE memories_fts MATCH ? AND m.status != 'active'
-         ORDER BY bm25(memories_fts)
-         LIMIT ?`
-      )
-      .all(ftsQuery, limit) as InactiveDbRow[];
-    return rows.map(shape);
-  } catch {
-    // FTS unavailable — degrade to a LIKE scan over the quoted tokens.
+         FROM memories m
+         WHERE m.id @@@ $1 AND m.status != 'active'
+         ORDER BY paradedb.score(m.id) DESC
+         LIMIT $2`,
+        [tokens.join(" "), limit]
+      )).rows as InactiveDbRow[];
+      return rows.map(shape);
+    } catch {
+      // pg_search query shape mismatch — fall back to ts_rank.
+    }
   }
 
-  const tokens = [...ftsQuery.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
-  if (tokens.length === 0) return [];
-  const conditions = tokens.map(() => `m.text LIKE ?`).join(" OR ");
-  const rows = db
-    .prepare(
+  // 2. Portable Postgres full-text (works on any PG incl. ParadeDB)
+  try {
+    const tsquery = tokens.join(" | ");
+    const rows = (await pool.query(
       `SELECT ${INACTIVE_FIELDS}
        FROM memories m
-       WHERE m.status != 'active' AND (${conditions})
-       ORDER BY m.updated_at DESC, m.id DESC
-       LIMIT ?`
-    )
-    .all(...tokens.map((t) => `%${t}%`), limit) as InactiveDbRow[];
+       WHERE m.status != 'active' AND m.fts @@ to_tsquery('english', $1)
+       ORDER BY ts_rank(m.fts, to_tsquery('english', $1)) DESC
+       LIMIT $2`,
+      [tsquery, limit]
+    )).rows as InactiveDbRow[];
+    if (rows.length > 0) return rows.map(shape);
+  } catch {
+    // FTS unavailable — degrade to an ILIKE scan over the tokens.
+  }
+
+  // 3. ILIKE OR-scan (last resort), ranked by recency.
+  const conditions = tokens.map((_t, i) => `m.text ILIKE $${i + 1}`).join(" OR ");
+  const params: unknown[] = tokens.map((t) => `%${t}%`);
+  params.push(limit);
+  const rows = (await pool.query(
+    `SELECT ${INACTIVE_FIELDS}
+     FROM memories m
+     WHERE m.status != 'active' AND (${conditions})
+     ORDER BY m.updated_at DESC, m.id DESC
+     LIMIT $${tokens.length + 1}`,
+    params
+  )).rows as InactiveDbRow[];
   return rows.map(shape);
 }
 
@@ -265,9 +303,9 @@ server.tool(
     include_sensitive: z.boolean().default(false).describe("Include HR/comp/legal/medical-sensitive facts (excluded by default; set true to deliberately retrieve them)"),
   },
   async ({ query, limit, include_inactive, include_sensitive }) =>
-    guarded(() => {
+    guarded(async () => {
       const ftsQuery = sanitizeFtsQuery(query);
-      const candidates = searchCandidates(db, ftsQuery).filter(
+      const candidates = (await searchCandidates(pool, ftsQuery)).filter(
         (c) => (include_sensitive || c.sensitivity !== "sensitive") && viewerCanSee(c)
       );
       const ranked = rankMemories(candidates, new Date(), limit);
@@ -277,7 +315,7 @@ server.tool(
         results: ranked.map(shapeRow),
       };
       if (include_inactive) {
-        const inactive = searchInactive(ftsQuery, limit);
+        const inactive = await searchInactive(ftsQuery, limit);
         payload.inactiveCount = inactive.length;
         payload.inactive = inactive;
       }
@@ -299,8 +337,8 @@ server.tool(
       .describe("Set 'sensitive' for compensation, HR/performance, legal, or medical facts — they are then excluded from ambient recall and need explicit retrieval"),
   },
   async ({ text, category, entities, sensitivity }) =>
-    guarded(() => {
-      const result = insertFact(db, {
+    guarded(async () => {
+      const result = await insertFact(pool, {
         text,
         category,
         entities,
@@ -315,12 +353,12 @@ server.tool(
       let linked = 0;
       if (isEntityGraphEnabled()) {
         try {
-          linked = linkFactEntities(db, result.id, {
+          linked = (await linkFactEntities(pool, result.id, {
             text,
             category,
             entities,
             sourceType: "manual",
-          }).linked;
+          })).linked;
         } catch (err) {
           /* best-effort — entity linking must not fail a store */
           void err;
@@ -344,16 +382,17 @@ server.tool(
     id: z.number().describe("The memory id (from memory_search results)"),
   },
   async ({ id }) =>
-    guarded(() => {
-      const row = db
-        .prepare(`SELECT text, status FROM memories WHERE id = ?`)
-        .get(id) as { text: string; status: string } | undefined;
+    guarded(async () => {
+      const row = (await pool.query(
+        `SELECT text, status FROM memories WHERE id = $1`,
+        [id]
+      )).rows[0] as { text: string; status: string } | undefined;
       if (!row) return textResult(`memory ${id} not found`);
 
-      forgetMemory(db, id);
+      await forgetMemory(pool, id);
       // Withdraw the org-graph edges this fact contributed so a forgotten fact
       // can't keep a stale ownership/role edge alive.
-      if (isEntityGraphEnabled()) retractFactEdges(db, id);
+      if (isEntityGraphEnabled()) await retractFactEdges(pool, id);
       return jsonResult({
         forgotten: true,
         id,
@@ -371,14 +410,13 @@ server.tool(
     source_ref: z.string().describe("The source reference shared by the records (e.g., a Gmail message id or Meet conference id)"),
   },
   async ({ source_ref }) =>
-    guarded(() => {
-      const info = db
-        .prepare(
-          `UPDATE memories SET status = 'forgotten', updated_at = ?
-           WHERE source_ref = ? AND status = 'active'`
-        )
-        .run(new Date().toISOString(), source_ref);
-      return jsonResult({ sourceRef: source_ref, forgottenCount: info.changes });
+    guarded(async () => {
+      const info = await pool.query(
+        `UPDATE memories SET status = 'forgotten', updated_at = $1
+         WHERE source_ref = $2 AND status = 'active'`,
+        [new Date().toISOString(), source_ref]
+      );
+      return jsonResult({ sourceRef: source_ref, forgottenCount: info.rowCount ?? 0 });
     })
 );
 
@@ -392,13 +430,14 @@ server.tool(
     category: z.enum(CATEGORIES).optional().describe("Category for the new fact (defaults to the old record's category)"),
   },
   async ({ old_id, new_text, category }) =>
-    guarded(() => {
-      const old = db
-        .prepare(`SELECT text, category FROM memories WHERE id = ?`)
-        .get(old_id) as { text: string; category: MemoryCategory } | undefined;
+    guarded(async () => {
+      const old = (await pool.query(
+        `SELECT text, category FROM memories WHERE id = $1`,
+        [old_id]
+      )).rows[0] as { text: string; category: MemoryCategory } | undefined;
       if (!old) return textResult(`memory ${old_id} not found`);
 
-      const result = supersedeMemory(db, old_id, {
+      const result = await supersedeMemory(pool, old_id, {
         text: new_text,
         category: category ?? old.category,
         sourceType: "manual",
@@ -412,7 +451,7 @@ server.tool(
       // The old fact is no longer true, so withdraw the org-graph edges it
       // derived — otherwise a corrected ownership leaves the stale edge active
       // and org_lookup reports both the old and new owner.
-      if (superseded && isEntityGraphEnabled()) retractFactEdges(db, old_id);
+      if (superseded && isEntityGraphEnabled()) await retractFactEdges(pool, old_id);
       return jsonResult({
         oldId: old_id,
         oldText: old.text,
@@ -433,8 +472,8 @@ server.tool(
     limit: z.number().default(10).describe("Maximum results (default: 10)"),
   },
   async ({ limit }) =>
-    guarded(() => {
-      const rows = recentMemories(db, limit);
+    guarded(async () => {
+      const rows = await recentMemories(pool, limit);
       return jsonResult({
         resultCount: rows.length,
         results: rows.map(shapeRow),
@@ -453,16 +492,19 @@ server.tool(
     limit: z.number().default(8).describe("Maximum results (default: 8)"),
   },
   async ({ query, limit }) =>
-    guardedEntity(() => {
-      const mentioned = resolveQueryEntities(db, query, limit);
-      return jsonResult({
-        resultCount: mentioned.length,
-        results: mentioned.map((m) => ({
+    guardedEntity(async () => {
+      const mentioned = await resolveQueryEntities(pool, query, limit);
+      const results = await Promise.all(
+        mentioned.map(async (m) => ({
           entityId: m.entityId,
           name: m.name,
           type: m.type,
-          factCount: getEntityMemoryIds(db, m.entityId).length,
-        })),
+          factCount: (await getEntityMemoryIds(pool, m.entityId)).length,
+        }))
+      );
+      return jsonResult({
+        resultCount: mentioned.length,
+        results,
       });
     })
 );
@@ -477,15 +519,15 @@ server.tool(
     include_sensitive: z.boolean().default(false).describe("Include HR/comp/legal/medical-sensitive facts (excluded by default)"),
   },
   async ({ entity_id, fact_limit, include_sensitive }) =>
-    guardedEntity(() => {
-      const e = getEntityById(db, entity_id);
+    guardedEntity(async () => {
+      const e = await getEntityById(pool, entity_id);
       if (!e || e.status !== "active") return textResult(`entity ${entity_id} not found`);
       return jsonResult({
         entityId: e.id,
         name: e.canonicalName,
         type: e.type,
         aliases: e.aliases,
-        keyFacts: entityFactsPayload(e.id, fact_limit, include_sensitive),
+        keyFacts: await entityFactsPayload(e.id, fact_limit, include_sensitive),
       });
     })
 );
@@ -500,8 +542,8 @@ server.tool(
     include_sensitive: z.boolean().default(false).describe("Include HR/comp/legal/medical-sensitive facts (excluded by default)"),
   },
   async ({ entity_id, limit, include_sensitive }) =>
-    guardedEntity(() => {
-      const facts = entityFactsPayload(entity_id, limit, include_sensitive);
+    guardedEntity(async () => {
+      const facts = await entityFactsPayload(entity_id, limit, include_sensitive);
       return jsonResult({ entityId: entity_id, resultCount: facts.length, results: facts });
     })
 );
@@ -514,10 +556,10 @@ server.tool(
     team_id: z.number().describe("Team entity id (from entity_search)"),
   },
   async ({ team_id }) =>
-    guardedEntity(() => {
-      const team = getEntityById(db, team_id);
+    guardedEntity(async () => {
+      const team = await getEntityById(pool, team_id);
       if (!team || team.status !== "active") return textResult(`team ${team_id} not found`);
-      const roster = getTeamRoster(db, team_id);
+      const roster = await getTeamRoster(pool, team_id);
       return jsonResult({ team: { entityId: team.id, name: team.canonicalName }, ...roster });
     })
 );
@@ -533,8 +575,8 @@ server.tool(
       .describe("Relation to follow from the source entity"),
   },
   async ({ entity_id, relation }) =>
-    guardedEntity(() => {
-      const related = getRelatedEntities(db, entity_id, relation as EntityRelation);
+    guardedEntity(async () => {
+      const related = await getRelatedEntities(pool, entity_id, relation as EntityRelation);
       return jsonResult({
         entityId: entity_id,
         relation,
@@ -558,8 +600,8 @@ server.tool(
     days: z.number().default(7).describe("Look-back window in days (default: 7)"),
   },
   async ({ entity_id, days }) =>
-    guardedEntity(() => {
-      const d = entityDigest(db, entity_id, Date.now() - days * DAY_MS, viewer ?? undefined);
+    guardedEntity(async () => {
+      const d = await entityDigest(pool, entity_id, Date.now() - days * DAY_MS, viewer ?? undefined);
       if (!d) return textResult(`entity ${entity_id} not found`);
       return jsonResult(d);
     })
@@ -574,7 +616,9 @@ server.tool(
     limit: z.number().default(30).describe("Maximum facts (default: 30)"),
   },
   async ({ days, limit }) =>
-    guardedEntity(() => jsonResult(orgDigest(db, Date.now() - days * DAY_MS, viewer ?? undefined, limit)))
+    guardedEntity(async () =>
+      jsonResult(await orgDigest(pool, Date.now() - days * DAY_MS, viewer ?? undefined, limit))
+    )
 );
 
 // Tool: right-to-be-forgotten for an entity
@@ -586,22 +630,40 @@ server.tool(
     reason: z.string().optional().describe("Optional note for the audit trail (e.g., 'left the company')"),
   },
   async ({ entity_id, reason }) =>
-    guardedEntity(() => {
-      const e = getEntityById(db, entity_id);
+    guardedEntity(async () => {
+      const e = await getEntityById(pool, entity_id);
       if (!e) return textResult(`entity ${entity_id} not found`);
-      const forgottenCount = forgetEntityMemories(db, entity_id);
-      addEntityExclusion(db, entity_id, reason, "mcp");
+      const forgottenCount = await forgetEntityMemories(pool, entity_id);
+      await addEntityExclusion(pool, entity_id, reason, "mcp");
       return jsonResult({ entityId: entity_id, name: e.canonicalName, forgottenCount, excluded: true });
     })
 );
 
 // Start server
 async function main() {
+  // Startup schema guards — NO migrations here: the main process owns the
+  // schema. When it has never run against this database, the tools report that
+  // instead of crashing (a one-time startup check; servers spawn fresh per req).
+  schemaReady = await tableExists(pool, "memories");
+  entitiesReady = await tableExists(pool, "entities");
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
 
-main().catch((err) => {
+// Close the pool on shutdown so the subprocess doesn't leak connections.
+async function shutdown(): Promise<void> {
+  try {
+    await pool.end();
+  } catch {
+    /* ignore — process is exiting */
+  }
+}
+process.on("SIGINT", () => void shutdown().finally(() => process.exit(0)));
+process.on("SIGTERM", () => void shutdown().finally(() => process.exit(0)));
+
+main().catch(async (err) => {
   console.error("Memory MCP server fatal error:", err);
+  await shutdown();
   process.exit(1);
 });

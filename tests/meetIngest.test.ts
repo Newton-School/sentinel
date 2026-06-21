@@ -63,7 +63,7 @@ async function loadMeetIngest(opts: {
   extractJson?: ReturnType<typeof vi.fn>;
 } = {}) {
   vi.doMock("../src/config.js", () => ({
-    config: { SQLITE_DB_PATH: ":memory:", LOG_LEVEL: "silent" },
+    config: { DATABASE_URL: process.env.DATABASE_URL, PG_POOL_MAX: 5, LOG_LEVEL: "silent" },
   }));
   const extractFacts = opts.extractFacts ?? vi.fn(async () => []);
   const extractJson = opts.extractJson ?? vi.fn(async () => null);
@@ -71,9 +71,12 @@ async function loadMeetIngest(opts: {
   vi.doMock("../src/llm/openaiClient.js", () => ({ extractJson }));
 
   const mod = await import("../src/memory/meetIngest.js");
-  const { getDb } = await import("../src/state/db.js");
+  const { initDb, getPool } = await import("../src/state/db.js");
+  await initDb();
+  const { resetTestDb } = await import("./helpers/pgTest.js");
+  await resetTestDb();
   const sql = await import("../src/memory/memorySql.js");
-  return { runMeetIngest: mod.runMeetIngest, extractFacts, extractJson, getDb, sql };
+  return { runMeetIngest: mod.runMeetIngest, extractFacts, extractJson, getDb: getPool, sql };
 }
 
 describe("runMeetIngest", () => {
@@ -83,7 +86,7 @@ describe("runMeetIngest", () => {
 
   afterEach(async () => {
     const { closeDb } = await import("../src/state/db.js");
-    closeDb();
+    await closeDb();
   });
 
   it("initializes the cursor to now−24h (ISO), saves it, and filters on it", async () => {
@@ -92,7 +95,7 @@ describe("runMeetIngest", () => {
 
     await runMeetIngest({ meetClient, apiKey: "sk-test", now });
 
-    expect(sql.getCursor(getDb(), "meet")).toBe(INIT_CURSOR);
+    expect(await sql.getCursor(getDb(), "meet")).toBe(INIT_CURSOR);
     expect(meetClient.listConferenceRecords).toHaveBeenCalledWith(
       `end_time>"${INIT_CURSOR}"`
     );
@@ -100,7 +103,7 @@ describe("runMeetIngest", () => {
 
   it("reuses an existing cursor instead of re-initializing", async () => {
     const { runMeetIngest, getDb, sql } = await loadMeetIngest();
-    sql.setCursor(getDb(), "meet", "2026-06-11T00:00:00.000Z");
+    await sql.setCursor(getDb(), "meet", "2026-06-11T00:00:00.000Z");
     const meetClient = fakeMeetClient();
 
     await runMeetIngest({ meetClient, apiKey: "sk-test", now });
@@ -122,10 +125,10 @@ describe("runMeetIngest", () => {
     await runMeetIngest({ meetClient, apiKey: "sk-test", now });
 
     expect(meetClient.listTranscripts).not.toHaveBeenCalled();
-    expect(sql.isIngested(getDb(), "meet:fresh")).toBe(false);
-    expect(sql.isIngested(getDb(), "meet:open")).toBe(false);
+    expect(await sql.isIngested(getDb(), "meet:fresh")).toBe(false);
+    expect(await sql.isIngested(getDb(), "meet:open")).toBe(false);
     // Cursor stays at the freshly-initialized value.
-    expect(sql.getCursor(getDb(), "meet")).toBe(INIT_CURSOR);
+    expect(await sql.getCursor(getDb(), "meet")).toBe(INIT_CURSOR);
   });
 
   it("processes a conference ended exactly 15 min ago (boundary included)", async () => {
@@ -139,7 +142,7 @@ describe("runMeetIngest", () => {
     await runMeetIngest({ meetClient, apiKey: "sk-test", now });
 
     expect(meetClient.listTranscripts).toHaveBeenCalledTimes(1);
-    expect(sql.isIngested(getDb(), "meet:boundary")).toBe(true);
+    expect(await sql.isIngested(getDb(), "meet:boundary")).toBe(true);
   });
 
   it("processes at most 3 conferences per tick, deferring the rest", async () => {
@@ -156,13 +159,13 @@ describe("runMeetIngest", () => {
     await runMeetIngest({ meetClient, apiKey: "sk-test", now });
 
     expect(meetClient.listTranscripts).toHaveBeenCalledTimes(3);
-    expect(sql.isIngested(getDb(), "meet:r1")).toBe(true);
-    expect(sql.isIngested(getDb(), "meet:r2")).toBe(true);
-    expect(sql.isIngested(getDb(), "meet:r3")).toBe(true);
+    expect(await sql.isIngested(getDb(), "meet:r1")).toBe(true);
+    expect(await sql.isIngested(getDb(), "meet:r2")).toBe(true);
+    expect(await sql.isIngested(getDb(), "meet:r3")).toBe(true);
     // The 4th is deferred — unmarked, and the cursor stops before it so the
     // next tick's filter re-lists it.
-    expect(sql.isIngested(getDb(), "meet:r4")).toBe(false);
-    expect(sql.getCursor(getDb(), "meet")).toBe("2026-06-10T15:00:00Z");
+    expect(await sql.isIngested(getDb(), "meet:r4")).toBe(false);
+    expect(await sql.getCursor(getDb(), "meet")).toBe("2026-06-10T15:00:00Z");
   });
 
   it("marks a transcript-less conference ingested (never retried forever), no facts", async () => {
@@ -176,13 +179,13 @@ describe("runMeetIngest", () => {
 
     await runMeetIngest({ meetClient, apiKey: "sk-test", now });
 
-    expect(sql.isIngested(getDb(), "meet:silent")).toBe(true);
+    expect(await sql.isIngested(getDb(), "meet:silent")).toBe(true);
     expect(extractFacts).not.toHaveBeenCalled();
-    expect(sql.getCursor(getDb(), "meet")).toBe("2026-06-10T13:00:00Z");
-    const count = getDb()
-      .prepare("SELECT COUNT(*) AS n FROM memories")
-      .get() as { n: number };
-    expect(count.n).toBe(0);
+    expect(await sql.getCursor(getDb(), "meet")).toBe("2026-06-10T13:00:00Z");
+    const count = (
+      await getDb().query("SELECT COUNT(*) AS n FROM memories")
+    ).rows[0] as { n: number | string };
+    expect(Number(count.n)).toBe(0);
   });
 
   it("happy path: inserts speaker-attributed facts with meeting provenance plus a summary fact", async () => {
@@ -226,12 +229,12 @@ describe("runMeetIngest", () => {
     );
     expect(input.apiKey).toBe("sk-test");
 
-    const rows = getDb()
-      .prepare(
+    const rows = (
+      await getDb().query(
         `SELECT text, category, source_type, source_ref, source_label, confidence, asserted_at
          FROM memories ORDER BY id`
       )
-      .all() as Array<{
+    ).rows as Array<{
       text: string;
       category: string;
       source_type: string;
@@ -268,8 +271,8 @@ describe("runMeetIngest", () => {
     );
     expect((summaryArgs.user as string).length).toBeLessThanOrEqual(4000);
 
-    expect(sql.isIngested(getDb(), "meet:rec1")).toBe(true);
-    expect(sql.getCursor(getDb(), "meet")).toBe("2026-06-10T13:00:00Z");
+    expect(await sql.isIngested(getDb(), "meet:rec1")).toBe(true);
+    expect(await sql.getCursor(getDb(), "meet")).toBe("2026-06-10T13:00:00Z");
   });
 
   it("skips the summary when extraction produced zero facts (still marks + advances)", async () => {
@@ -295,12 +298,12 @@ describe("runMeetIngest", () => {
     await runMeetIngest({ meetClient, apiKey: "sk-test", now });
 
     expect(extractJson).not.toHaveBeenCalled();
-    const count = getDb()
-      .prepare("SELECT COUNT(*) AS n FROM memories")
-      .get() as { n: number };
-    expect(count.n).toBe(0);
-    expect(sql.isIngested(getDb(), "meet:rec1")).toBe(true);
-    expect(sql.getCursor(getDb(), "meet")).toBe("2026-06-10T13:00:00Z");
+    const count = (
+      await getDb().query("SELECT COUNT(*) AS n FROM memories")
+    ).rows[0] as { n: number | string };
+    expect(Number(count.n)).toBe(0);
+    expect(await sql.isIngested(getDb(), "meet:rec1")).toBe(true);
+    expect(await sql.getCursor(getDb(), "meet")).toBe("2026-06-10T13:00:00Z");
   });
 
   it("mid-conference failure: conference NOT marked, cursor NOT advanced, later records not skipped past", async () => {
@@ -322,11 +325,11 @@ describe("runMeetIngest", () => {
       runMeetIngest({ meetClient, apiKey: "sk-test", now })
     ).resolves.toBeUndefined();
 
-    expect(sql.isIngested(getDb(), "meet:boom")).toBe(false);
-    expect(sql.getCursor(getDb(), "meet")).toBe(INIT_CURSOR);
+    expect(await sql.isIngested(getDb(), "meet:boom")).toBe(false);
+    expect(await sql.getCursor(getDb(), "meet")).toBe(INIT_CURSOR);
     // Processing stops at the failed conference so the cursor can never jump
     // over it — the later record was not processed either.
-    expect(sql.isIngested(getDb(), "meet:after")).toBe(false);
+    expect(await sql.isIngested(getDb(), "meet:after")).toBe(false);
     expect(meetClient.listTranscripts).toHaveBeenCalledTimes(1);
   });
 
@@ -357,19 +360,19 @@ describe("runMeetIngest", () => {
     await runMeetIngest({ meetClient, apiKey: "sk-test", now });
     expect(extractFacts).toHaveBeenCalledTimes(1);
     expect(meetClient.listTranscripts).toHaveBeenCalledTimes(1);
-    expect(sql.getCursor(getDb(), "meet")).toBe("2026-06-10T13:00:00Z");
+    expect(await sql.getCursor(getDb(), "meet")).toBe("2026-06-10T13:00:00Z");
   });
 
   it("purges ingest-dedup rows older than 14 days once per run", async () => {
     const { runMeetIngest, getDb, sql } = await loadMeetIngest();
     const db = getDb();
     const fourteenDaysMs = 14 * 24 * 60 * 60 * 1000;
-    sql.markIngested(db, "meet:ancient", NOW.getTime() - fourteenDaysMs - 1);
-    sql.markIngested(db, "meet:recent", NOW.getTime() - 1000);
+    await sql.markIngested(db, "meet:ancient", NOW.getTime() - fourteenDaysMs - 1);
+    await sql.markIngested(db, "meet:recent", NOW.getTime() - 1000);
 
     await runMeetIngest({ meetClient: fakeMeetClient(), apiKey: "sk-test", now });
 
-    expect(sql.isIngested(db, "meet:ancient")).toBe(false);
-    expect(sql.isIngested(db, "meet:recent")).toBe(true);
+    expect(await sql.isIngested(db, "meet:ancient")).toBe(false);
+    expect(await sql.isIngested(db, "meet:recent")).toBe(true);
   });
 });

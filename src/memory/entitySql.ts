@@ -1,10 +1,12 @@
 /**
  * All SQL for the company-brain entity graph.
  *
- * Like `memorySql.ts`, every function takes a better-sqlite3 `db` handle as its
- * FIRST argument and never calls `getDb()` — the separate-process memory MCP
- * server binds its own handle to the same file. Keep this module free of
- * main-process singletons and config.
+ * Like `memorySql.ts`, every function takes a `Queryable` (the pg Pool, a
+ * transaction client, or the per-request memory MCP server's own pool) as its
+ * FIRST argument and never calls `getPool()` — the separate-process memory MCP
+ * server binds its own pool to the same database. Keep this module free of
+ * main-process singletons and config. Functions that must be atomic take a
+ * `DbPool` instead and open their own transaction via `withTxOn`.
  *
  * Patterns reused verbatim from the memory store:
  *  - asymptotic confidence growth on reinforcement (persona_traits)
@@ -12,7 +14,7 @@
  *  - normalizeForHash for the indexed exact-match key (content_hash)
  */
 
-import type Database from "better-sqlite3";
+import { withTxOn, type DbPool, type Queryable } from "../state/db.js";
 import { normalizeForHash, tokenSet } from "./textMatch.js";
 import { decayedEdgeConfidence, EDGE_DISPLAY_THRESHOLD } from "./edgeDecay.js";
 import type {
@@ -88,6 +90,15 @@ interface EntityDbRow {
   updated_at: string;
 }
 
+/**
+ * All selectable entity columns (excludes the internal `embedding` vector, which
+ * is large and never read back through this mapper — semantic entity resolution
+ * scores it in SQL via pgvector `<=>`).
+ */
+const ENTITY_COLS = `id, type, canonical_name, normalized_name, aliases, slack_user_id,
+  email, metadata, confidence, visibility, status, merged_into, source_ref,
+  created_at, updated_at`;
+
 function parseAliases(raw: string | null): string[] {
   if (!raw) return [];
   try {
@@ -141,17 +152,15 @@ export interface CreateEntityInput {
 }
 
 /** Inserts a new entity. The caller is responsible for resolving first. */
-export function createEntity(db: Database.Database, input: CreateEntityInput): EntityRow {
+export async function createEntity(q: Queryable, input: CreateEntityInput): Promise<EntityRow> {
   const now = (input.now ?? new Date()).toISOString();
-  const row = db
-    .prepare(
-      `INSERT INTO entities (
-         type, canonical_name, normalized_name, aliases, slack_user_id, email,
-         metadata, confidence, visibility, status, source_ref, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
-       RETURNING *`
-    )
-    .get(
+  const row = (await q.query(
+    `INSERT INTO entities (
+       type, canonical_name, normalized_name, aliases, slack_user_id, email,
+       metadata, confidence, visibility, status, source_ref, created_at, updated_at
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', $10, $11, $12)
+     RETURNING ${ENTITY_COLS}`,
+    [
       input.type,
       input.canonicalName,
       normalizeForHash(input.canonicalName),
@@ -163,15 +172,15 @@ export function createEntity(db: Database.Database, input: CreateEntityInput): E
       input.visibility ?? "founders",
       input.sourceRef ?? null,
       now,
-      now
-    ) as EntityDbRow;
+      now,
+    ]
+  )).rows[0] as EntityDbRow;
   return mapEntityRow(row);
 }
 
-export function getEntityById(db: Database.Database, id: number): EntityRow | null {
-  const row = db.prepare(`SELECT * FROM entities WHERE id = ?`).get(id) as
-    | EntityDbRow
-    | undefined;
+export async function getEntityById(q: Queryable, id: number): Promise<EntityRow | null> {
+  const row = (await q.query(`SELECT ${ENTITY_COLS} FROM entities WHERE id = $1`, [id]))
+    .rows[0] as EntityDbRow | undefined;
   return row ? mapEntityRow(row) : null;
 }
 
@@ -181,37 +190,41 @@ export function getEntityById(db: Database.Database, id: number): EntityRow | nu
  * prefilter is permissive (substring) so it never hides a fuzzy match; the
  * resolver does the precise scoring.
  */
-export function getResolutionCandidates(
-  db: Database.Database,
+export async function getResolutionCandidates(
+  q: Queryable,
   input: ResolveInput,
   limit = 50
-): EntityCandidate[] {
+): Promise<EntityCandidate[]> {
   const clauses: string[] = [];
   const params: unknown[] = [];
 
   if (input.slackUserId) {
-    clauses.push(`slack_user_id = ?`);
     params.push(input.slackUserId);
+    clauses.push(`slack_user_id = $${params.length}`);
   }
   if (input.email) {
-    clauses.push(`email = ?`);
     params.push(input.email.toLowerCase());
+    clauses.push(`email = $${params.length}`);
   }
   const tokens = normalizeForHash(input.rawName).split(" ").filter(Boolean);
   for (const t of tokens) {
-    clauses.push(`(normalized_name LIKE ? OR aliases LIKE ?)`);
-    params.push(`%${t}%`, `%${t}%`);
+    const pattern = `%${t}%`;
+    params.push(pattern);
+    const nameIdx = params.length;
+    params.push(pattern);
+    const aliasIdx = params.length;
+    clauses.push(`(normalized_name ILIKE $${nameIdx} OR aliases ILIKE $${aliasIdx})`);
   }
   if (clauses.length === 0) return [];
 
-  const rows = db
-    .prepare(
-      `SELECT * FROM entities
-       WHERE status = 'active' AND (${clauses.join(" OR ")})
-       ORDER BY updated_at DESC, id DESC
-       LIMIT ?`
-    )
-    .all(...params, limit) as EntityDbRow[];
+  params.push(limit);
+  const rows = (await q.query(
+    `SELECT ${ENTITY_COLS} FROM entities
+     WHERE status = 'active' AND (${clauses.join(" OR ")})
+     ORDER BY updated_at DESC, id DESC
+     LIMIT $${params.length}`,
+    params
+  )).rows as EntityDbRow[];
 
   return rows.map((r) => {
     const e = mapEntityRow(r);
@@ -240,15 +253,15 @@ export interface MentionedEntity {
  * ("team", "ops") that would otherwise match every query. Ranked by match
  * span (longer names first), then confidence.
  */
-export function resolveQueryEntities(
-  db: Database.Database,
+export async function resolveQueryEntities(
+  q: Queryable,
   query: string,
   limit = 3
-): MentionedEntity[] {
+): Promise<MentionedEntity[]> {
   const qTokens = tokenSet(normalizeForHash(query));
   if (qTokens.size === 0) return [];
 
-  const candidates = getResolutionCandidates(db, { rawName: query }, 100);
+  const candidates = await getResolutionCandidates(q, { rawName: query }, 100);
 
   const qualifies = (norm: string): number => {
     const t = [...tokenSet(norm)];
@@ -278,47 +291,47 @@ export function resolveQueryEntities(
  * Sets a missing hard key (COALESCE keeps an existing one). Throws on a
  * partial-unique collision — the signal to merge two entities sharing a key.
  */
-export function attachIdentity(
-  db: Database.Database,
+export async function attachIdentity(
+  q: Queryable,
   id: number,
   keys: { slackUserId?: string; email?: string },
   now: Date = new Date()
-): void {
-  db.prepare(
+): Promise<void> {
+  await q.query(
     `UPDATE entities
-       SET slack_user_id = COALESCE(slack_user_id, ?),
-           email = COALESCE(email, ?),
-           updated_at = ?
-     WHERE id = ?`
-  ).run(
-    keys.slackUserId ?? null,
-    keys.email ? keys.email.toLowerCase() : null,
-    now.toISOString(),
-    id
+       SET slack_user_id = COALESCE(slack_user_id, $1),
+           email = COALESCE(email, $2),
+           updated_at = $3
+     WHERE id = $4`,
+    [
+      keys.slackUserId ?? null,
+      keys.email ? keys.email.toLowerCase() : null,
+      now.toISOString(),
+      id,
+    ]
   );
 }
 
 /** Appends a normalized alias if not already present (idempotent). */
-export function addAlias(
-  db: Database.Database,
+export async function addAlias(
+  q: Queryable,
   id: number,
   alias: string,
   now: Date = new Date()
-): void {
+): Promise<void> {
   const norm = normalizeForHash(alias);
   if (!norm) return;
-  const row = db.prepare(`SELECT aliases FROM entities WHERE id = ?`).get(id) as
-    | { aliases: string | null }
-    | undefined;
+  const row = (await q.query(`SELECT aliases FROM entities WHERE id = $1`, [id]))
+    .rows[0] as { aliases: string | null } | undefined;
   if (!row) return;
   const aliases = parseAliases(row.aliases);
   if (aliases.includes(norm)) return;
   aliases.push(norm);
-  db.prepare(`UPDATE entities SET aliases = ?, updated_at = ? WHERE id = ?`).run(
+  await q.query(`UPDATE entities SET aliases = $1, updated_at = $2 WHERE id = $3`, [
     JSON.stringify(aliases),
     now.toISOString(),
-    id
-  );
+    id,
+  ]);
 }
 
 export interface LinkMemoryEntityInput {
@@ -330,16 +343,18 @@ export interface LinkMemoryEntityInput {
 }
 
 /** Links a memory to an entity. Exact (memory, entity, role) dups are ignored. */
-export function linkMemoryEntity(db: Database.Database, link: LinkMemoryEntityInput): void {
-  db.prepare(
-    `INSERT OR IGNORE INTO memory_entities (memory_id, entity_id, role, confidence, created_at)
-     VALUES (?, ?, ?, ?, ?)`
-  ).run(
-    link.memoryId,
-    link.entityId,
-    link.role ?? "mention",
-    link.confidence ?? 0.5,
-    (link.now ?? new Date()).toISOString()
+export async function linkMemoryEntity(q: Queryable, link: LinkMemoryEntityInput): Promise<void> {
+  await q.query(
+    `INSERT INTO memory_entities (memory_id, entity_id, role, confidence, created_at)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (memory_id, entity_id, role) DO NOTHING`,
+    [
+      link.memoryId,
+      link.entityId,
+      link.role ?? "mention",
+      link.confidence ?? 0.5,
+      (link.now ?? new Date()).toISOString(),
+    ]
   );
 }
 
@@ -355,20 +370,24 @@ export interface EntityProfileRow {
 }
 
 /** Count of distinct ACTIVE memories linked to an entity. */
-export function getEntityActiveFactCount(db: Database.Database, entityId: number): number {
-  const row = db
-    .prepare(
-      `SELECT COUNT(DISTINCT me.memory_id) AS n
-       FROM memory_entities me
-       JOIN memories m ON m.id = me.memory_id
-       WHERE me.entity_id = ? AND m.status = 'active'`
-    )
-    .get(entityId) as { n: number };
-  return row.n;
+export async function getEntityActiveFactCount(q: Queryable, entityId: number): Promise<number> {
+  const row = (await q.query(
+    `SELECT COUNT(DISTINCT me.memory_id) AS n
+     FROM memory_entities me
+     JOIN memories m ON m.id = me.memory_id
+     WHERE me.entity_id = $1 AND m.status = 'active'`,
+    [entityId]
+  )).rows[0] as { n: number | string };
+  // COUNT() returns bigint, which pg yields as a string — normalize to number.
+  return Number(row.n);
 }
 
-export function getEntityProfile(db: Database.Database, entityId: number): EntityProfileRow | null {
-  const row = db.prepare(`SELECT * FROM entity_profiles WHERE entity_id = ?`).get(entityId) as
+export async function getEntityProfile(q: Queryable, entityId: number): Promise<EntityProfileRow | null> {
+  const row = (await q.query(
+    `SELECT entity_id, profile_md, source_fact_ids, fact_count, version, model, built_at, updated_at
+     FROM entity_profiles WHERE entity_id = $1`,
+    [entityId]
+  )).rows[0] as
     | {
         entity_id: number;
         profile_md: string;
@@ -401,10 +420,11 @@ export function getEntityProfile(db: Database.Database, entityId: number): Entit
 }
 
 /** The fact count at the last consolidation, for delta-based due detection. */
-export function getProfileCursor(db: Database.Database, entityId: number): number {
-  const row = db
-    .prepare(`SELECT last_fact_count FROM entity_profile_cursors WHERE entity_id = ?`)
-    .get(entityId) as { last_fact_count: number } | undefined;
+export async function getProfileCursor(q: Queryable, entityId: number): Promise<number> {
+  const row = (await q.query(
+    `SELECT last_fact_count FROM entity_profile_cursors WHERE entity_id = $1`,
+    [entityId]
+  )).rows[0] as { last_fact_count: number } | undefined;
   return row?.last_fact_count ?? 0;
 }
 
@@ -422,43 +442,42 @@ export interface UpsertProfileInput {
  * Upserts an entity's dossier and refreshes its consolidation cursor in one
  * transaction. On rebuild, version increments and built_at/updated_at advance.
  */
-export function upsertEntityProfile(db: Database.Database, input: UpsertProfileInput): number {
+export async function upsertEntityProfile(pool: DbPool, input: UpsertProfileInput): Promise<number> {
   const ts = (input.now ?? new Date()).toISOString();
-  const run = db.transaction((): number => {
-    const row = db
-      .prepare(
-        `INSERT INTO entity_profiles (
-           entity_id, profile_md, source_fact_ids, fact_count, version, model, built_at, updated_at
-         ) VALUES (?, ?, ?, ?, 1, ?, ?, ?)
-         ON CONFLICT(entity_id) DO UPDATE SET
-           profile_md = excluded.profile_md,
-           source_fact_ids = excluded.source_fact_ids,
-           fact_count = excluded.fact_count,
-           version = entity_profiles.version + 1,
-           model = excluded.model,
-           built_at = excluded.built_at,
-           updated_at = excluded.updated_at
-         RETURNING version`
-      )
-      .get(
+  return withTxOn(pool, async (client): Promise<number> => {
+    const row = (await client.query(
+      `INSERT INTO entity_profiles (
+         entity_id, profile_md, source_fact_ids, fact_count, version, model, built_at, updated_at
+       ) VALUES ($1, $2, $3, $4, 1, $5, $6, $7)
+       ON CONFLICT (entity_id) DO UPDATE SET
+         profile_md = EXCLUDED.profile_md,
+         source_fact_ids = EXCLUDED.source_fact_ids,
+         fact_count = EXCLUDED.fact_count,
+         version = entity_profiles.version + 1,
+         model = EXCLUDED.model,
+         built_at = EXCLUDED.built_at,
+         updated_at = EXCLUDED.updated_at
+       RETURNING version`,
+      [
         input.entityId,
         input.profileMd,
         JSON.stringify(input.sourceFactIds),
         input.factCount,
         input.model,
         ts,
-        ts
-      ) as { version: number };
+        ts,
+      ]
+    )).rows[0] as { version: number };
 
-    db.prepare(
+    await client.query(
       `INSERT INTO entity_profile_cursors (entity_id, last_fact_count)
-       VALUES (?, ?)
-       ON CONFLICT(entity_id) DO UPDATE SET last_fact_count = excluded.last_fact_count`
-    ).run(input.entityId, input.factCount);
+       VALUES ($1, $2)
+       ON CONFLICT (entity_id) DO UPDATE SET last_fact_count = EXCLUDED.last_fact_count`,
+      [input.entityId, input.factCount]
+    );
 
     return row.version;
   });
-  return run();
 }
 
 /**
@@ -480,41 +499,41 @@ export function upsertEntityProfile(db: Database.Database, input: UpsertProfileI
  * (a `forgotten` tombstone, not a delete), so over-redacting an incidental
  * mention is the safe failure mode — it under-shares, never widens exposure.
  */
-export function forgetEntityMemories(
-  db: Database.Database,
+export async function forgetEntityMemories(
+  q: Queryable,
   entityId: number,
   now: Date = new Date()
-): number {
+): Promise<number> {
   const ids = new Set<number>();
 
   // (1) governance subject
-  for (const r of db
-    .prepare(`SELECT id FROM memories WHERE subject_entity_id = ? AND status = 'active'`)
-    .all(entityId) as Array<{ id: number }>) {
+  for (const r of (await q.query(
+    `SELECT id FROM memories WHERE subject_entity_id = $1 AND status = 'active'`,
+    [entityId]
+  )).rows as Array<{ id: number }>) {
     ids.add(r.id);
   }
 
   // (2) any join-table link to this entity
-  for (const r of db
-    .prepare(
-      `SELECT m.id AS id FROM memories m
-       JOIN memory_entities me ON me.memory_id = m.id
-       WHERE me.entity_id = ? AND m.status = 'active'`
-    )
-    .all(entityId) as Array<{ id: number }>) {
+  for (const r of (await q.query(
+    `SELECT m.id AS id FROM memories m
+     JOIN memory_entities me ON me.memory_id = m.id
+     WHERE me.entity_id = $1 AND m.status = 'active'`,
+    [entityId]
+  )).rows as Array<{ id: number }>) {
     ids.add(r.id);
   }
 
   // (3) name/alias appearing verbatim in active fact text (the keyword leak).
-  const entity = getEntityById(db, entityId);
+  const entity = await getEntityById(q, entityId);
   if (entity) {
     const phrases = [entity.canonicalName, ...entity.aliases]
       .map((p) => normalizeForHash(p))
       .filter((p) => p.split(" ").filter(Boolean).length >= 2);
     if (phrases.length > 0) {
-      for (const r of db
-        .prepare(`SELECT id, text FROM memories WHERE status = 'active'`)
-        .all() as Array<{ id: number; text: string }>) {
+      for (const r of (await q.query(
+        `SELECT id, text FROM memories WHERE status = 'active'`
+      )).rows as Array<{ id: number; text: string }>) {
         const norm = normalizeForHash(r.text);
         if (phrases.some((p) => norm.includes(p))) ids.add(r.id);
       }
@@ -523,62 +542,64 @@ export function forgetEntityMemories(
 
   if (ids.size === 0) return 0;
   const list = [...ids];
-  const placeholders = list.map(() => "?").join(",");
-  return db
-    .prepare(
-      `UPDATE memories SET status = 'forgotten', updated_at = ?
-       WHERE id IN (${placeholders}) AND status = 'active'`
-    )
-    .run(now.toISOString(), ...list).changes;
+  const r = await q.query(
+    `UPDATE memories SET status = 'forgotten', updated_at = $1
+     WHERE id = ANY($2) AND status = 'active'`,
+    [now.toISOString(), list]
+  );
+  return r.rowCount ?? 0;
 }
 
 /** Records (or refreshes) a do-not-store exclusion for an entity. */
-export function addEntityExclusion(
-  db: Database.Database,
+export async function addEntityExclusion(
+  q: Queryable,
   entityId: number,
   reason?: string,
   createdBy?: string,
   now: Date = new Date()
-): void {
-  db.prepare(
+): Promise<void> {
+  await q.query(
     `INSERT INTO entity_exclusions (entity_id, reason, created_by, created_at)
-     VALUES (?, ?, ?, ?)
-     ON CONFLICT(entity_id) DO UPDATE SET
-       reason = excluded.reason, created_by = excluded.created_by, created_at = excluded.created_at`
-  ).run(entityId, reason ?? null, createdBy ?? null, now.toISOString());
-}
-
-/** True when the entity is on the do-not-store exclusion list. */
-export function isEntityExcluded(db: Database.Database, entityId: number): boolean {
-  return (
-    db.prepare(`SELECT 1 FROM entity_exclusions WHERE entity_id = ?`).get(entityId) !== undefined
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (entity_id) DO UPDATE SET
+       reason = EXCLUDED.reason, created_by = EXCLUDED.created_by, created_at = EXCLUDED.created_at`,
+    [entityId, reason ?? null, createdBy ?? null, now.toISOString()]
   );
 }
 
+/** True when the entity is on the do-not-store exclusion list. */
+export async function isEntityExcluded(q: Queryable, entityId: number): Promise<boolean> {
+  const row = (await q.query(`SELECT 1 AS hit FROM entity_exclusions WHERE entity_id = $1`, [entityId]))
+    .rows[0];
+  return row !== undefined;
+}
+
 /** Sets the per-fact governance subject (the one entity a fact is ABOUT). */
-export function setMemorySubject(
-  db: Database.Database,
+export async function setMemorySubject(
+  q: Queryable,
   memoryId: number,
   entityId: number | null
-): void {
-  db.prepare(`UPDATE memories SET subject_entity_id = ? WHERE id = ?`).run(entityId, memoryId);
+): Promise<void> {
+  await q.query(`UPDATE memories SET subject_entity_id = $1 WHERE id = $2`, [entityId, memoryId]);
 }
 
 /** Distinct memory ids linked to an entity (any role). */
-export function getEntityMemoryIds(db: Database.Database, entityId: number): number[] {
-  const rows = db
-    .prepare(`SELECT DISTINCT memory_id FROM memory_entities WHERE entity_id = ? ORDER BY memory_id`)
-    .all(entityId) as Array<{ memory_id: number }>;
+export async function getEntityMemoryIds(q: Queryable, entityId: number): Promise<number[]> {
+  const rows = (await q.query(
+    `SELECT DISTINCT memory_id FROM memory_entities WHERE entity_id = $1 ORDER BY memory_id`,
+    [entityId]
+  )).rows as Array<{ memory_id: number }>;
   return rows.map((r) => r.memory_id);
 }
 
-export function getMemoryEntities(
-  db: Database.Database,
+export async function getMemoryEntities(
+  q: Queryable,
   memoryId: number
-): Array<{ entityId: number; role: MemoryEntityRole; confidence: number }> {
-  const rows = db
-    .prepare(`SELECT entity_id, role, confidence FROM memory_entities WHERE memory_id = ?`)
-    .all(memoryId) as Array<{ entity_id: number; role: MemoryEntityRole; confidence: number }>;
+): Promise<Array<{ entityId: number; role: MemoryEntityRole; confidence: number }>> {
+  const rows = (await q.query(
+    `SELECT entity_id, role, confidence FROM memory_entities WHERE memory_id = $1`,
+    [memoryId]
+  )).rows as Array<{ entity_id: number; role: MemoryEntityRole; confidence: number }>;
   return rows.map((r) => ({ entityId: r.entity_id, role: r.role, confidence: r.confidence }));
 }
 
@@ -598,35 +619,34 @@ export interface UpsertEdgeInput {
  * is greater; evidence_count increments; asserted_at advances to the newest;
  * the edge is reactivated. Returns whether a new edge was created.
  */
-export function upsertEdge(db: Database.Database, edge: UpsertEdgeInput): { id: number; created: boolean } {
+export async function upsertEdge(q: Queryable, edge: UpsertEdgeInput): Promise<{ id: number; created: boolean }> {
   const now = (edge.now ?? new Date()).toISOString();
-  const existing = db
-    .prepare(`SELECT id FROM entity_edges WHERE src_id = ? AND dst_id = ? AND relation = ?`)
-    .get(edge.srcId, edge.dstId, edge.relation) as { id: number } | undefined;
+  const existing = (await q.query(
+    `SELECT id FROM entity_edges WHERE src_id = $1 AND dst_id = $2 AND relation = $3`,
+    [edge.srcId, edge.dstId, edge.relation]
+  )).rows[0] as { id: number } | undefined;
 
-  const row = db
-    .prepare(
-      `INSERT INTO entity_edges (
-         src_id, dst_id, relation, confidence, evidence_count, provenance,
-         asserted_at, status, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, 1, ?, ?, 'active', ?, ?)
-       ON CONFLICT(src_id, dst_id, relation) DO UPDATE SET
-         confidence = MAX(
-           MIN(entity_edges.confidence + (1 - entity_edges.confidence) * ${EDGE_CONFIDENCE_GROWTH}, ${EDGE_CONFIDENCE_CAP}),
-           excluded.confidence
-         ),
-         evidence_count = entity_edges.evidence_count + 1,
-         provenance = COALESCE(excluded.provenance, entity_edges.provenance),
-         asserted_at = CASE
-           WHEN excluded.asserted_at IS NULL THEN entity_edges.asserted_at
-           WHEN entity_edges.asserted_at IS NULL THEN excluded.asserted_at
-           WHEN excluded.asserted_at > entity_edges.asserted_at THEN excluded.asserted_at
-           ELSE entity_edges.asserted_at END,
-         status = 'active',
-         updated_at = excluded.updated_at
-       RETURNING id`
-    )
-    .get(
+  const row = (await q.query(
+    `INSERT INTO entity_edges (
+       src_id, dst_id, relation, confidence, evidence_count, provenance,
+       asserted_at, status, created_at, updated_at
+     ) VALUES ($1, $2, $3, $4, 1, $5, $6, 'active', $7, $8)
+     ON CONFLICT (src_id, dst_id, relation) DO UPDATE SET
+       confidence = GREATEST(
+         LEAST(entity_edges.confidence + (1 - entity_edges.confidence) * ${EDGE_CONFIDENCE_GROWTH}, ${EDGE_CONFIDENCE_CAP}),
+         EXCLUDED.confidence
+       ),
+       evidence_count = entity_edges.evidence_count + 1,
+       provenance = COALESCE(EXCLUDED.provenance, entity_edges.provenance),
+       asserted_at = CASE
+         WHEN EXCLUDED.asserted_at IS NULL THEN entity_edges.asserted_at
+         WHEN entity_edges.asserted_at IS NULL THEN EXCLUDED.asserted_at
+         WHEN EXCLUDED.asserted_at > entity_edges.asserted_at THEN EXCLUDED.asserted_at
+         ELSE entity_edges.asserted_at END,
+       status = 'active',
+       updated_at = EXCLUDED.updated_at
+     RETURNING id`,
+    [
       edge.srcId,
       edge.dstId,
       edge.relation,
@@ -634,8 +654,9 @@ export function upsertEdge(db: Database.Database, edge: UpsertEdgeInput): { id: 
       edge.provenance ?? null,
       edge.assertedAt ?? null,
       now,
-      now
-    ) as { id: number };
+      now,
+    ]
+  )).rows[0] as { id: number };
 
   return { id: row.id, created: existing === undefined };
 }
@@ -648,29 +669,30 @@ export function upsertEdge(db: Database.Database, edge: UpsertEdgeInput): { id: 
  * forgotten so a corrected ownership/role doesn't keep pointing at stale data.
  * Returns 1 if an active edge was touched, else 0.
  */
-export function retractEdge(
-  db: Database.Database,
+export async function retractEdge(
+  q: Queryable,
   srcId: number,
   dstId: number,
   relation: EntityRelation,
   now: Date = new Date()
-): number {
-  const existing = db
-    .prepare(
-      `SELECT id, evidence_count FROM entity_edges
-       WHERE src_id = ? AND dst_id = ? AND relation = ? AND status = 'active'`
-    )
-    .get(srcId, dstId, relation) as { id: number; evidence_count: number } | undefined;
+): Promise<number> {
+  const existing = (await q.query(
+    `SELECT id, evidence_count FROM entity_edges
+     WHERE src_id = $1 AND dst_id = $2 AND relation = $3 AND status = 'active'`,
+    [srcId, dstId, relation]
+  )).rows[0] as { id: number; evidence_count: number } | undefined;
   if (!existing) return 0;
 
   if (existing.evidence_count <= 1) {
-    db.prepare(
-      `UPDATE entity_edges SET evidence_count = 0, status = 'superseded', updated_at = ? WHERE id = ?`
-    ).run(now.toISOString(), existing.id);
+    await q.query(
+      `UPDATE entity_edges SET evidence_count = 0, status = 'superseded', updated_at = $1 WHERE id = $2`,
+      [now.toISOString(), existing.id]
+    );
   } else {
-    db.prepare(
-      `UPDATE entity_edges SET evidence_count = evidence_count - 1, updated_at = ? WHERE id = ?`
-    ).run(now.toISOString(), existing.id);
+    await q.query(
+      `UPDATE entity_edges SET evidence_count = evidence_count - 1, updated_at = $1 WHERE id = $2`,
+      [now.toISOString(), existing.id]
+    );
   }
   return 1;
 }
@@ -723,27 +745,34 @@ export interface EntityRef {
  * and members (`member_of` edges into the team), filtered to edges whose
  * read-time-decayed confidence clears the display threshold.
  */
-export function getTeamRoster(
-  db: Database.Database,
+export async function getTeamRoster(
+  q: Queryable,
   teamId: number,
   now: Date = new Date()
-): { lead: EntityRef | null; members: EntityRef[] } {
+): Promise<{ lead: EntityRef | null; members: EntityRef[] }> {
   const display = (e: EntityEdgeRow) =>
     decayedEdgeConfidence(e.confidence, e.updatedAt, now) >= EDGE_DISPLAY_THRESHOLD;
-  const toRef = (id: number): EntityRef | null => {
-    const e = getEntityById(db, id);
+  const toRef = async (id: number): Promise<EntityRef | null> => {
+    const e = await getEntityById(q, id);
     return e ? { entityId: e.id, name: e.canonicalName, type: e.type } : null;
   };
 
-  const leadRef = getEdges(db, { dstId: teamId, relation: "manages", status: "active" })
-    .filter(display)
-    .map((e) => toRef(e.srcId))
-    .find((r): r is EntityRef => r !== null) ?? null;
+  const leadEdges = (await getEdges(q, { dstId: teamId, relation: "manages", status: "active" })).filter(display);
+  let leadRef: EntityRef | null = null;
+  for (const e of leadEdges) {
+    const ref = await toRef(e.srcId);
+    if (ref !== null) {
+      leadRef = ref;
+      break;
+    }
+  }
 
-  const members = getEdges(db, { dstId: teamId, relation: "member_of", status: "active" })
-    .filter(display)
-    .map((e) => toRef(e.srcId))
-    .filter((r): r is EntityRef => r !== null);
+  const memberEdges = (await getEdges(q, { dstId: teamId, relation: "member_of", status: "active" })).filter(display);
+  const members: EntityRef[] = [];
+  for (const e of memberEdges) {
+    const ref = await toRef(e.srcId);
+    if (ref !== null) members.push(ref);
+  }
 
   return { lead: leadRef, members };
 }
@@ -752,33 +781,34 @@ export function getTeamRoster(
  * Entities reachable from `srcId` via an outgoing edge of `relation`, filtered
  * by decayed confidence. Used by org_lookup / "who owns X" tools.
  */
-export function getRelatedEntities(
-  db: Database.Database,
+export async function getRelatedEntities(
+  q: Queryable,
   srcId: number,
   relation: EntityRelation,
   now: Date = new Date()
-): Array<EntityRef & { confidence: number }> {
+): Promise<Array<EntityRef & { confidence: number }>> {
   const out: Array<EntityRef & { confidence: number }> = [];
-  for (const e of getEdges(db, { srcId, relation, status: "active" })) {
+  for (const e of await getEdges(q, { srcId, relation, status: "active" })) {
     const dc = decayedEdgeConfidence(e.confidence, e.updatedAt, now);
     if (dc < EDGE_DISPLAY_THRESHOLD) continue;
-    const ent = getEntityById(db, e.dstId);
+    const ent = await getEntityById(q, e.dstId);
     if (ent) out.push({ entityId: ent.id, name: ent.canonicalName, type: ent.type, confidence: dc });
   }
   return out.sort((a, b) => b.confidence - a.confidence);
 }
 
-export function getEdges(db: Database.Database, filter: EdgeFilter = {}): EntityEdgeRow[] {
+export async function getEdges(q: Queryable, filter: EdgeFilter = {}): Promise<EntityEdgeRow[]> {
   const clauses: string[] = [];
   const params: unknown[] = [];
-  if (filter.srcId !== undefined) { clauses.push("src_id = ?"); params.push(filter.srcId); }
-  if (filter.dstId !== undefined) { clauses.push("dst_id = ?"); params.push(filter.dstId); }
-  if (filter.relation !== undefined) { clauses.push("relation = ?"); params.push(filter.relation); }
-  if (filter.status !== undefined) { clauses.push("status = ?"); params.push(filter.status); }
+  if (filter.srcId !== undefined) { params.push(filter.srcId); clauses.push(`src_id = $${params.length}`); }
+  if (filter.dstId !== undefined) { params.push(filter.dstId); clauses.push(`dst_id = $${params.length}`); }
+  if (filter.relation !== undefined) { params.push(filter.relation); clauses.push(`relation = $${params.length}`); }
+  if (filter.status !== undefined) { params.push(filter.status); clauses.push(`status = $${params.length}`); }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  const rows = db
-    .prepare(`SELECT * FROM entity_edges ${where} ORDER BY id`)
-    .all(...params) as EdgeDbRow[];
+  const rows = (await q.query(
+    `SELECT * FROM entity_edges ${where} ORDER BY id`,
+    params
+  )).rows as EdgeDbRow[];
   return rows.map(mapEdgeRow);
 }
 
@@ -792,96 +822,99 @@ export function getEdges(db: Database.Database, filter: EdgeFilter = {}): Entity
  * The loser is tombstoned BEFORE its keys are copied so the active partial-
  * unique indexes never transiently collide.
  */
-export function mergeEntities(
-  db: Database.Database,
+export async function mergeEntities(
+  pool: DbPool,
   loserId: number,
   winnerId: number,
   now: Date = new Date()
-): void {
+): Promise<void> {
   if (loserId === winnerId) {
     throw new Error("mergeEntities: cannot merge an entity into itself");
   }
   const ts = now.toISOString();
 
-  const run = db.transaction(() => {
-    db.pragma("defer_foreign_keys = ON");
+  await withTxOn(pool, async (client) => {
+    await client.query("SET CONSTRAINTS ALL DEFERRED");
 
-    const loser = getEntityById(db, loserId);
-    const winner = getEntityById(db, winnerId);
+    const loser = await getEntityById(client, loserId);
+    const winner = await getEntityById(client, winnerId);
     if (!loser) throw new Error(`mergeEntities: loser ${loserId} not found`);
     if (!winner) throw new Error(`mergeEntities: winner ${winnerId} not found`);
 
     // 1. Re-point memory links (ignore PK collisions), then drop loser links.
-    db.prepare(
-      `INSERT OR IGNORE INTO memory_entities (memory_id, entity_id, role, confidence, created_at)
-       SELECT memory_id, ?, role, confidence, created_at FROM memory_entities WHERE entity_id = ?`
-    ).run(winnerId, loserId);
-    db.prepare(`DELETE FROM memory_entities WHERE entity_id = ?`).run(loserId);
+    await client.query(
+      `INSERT INTO memory_entities (memory_id, entity_id, role, confidence, created_at)
+       SELECT memory_id, $1, role, confidence, created_at FROM memory_entities WHERE entity_id = $2
+       ON CONFLICT (memory_id, entity_id, role) DO NOTHING`,
+      [winnerId, loserId]
+    );
+    await client.query(`DELETE FROM memory_entities WHERE entity_id = $1`, [loserId]);
 
     // 2. Fold edges. For each loser edge, compute its winner-equivalent and
     // either fold into an existing winner edge or re-point the loser edge.
-    const loserEdges = getEdges(db, { srcId: loserId }).concat(getEdges(db, { dstId: loserId }));
+    const loserEdges = (await getEdges(client, { srcId: loserId })).concat(
+      await getEdges(client, { dstId: loserId })
+    );
     for (const e of loserEdges) {
       const newSrc = e.srcId === loserId ? winnerId : e.srcId;
       const newDst = e.dstId === loserId ? winnerId : e.dstId;
       // Drop self-loops the merge would create (e.g. loser→winner edges).
       if (newSrc === newDst) {
-        db.prepare(`DELETE FROM entity_edges WHERE id = ?`).run(e.id);
+        await client.query(`DELETE FROM entity_edges WHERE id = $1`, [e.id]);
         continue;
       }
-      const target = db
-        .prepare(`SELECT id, confidence, evidence_count FROM entity_edges WHERE src_id = ? AND dst_id = ? AND relation = ?`)
-        .get(newSrc, newDst, e.relation) as
-        | { id: number; confidence: number; evidence_count: number }
-        | undefined;
+      const target = (await client.query(
+        `SELECT id, confidence, evidence_count FROM entity_edges WHERE src_id = $1 AND dst_id = $2 AND relation = $3`,
+        [newSrc, newDst, e.relation]
+      )).rows[0] as { id: number; confidence: number; evidence_count: number } | undefined;
       if (target && target.id !== e.id) {
-        db.prepare(
+        await client.query(
           `UPDATE entity_edges
-             SET confidence = MAX(confidence, ?),
-                 evidence_count = evidence_count + ?,
-                 updated_at = ?
-           WHERE id = ?`
-        ).run(e.confidence, e.evidenceCount, ts, target.id);
-        db.prepare(`DELETE FROM entity_edges WHERE id = ?`).run(e.id);
+             SET confidence = GREATEST(confidence, $1),
+                 evidence_count = evidence_count + $2,
+                 updated_at = $3
+           WHERE id = $4`,
+          [e.confidence, e.evidenceCount, ts, target.id]
+        );
+        await client.query(`DELETE FROM entity_edges WHERE id = $1`, [e.id]);
       } else {
-        db.prepare(`UPDATE entity_edges SET src_id = ?, dst_id = ?, updated_at = ? WHERE id = ?`).run(
+        await client.query(`UPDATE entity_edges SET src_id = $1, dst_id = $2, updated_at = $3 WHERE id = $4`, [
           newSrc,
           newDst,
           ts,
-          e.id
-        );
+          e.id,
+        ]);
       }
     }
 
     // 3. Tombstone the loser FIRST (frees its hard keys from the active set).
-    db.prepare(`UPDATE entities SET status = 'merged', merged_into = ?, updated_at = ? WHERE id = ?`).run(
+    await client.query(`UPDATE entities SET status = 'merged', merged_into = $1, updated_at = $2 WHERE id = $3`, [
       winnerId,
       ts,
-      loserId
-    );
+      loserId,
+    ]);
 
     // 4. Union aliases (winner ∪ loser aliases ∪ loser canonical) + copy keys.
     const mergedAliases = new Set<string>(winner.aliases);
     for (const a of loser.aliases) mergedAliases.add(a);
     mergedAliases.add(loser.normalizedName);
     mergedAliases.delete(winner.normalizedName); // winner's own name isn't an alias
-    db.prepare(
+    await client.query(
       `UPDATE entities
-         SET aliases = ?,
-             slack_user_id = COALESCE(slack_user_id, ?),
-             email = COALESCE(email, ?),
-             confidence = MAX(confidence, ?),
-             updated_at = ?
-       WHERE id = ?`
-    ).run(
-      JSON.stringify([...mergedAliases]),
-      loser.slackUserId,
-      loser.email,
-      loser.confidence,
-      ts,
-      winnerId
+         SET aliases = $1,
+             slack_user_id = COALESCE(slack_user_id, $2),
+             email = COALESCE(email, $3),
+             confidence = GREATEST(confidence, $4),
+             updated_at = $5
+       WHERE id = $6`,
+      [
+        JSON.stringify([...mergedAliases]),
+        loser.slackUserId,
+        loser.email,
+        loser.confidence,
+        ts,
+        winnerId,
+      ]
     );
   });
-
-  run();
 }

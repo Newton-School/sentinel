@@ -11,7 +11,7 @@
  * targeted retrieval, so it never surfaces HR/comp/legal/medical content.
  */
 
-import type Database from "better-sqlite3";
+import type { Queryable } from "../state/db.js";
 import { canView, type ViewerScope } from "../access/scope.js";
 import { getMemoriesByIds, recentFactsSince } from "./memorySql.js";
 import { getEntityById, getEntityMemoryIds } from "./entitySql.js";
@@ -68,17 +68,17 @@ const byCreatedDesc = (a: MemoryRow, b: MemoryRow): number =>
   a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : b.id - a.id;
 
 /** What changed about one entity since `sinceMs` (newest first, scope-filtered). */
-export function entityDigest(
-  db: Database.Database,
+export async function entityDigest(
+  q: Queryable,
   entityId: number,
   sinceMs: number,
   viewer?: ViewerScope,
   limit = 20
-): EntityDigest | null {
-  const e = getEntityById(db, entityId);
+): Promise<EntityDigest | null> {
+  const e = await getEntityById(q, entityId);
   if (!e) return null;
   const sinceIso = new Date(sinceMs).toISOString();
-  const newFacts = getMemoriesByIds(db, getEntityMemoryIds(db, entityId))
+  const newFacts = (await getMemoriesByIds(q, await getEntityMemoryIds(q, entityId)))
     .filter((m) => m.createdAt >= sinceIso && visibleInDigest(m, viewer))
     .sort(byCreatedDesc)
     .slice(0, limit)
@@ -87,21 +87,25 @@ export function entityDigest(
 }
 
 /** What changed across the org since `sinceMs` (newest first, scope-filtered). */
-export function orgDigest(
-  db: Database.Database,
+export async function orgDigest(
+  q: Queryable,
   sinceMs: number,
   viewer?: ViewerScope,
   limit = 30
-): OrgDigest {
+): Promise<OrgDigest> {
   const sinceIso = new Date(sinceMs).toISOString();
   // Over-fetch so scope/sensitivity filtering still leaves up to `limit`.
-  const rows = recentFactsSince(db, sinceIso, limit * 3).filter((m) =>
+  const rows = (await recentFactsSince(q, sinceIso, limit * 3)).filter((m) =>
     visibleInDigest(m, viewer)
   );
-  const items = rows.slice(0, limit).map((m) => {
-    const subject =
-      m.subjectEntityId != null ? getEntityById(db, m.subjectEntityId)?.canonicalName : undefined;
-    return { ...shape(m), subject };
-  });
+  const items = await Promise.all(
+    rows.slice(0, limit).map(async (m) => {
+      const subject =
+        m.subjectEntityId != null
+          ? (await getEntityById(q, m.subjectEntityId))?.canonicalName
+          : undefined;
+      return { ...shape(m), subject };
+    })
+  );
   return { sinceIso, items };
 }

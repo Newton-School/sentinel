@@ -1,8 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import Database from "better-sqlite3";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { rmSync } from "node:fs";
 
 // Mock pino
 vi.mock("pino", () => {
@@ -13,54 +9,100 @@ vi.mock("pino", () => {
   return { default: pino };
 });
 
+beforeEach(async () => {
+  vi.resetModules();
+  vi.doMock("../src/config.js", () => ({
+    config: { DATABASE_URL: process.env.DATABASE_URL, PG_POOL_MAX: 5, LOG_LEVEL: "silent" },
+  }));
+  const { initDb } = await import("../src/state/db.js");
+  await initDb();
+  const { resetTestDb } = await import("./helpers/pgTest.js");
+  await resetTestDb();
+});
+
+afterEach(async () => {
+  const { closeDb } = await import("../src/state/db.js");
+  await closeDb();
+});
+
+/** Lowercased public-schema table names from information_schema. */
+async function tableNames(): Promise<string[]> {
+  const { getPool } = await import("../src/state/db.js");
+  const r = await getPool().query<{ table_name: string }>(
+    `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'`
+  );
+  return r.rows.map((t) => t.table_name);
+}
+
+/** Column names of a public-schema table from information_schema. */
+async function colNames(table: string): Promise<string[]> {
+  const { getPool } = await import("../src/state/db.js");
+  const r = await getPool().query<{ column_name: string }>(
+    `SELECT column_name FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = $1`,
+    [table]
+  );
+  return r.rows.map((c) => c.column_name);
+}
+
+/** Index names for a public-schema table from pg_indexes. */
+async function indexNames(table: string): Promise<string[]> {
+  const { getPool } = await import("../src/state/db.js");
+  const r = await getPool().query<{ indexname: string }>(
+    `SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AND tablename = $1`,
+    [table]
+  );
+  return r.rows.map((i) => i.indexname);
+}
+
 describe("database migrations", () => {
-  let db: Database.Database;
-
-  beforeEach(() => {
-    vi.resetModules();
-    db = new Database(":memory:");
+  it("creates the core application tables", async () => {
+    const names = await tableNames();
+    for (const t of [
+      "personas",
+      "persona_traits",
+      "query_log",
+      "joined_meetings",
+      "memories",
+      "entities",
+      "entity_edges",
+      "llm_calls",
+      "feedback",
+      "eval_runs",
+    ]) {
+      expect(names).toContain(t);
+    }
   });
 
-  afterEach(() => {
-    db.close();
+  it("query_log carries the response-audit columns alongside the originals", async () => {
+    const cols = await colNames("query_log");
+    // audit columns
+    expect(cols).toContain("response_text");
+    expect(cols).toContain("response_duration_ms");
+    expect(cols).toContain("sources_used");
+    // original columns
+    expect(cols).toContain("user_id");
+    expect(cols).toContain("query_text");
+    expect(cols).toContain("category");
+    expect(cols).toContain("created_at");
   });
 
-  it("adds response audit columns to a fresh database", async () => {
-    // Mock config to use our in-memory db path (getDb creates its own)
-    vi.doMock("../src/config.js", () => ({
-      config: { SQLITE_DB_PATH: ":memory:", LOG_LEVEL: "silent" },
-    }));
-
-    const { getDb, closeDb } = await import("../src/state/db.js");
-    const testDb = getDb();
-
-    const columns = testDb.pragma("table_info(query_log)") as Array<{ name: string }>;
-    const columnNames = columns.map((c) => c.name);
-
-    expect(columnNames).toContain("response_text");
-    expect(columnNames).toContain("response_duration_ms");
-    expect(columnNames).toContain("sources_used");
-
-    // Also verify original columns still exist
-    expect(columnNames).toContain("user_id");
-    expect(columnNames).toContain("query_text");
-    expect(columnNames).toContain("category");
-    expect(columnNames).toContain("created_at");
-
-    closeDb();
+  it("creates user_id and created_at indexes on query_log", async () => {
+    const idx = await indexNames("query_log");
+    expect(idx).toContain("idx_query_log_user_id");
+    expect(idx).toContain("idx_query_log_created_at");
   });
 
-  it("migration is idempotent — running twice does not error", async () => {
-    vi.doMock("../src/config.js", () => ({
-      config: { SQLITE_DB_PATH: ":memory:", LOG_LEVEL: "silent" },
-    }));
+  it("creates the joined_meetings table with the expected columns", async () => {
+    expect(await tableNames()).toContain("joined_meetings");
+    const cols = await colNames("joined_meetings");
+    expect(cols).toContain("event_id");
+    expect(cols).toContain("joined_at");
+  });
 
-    const { getDb, closeDb } = await import("../src/state/db.js");
-    // First call runs migrations
-    const db1 = getDb();
-    closeDb();
-
-    // Reset module to force re-initialization
+  it("re-running initDb() is idempotent and does not throw", async () => {
+    // The schema was already built once in beforeEach. Force a fresh module
+    // graph (drops the pool singleton) and re-run initDb against the same DB.
     vi.resetModules();
     vi.doMock("pino", () => {
       const noop = () => {};
@@ -70,214 +112,54 @@ describe("database migrations", () => {
       return { default: pino };
     });
     vi.doMock("../src/config.js", () => ({
-      config: { SQLITE_DB_PATH: ":memory:", LOG_LEVEL: "silent" },
+      config: { DATABASE_URL: process.env.DATABASE_URL, PG_POOL_MAX: 5, LOG_LEVEL: "silent" },
     }));
-
-    // Second call should also succeed without duplicate column errors
-    const mod2 = await import("../src/state/db.js");
-    expect(() => mod2.getDb()).not.toThrow();
-    mod2.closeDb();
+    const { initDb } = await import("../src/state/db.js");
+    await expect(initDb()).resolves.toBeDefined();
+    // The migration only re-runs (and could collide on duplicate columns) if the
+    // process-wide SCHEMA_READY guard is bypassed; this exercises the
+    // CREATE ... IF NOT EXISTS path safely either way.
+    await expect(initDb()).resolves.toBeDefined();
+    expect(await tableNames()).toContain("memories");
   });
 
-  it("creates all three tables", async () => {
-    vi.doMock("../src/config.js", () => ({
-      config: { SQLITE_DB_PATH: ":memory:", LOG_LEVEL: "silent" },
-    }));
+  it("llm_calls enforces an openai-only provider CHECK", async () => {
+    const { getPool } = await import("../src/state/db.js");
+    const pool = getPool();
 
-    const { getDb, closeDb } = await import("../src/state/db.js");
-    const testDb = getDb();
-
-    const tables = testDb
-      .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-      .all() as Array<{ name: string }>;
-    const tableNames = tables.map((t) => t.name);
-
-    expect(tableNames).toContain("personas");
-    expect(tableNames).toContain("persona_traits");
-    expect(tableNames).toContain("query_log");
-
-    closeDb();
-  });
-
-  it("creates a user_id index on query_log", async () => {
-    vi.doMock("../src/config.js", () => ({
-      config: { SQLITE_DB_PATH: ":memory:", LOG_LEVEL: "silent" },
-    }));
-
-    const { getDb, closeDb } = await import("../src/state/db.js");
-    const testDb = getDb();
-
-    // Check via sqlite_master
-    const indexes = testDb
-      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='query_log'")
-      .all() as Array<{ name: string }>;
-    const indexNames = indexes.map((i) => i.name);
-    expect(indexNames).toContain("idx_query_log_user_id");
-
-    // Also verify via PRAGMA index_list
-    const pragmaIndexes = testDb.pragma("index_list('query_log')") as Array<{ name: string }>;
-    expect(pragmaIndexes.map((i) => i.name)).toContain("idx_query_log_user_id");
-
-    closeDb();
-  });
-
-  it("creates a created_at index on query_log", async () => {
-    vi.doMock("../src/config.js", () => ({
-      config: { SQLITE_DB_PATH: ":memory:", LOG_LEVEL: "silent" },
-    }));
-
-    const { getDb, closeDb } = await import("../src/state/db.js");
-    const testDb = getDb();
-
-    const indexes = testDb
-      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='query_log'")
-      .all() as Array<{ name: string }>;
-    expect(indexes.map((i) => i.name)).toContain("idx_query_log_created_at");
-
-    closeDb();
-  });
-
-  it("creates the joined_meetings table with the expected columns", async () => {
-    vi.doMock("../src/config.js", () => ({
-      config: { SQLITE_DB_PATH: ":memory:", LOG_LEVEL: "silent" },
-    }));
-
-    const { getDb, closeDb } = await import("../src/state/db.js");
-    const testDb = getDb();
-
-    const tables = testDb
-      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
-      .all() as Array<{ name: string }>;
-    expect(tables.map((t) => t.name)).toContain("joined_meetings");
-
-    const columns = testDb.pragma(
-      "table_info(joined_meetings)"
-    ) as Array<{ name: string }>;
-    const columnNames = columns.map((c) => c.name);
-    expect(columnNames).toContain("event_id");
-    expect(columnNames).toContain("joined_at");
-
-    closeDb();
-  });
-
-  it("rebuilds llm_calls to drop the legacy 'anthropic' provider (file-backed)", async () => {
-    const dbPath = join(
-      tmpdir(),
-      `sentinel-llm-migrate-${process.pid}-${Math.floor(performance.now())}.db`
-    );
-    const loadAt = async (path: string) => {
-      vi.resetModules();
-      vi.doMock("pino", () => {
-        const noop = () => {};
-        const logger = { info: noop, warn: noop, error: noop, debug: noop, fatal: noop, trace: noop, child: () => logger };
-        const pino = () => logger;
-        pino.stdTimeFunctions = { isoTime: () => "" };
-        return { default: pino };
-      });
-      vi.doMock("../src/config.js", () => ({
-        config: { SQLITE_DB_PATH: path, LOG_LEVEL: "silent" },
-      }));
-      return import("../src/state/db.js");
-    };
-
-    try {
-      // Seed an OLD-schema DB: the legacy CHECK + one anthropic + one openai row.
-      const seed = new Database(dbPath);
-      seed.exec(`
-        CREATE TABLE llm_calls (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          call_id TEXT NOT NULL,
-          trace_id TEXT NOT NULL,
-          provider TEXT NOT NULL CHECK (provider IN ('anthropic','openai')),
-          model TEXT NOT NULL,
-          operation TEXT NOT NULL CHECK (operation IN ('reply','extract','consolidate','embed','summary')),
-          input_tokens INTEGER, output_tokens INTEGER, cost_usd REAL, latency_ms INTEGER,
-          status TEXT NOT NULL DEFAULT 'ok' CHECK (status IN ('ok','error')),
-          error_kind TEXT, num_turns INTEGER, user_id TEXT, prompt_version TEXT,
-          created_at TEXT NOT NULL
-        );
-      `);
-      const ins = seed.prepare(
+    // openai is accepted.
+    await expect(
+      pool.query(
         `INSERT INTO llm_calls (call_id, trace_id, provider, model, operation, status, created_at)
-         VALUES (?, ?, ?, ?, 'reply', 'ok', ?)`
-      );
-      ins.run("c-a", "t", "anthropic", "claude", "2026-06-01T00:00:00.000Z");
-      ins.run("c-o", "t", "openai", "gpt-5.4-mini", "2026-06-02T00:00:00.000Z");
-      seed.close();
+         VALUES ('c-o', 't', 'openai', 'gpt-5.4-mini', 'reply', 'ok', '2026-06-02T00:00:00.000Z')`
+      )
+    ).resolves.toBeDefined();
 
-      // Boot → the migration detects the legacy CHECK and rebuilds the table.
-      const m = await loadAt(dbPath);
-      const db = m.getDb();
+    // The legacy 'anthropic' provider is rejected by the tightened CHECK.
+    await expect(
+      pool.query(
+        `INSERT INTO llm_calls (call_id, trace_id, provider, model, operation, status, created_at)
+         VALUES ('c-a', 't', 'anthropic', 'claude', 'reply', 'ok', '2026-06-01T00:00:00.000Z')`
+      )
+    ).rejects.toThrow();
 
-      // Legacy anthropic row dropped; openai row preserved.
-      const rows = db.prepare("SELECT provider FROM llm_calls").all() as Array<{ provider: string }>;
-      expect(rows).toEqual([{ provider: "openai" }]);
+    // Only the openai row persisted.
+    const rows = (await pool.query<{ provider: string }>(`SELECT provider FROM llm_calls`)).rows;
+    expect(rows).toEqual([{ provider: "openai" }]);
+  });
 
-      // The tightened CHECK now rejects anthropic.
-      expect(() =>
-        db
-          .prepare(
-            `INSERT INTO llm_calls (call_id, trace_id, provider, model, operation, status, created_at)
-             VALUES ('c2','t','anthropic','claude','reply','ok','2026-06-03T00:00:00.000Z')`
-          )
-          .run()
-      ).toThrow();
-
-      // Indexes were recreated on the rebuilt table.
-      const idx = (
-        db
-          .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='llm_calls'")
-          .all() as Array<{ name: string }>
-      ).map((i) => i.name);
-      expect(idx).toContain("idx_llm_calls_trace");
-      expect(idx).toContain("idx_llm_calls_created_at");
-      expect(idx).toContain("idx_llm_calls_op_model");
-
-      m.closeDb();
-    } finally {
-      for (const suffix of ["", "-wal", "-shm"]) {
-        try {
-          rmSync(dbPath + suffix);
-        } catch {
-          /* best-effort cleanup */
-        }
-      }
-    }
+  it("recreates the expected indexes on llm_calls", async () => {
+    const idx = await indexNames("llm_calls");
+    expect(idx).toContain("idx_llm_calls_trace");
+    expect(idx).toContain("idx_llm_calls_created_at");
+    expect(idx).toContain("idx_llm_calls_op_model");
   });
 });
 
 describe("company brain — entity graph schema", () => {
-  beforeEach(() => {
-    vi.resetModules();
-  });
-
-  async function loadFreshDb() {
-    vi.doMock("../src/config.js", () => ({
-      config: { SQLITE_DB_PATH: ":memory:", LOG_LEVEL: "silent" },
-    }));
-    return import("../src/state/db.js");
-  }
-
-  function tableNames(db: Database.Database): string[] {
-    return (
-      db
-        .prepare("SELECT name FROM sqlite_master WHERE type='table'")
-        .all() as Array<{ name: string }>
-    ).map((t) => t.name);
-  }
-
-  function colNames(db: Database.Database, table: string): string[] {
-    return (db.pragma(`table_info(${table})`) as Array<{ name: string }>).map(
-      (c) => c.name
-    );
-  }
-
   it("creates the entities table with identity, scoping and embedding columns", async () => {
-    const { getDb, closeDb } = await loadFreshDb();
-    const db = getDb();
-
-    expect(tableNames(db)).toContain("entities");
-    const cols = colNames(db, "entities");
+    expect(await tableNames()).toContain("entities");
+    const cols = await colNames("entities");
     for (const c of [
       "id",
       "type",
@@ -298,15 +180,11 @@ describe("company brain — entity graph schema", () => {
     ]) {
       expect(cols).toContain(c);
     }
-    closeDb();
   });
 
   it("creates entity_edges with relation, confidence and evidence columns + indexes", async () => {
-    const { getDb, closeDb } = await loadFreshDb();
-    const db = getDb();
-
-    expect(tableNames(db)).toContain("entity_edges");
-    const cols = colNames(db, "entity_edges");
+    expect(await tableNames()).toContain("entity_edges");
+    const cols = await colNames("entity_edges");
     for (const c of [
       "id",
       "src_id",
@@ -323,39 +201,25 @@ describe("company brain — entity graph schema", () => {
       expect(cols).toContain(c);
     }
 
-    const idx = (
-      db
-        .prepare(
-          "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='entity_edges'"
-        )
-        .all() as Array<{ name: string }>
-    ).map((i) => i.name);
+    const idx = await indexNames("entity_edges");
     expect(idx).toContain("idx_edges_src");
     expect(idx).toContain("idx_edges_dst");
-    closeDb();
   });
 
   it("creates memory_entities join table keyed by (memory_id, entity_id, role)", async () => {
-    const { getDb, closeDb } = await loadFreshDb();
-    const db = getDb();
-
-    expect(tableNames(db)).toContain("memory_entities");
-    const cols = colNames(db, "memory_entities");
+    expect(await tableNames()).toContain("memory_entities");
+    const cols = await colNames("memory_entities");
     for (const c of ["memory_id", "entity_id", "role", "confidence", "created_at"]) {
       expect(cols).toContain(c);
     }
-    closeDb();
   });
 
   it("creates dossier tables entity_profiles and entity_profile_cursors", async () => {
-    const { getDb, closeDb } = await loadFreshDb();
-    const db = getDb();
-
-    const names = tableNames(db);
+    const names = await tableNames();
     expect(names).toContain("entity_profiles");
     expect(names).toContain("entity_profile_cursors");
 
-    const pcols = colNames(db, "entity_profiles");
+    const pcols = await colNames("entity_profiles");
     for (const c of [
       "entity_id",
       "profile_md",
@@ -369,69 +233,87 @@ describe("company brain — entity graph schema", () => {
     ]) {
       expect(pcols).toContain(c);
     }
-    closeDb();
   });
 
   it("creates the entity_exclusions table", async () => {
-    const { getDb, closeDb } = await loadFreshDb();
-    const db = getDb();
-
-    expect(tableNames(db)).toContain("entity_exclusions");
-    const cols = colNames(db, "entity_exclusions");
+    expect(await tableNames()).toContain("entity_exclusions");
+    const cols = await colNames("entity_exclusions");
     for (const c of ["entity_id", "reason", "created_at", "created_by"]) {
       expect(cols).toContain(c);
     }
-    closeDb();
   });
 
   it("adds subject_entity_id and scope_team_id governance columns to memories", async () => {
-    const { getDb, closeDb } = await loadFreshDb();
-    const db = getDb();
-
-    const cols = colNames(db, "memories");
+    const cols = await colNames("memories");
     expect(cols).toContain("subject_entity_id");
     expect(cols).toContain("scope_team_id");
     // existing memory columns must remain intact
     expect(cols).toContain("content_hash");
     expect(cols).toContain("visibility");
-    closeDb();
+  });
+
+  it("memories has the generated fts tsvector column and a unique content_hash index", async () => {
+    const { getPool } = await import("../src/state/db.js");
+    const pool = getPool();
+
+    // fts is a STORED generated tsvector column.
+    const fts = (
+      await pool.query<{ data_type: string; is_generated: string }>(
+        `SELECT data_type, is_generated FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'memories' AND column_name = 'fts'`
+      )
+    ).rows[0];
+    expect(fts).toBeDefined();
+    expect(fts.data_type).toBe("tsvector");
+    expect(fts.is_generated).toBe("ALWAYS");
+
+    // content_hash is enforced unique (idx_memories_hash is a UNIQUE index).
+    expect(await indexNames("memories")).toContain("idx_memories_hash");
+    const now = "2026-06-14T00:00:00.000Z";
+    const insert = (hash: string) =>
+      pool.query(
+        `INSERT INTO memories (text, source_type, content_hash, created_at, updated_at)
+         VALUES ('a fact', 'manual', $1, $2, $2)`,
+        [hash, now]
+      );
+    await expect(insert("dup-hash")).resolves.toBeDefined();
+    await expect(insert("dup-hash")).rejects.toThrow();
   });
 
   it("enforces a partial-unique slack_user_id only among active entities", async () => {
-    const { getDb, closeDb } = await loadFreshDb();
-    const db = getDb();
+    const { getPool } = await import("../src/state/db.js");
+    const pool = getPool();
+    const now = "2026-06-14T00:00:00.000Z";
+    const insert = (canonical: string, normalized: string, uid: string, status: string) =>
+      pool.query(
+        `INSERT INTO entities (type, canonical_name, normalized_name, slack_user_id, status, confidence, created_at, updated_at)
+         VALUES ('person', $1, $2, $3, $4, 0.9, $5, $5)`,
+        [canonical, normalized, uid, status, now]
+      );
 
-    const insert = db.prepare(
-      `INSERT INTO entities (type, canonical_name, normalized_name, slack_user_id, status, confidence, created_at, updated_at)
-       VALUES ('person', ?, ?, ?, ?, 0.9, '2026-06-14T00:00:00.000Z', '2026-06-14T00:00:00.000Z')`
-    );
-
-    insert.run("Rahul Sharma", "rahul sharma", "U1", "active");
+    await insert("Rahul Sharma", "rahul sharma", "U1", "active");
     // A second ACTIVE row with the same slack_user_id must be rejected.
-    expect(() => insert.run("Rahul S", "rahul s", "U1", "active")).toThrow();
+    await expect(insert("Rahul S", "rahul s", "U1", "active")).rejects.toThrow();
     // A merged tombstone may retain the same slack_user_id (partial index).
-    expect(() => insert.run("Rahul Old", "rahul old", "U1", "merged")).not.toThrow();
-    closeDb();
+    await expect(insert("Rahul Old", "rahul old", "U1", "merged")).resolves.toBeDefined();
   });
 
   it("enforces a partial-unique email only among active entities", async () => {
-    const { getDb, closeDb } = await loadFreshDb();
-    const db = getDb();
-
-    const insert = db.prepare(
-      `INSERT INTO entities (type, canonical_name, normalized_name, email, status, confidence, created_at, updated_at)
-       VALUES ('person', ?, ?, ?, ?, 0.9, '2026-06-14T00:00:00.000Z', '2026-06-14T00:00:00.000Z')`
-    );
-    insert.run("A", "a", "a@newtonschool.co", "active");
-    expect(() => insert.run("B", "b", "a@newtonschool.co", "active")).toThrow();
-    closeDb();
+    const { getPool } = await import("../src/state/db.js");
+    const pool = getPool();
+    const now = "2026-06-14T00:00:00.000Z";
+    const insert = (canonical: string, normalized: string, email: string, status: string) =>
+      pool.query(
+        `INSERT INTO entities (type, canonical_name, normalized_name, email, status, confidence, created_at, updated_at)
+         VALUES ('person', $1, $2, $3, $4, 0.9, $5, $5)`,
+        [canonical, normalized, email, status, now]
+      );
+    await insert("A", "a", "a@newtonschool.co", "active");
+    await expect(insert("B", "b", "a@newtonschool.co", "active")).rejects.toThrow();
   });
 
-  it("re-running migrations does not error and preserves the entity tables", async () => {
-    const first = await loadFreshDb();
-    first.getDb();
-    first.closeDb();
-
+  it("re-running migrations preserves the entity tables", async () => {
+    // Re-init on a fresh module graph; entities must survive.
     vi.resetModules();
     vi.doMock("pino", () => {
       const noop = () => {};
@@ -440,55 +322,11 @@ describe("company brain — entity graph schema", () => {
       pino.stdTimeFunctions = { isoTime: () => "" };
       return { default: pino };
     });
-    const second = await loadFreshDb();
-    expect(() => second.getDb()).not.toThrow();
-    expect(tableNames(second.getDb())).toContain("entities");
-    second.closeDb();
-  });
-
-  it("guarded governance-column ALTER is idempotent across a real reopen (file-backed)", async () => {
-    const dbPath = join(
-      tmpdir(),
-      `sentinel-migrate-${process.pid}-${Math.floor(performance.now())}.db`
-    );
-    const loadAt = async (path: string) => {
-      vi.resetModules();
-      vi.doMock("pino", () => {
-        const noop = () => {};
-        const logger = { info: noop, warn: noop, error: noop, debug: noop, fatal: noop, trace: noop, child: () => logger };
-        const pino = () => logger;
-        pino.stdTimeFunctions = { isoTime: () => "" };
-        return { default: pino };
-      });
-      vi.doMock("../src/config.js", () => ({
-        config: { SQLITE_DB_PATH: path, LOG_LEVEL: "silent" },
-      }));
-      return import("../src/state/db.js");
-    };
-
-    try {
-      const a = await loadAt(dbPath);
-      a.getDb();
-      a.closeDb();
-
-      // Reopen the SAME file → migrations re-run against an existing
-      // `memories` table, exercising the guarded ALTER TABLE ADD COLUMN path.
-      const b = await loadAt(dbPath);
-      expect(() => b.getDb()).not.toThrow();
-      const cols = (
-        b.getDb().pragma("table_info(memories)") as Array<{ name: string }>
-      ).map((c) => c.name);
-      expect(cols).toContain("subject_entity_id");
-      expect(cols).toContain("scope_team_id");
-      b.closeDb();
-    } finally {
-      for (const suffix of ["", "-wal", "-shm"]) {
-        try {
-          rmSync(dbPath + suffix);
-        } catch {
-          /* best-effort cleanup */
-        }
-      }
-    }
+    vi.doMock("../src/config.js", () => ({
+      config: { DATABASE_URL: process.env.DATABASE_URL, PG_POOL_MAX: 5, LOG_LEVEL: "silent" },
+    }));
+    const { initDb } = await import("../src/state/db.js");
+    await expect(initDb()).resolves.toBeDefined();
+    expect(await tableNames()).toContain("entities");
   });
 });

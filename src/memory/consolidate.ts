@@ -10,8 +10,8 @@
  * eventually trigger a rebuild.
  */
 
-import type Database from "better-sqlite3";
 import { createLogger } from "../logging/logger.js";
+import type { DbPool, Queryable } from "../state/db.js";
 import {
   extractJson,
   OPENAI_EXTRACT_MODEL,
@@ -53,6 +53,14 @@ export interface ConsolidateDeps {
   model?: "haiku" | "sonnet";
 }
 
+interface DueDbRow {
+  id: number;
+  // COUNT(DISTINCT ...) returns bigint, which pg yields as a string.
+  fc: number | string;
+  last: number;
+  built_at: string | null;
+}
+
 interface DueRow {
   id: number;
   fc: number;
@@ -66,26 +74,34 @@ interface DueRow {
  *  - built: due when ≥ REBUILD_FACT_DELTA new facts accrued, or the profile is
  *    older than REBUILD_MAX_AGE_DAYS and at least one new fact exists.
  */
-export function selectEntitiesDueForConsolidation(
-  db: Database.Database,
+export async function selectEntitiesDueForConsolidation(
+  q: Queryable,
   nowMs: number,
   max = MAX_CONSOLIDATIONS_PER_TICK
-): number[] {
-  const rows = db
-    .prepare(
-      `SELECT e.id AS id,
-              COUNT(DISTINCT me.memory_id) AS fc,
-              COALESCE(c.last_fact_count, 0) AS last,
-              p.built_at AS built_at
-       FROM entities e
-       JOIN memory_entities me ON me.entity_id = e.id
-       JOIN memories m ON m.id = me.memory_id AND m.status = 'active'
-       LEFT JOIN entity_profile_cursors c ON c.entity_id = e.id
-       LEFT JOIN entity_profiles p ON p.entity_id = e.id
-       WHERE e.status = 'active'
-       GROUP BY e.id`
-    )
-    .all() as DueRow[];
+): Promise<number[]> {
+  const dbRows = (await q.query(
+    `SELECT e.id AS id,
+            COUNT(DISTINCT me.memory_id) AS fc,
+            COALESCE(c.last_fact_count, 0) AS last,
+            p.built_at AS built_at
+     FROM entities e
+     JOIN memory_entities me ON me.entity_id = e.id
+     JOIN memories m ON m.id = me.memory_id AND m.status = 'active'
+     LEFT JOIN entity_profile_cursors c ON c.entity_id = e.id
+     LEFT JOIN entity_profiles p ON p.entity_id = e.id
+     WHERE e.status = 'active'
+     -- c and p are 1:1 on entity_id, so grouping by their columns keeps one row
+     -- per entity; Postgres (unlike SQLite) requires them in GROUP BY here.
+     GROUP BY e.id, c.last_fact_count, p.built_at`
+  )).rows as DueDbRow[];
+
+  // COUNT() returns bigint (a string from pg) — normalize to number.
+  const rows: DueRow[] = dbRows.map((r) => ({
+    id: r.id,
+    fc: Number(r.fc),
+    last: r.last,
+    built_at: r.built_at,
+  }));
 
   const ageCutoff = new Date(nowMs - REBUILD_MAX_AGE_DAYS * 86_400_000).toISOString();
 
@@ -123,14 +139,14 @@ export function buildConsolidationPrompt(
  * nothing usable or the LLM call fails — leaving any prior profile intact.
  */
 export async function consolidateEntity(
-  db: Database.Database,
+  pool: DbPool,
   entityId: number,
   deps: ConsolidateDeps
 ): Promise<{ built: boolean; version?: number }> {
-  const entity = getEntityById(db, entityId);
+  const entity = await getEntityById(pool, entityId);
   if (!entity) return { built: false };
 
-  const allFacts = getMemoriesByIds(db, getEntityMemoryIds(db, entityId));
+  const allFacts = await getMemoriesByIds(pool, await getEntityMemoryIds(pool, entityId));
   const totalActive = allFacts.length;
   // Exclude sensitive facts from synthesis (never fold them into a summary).
   const usable = allFacts.filter((f) => f.sensitivity !== "sensitive");
@@ -161,7 +177,7 @@ export async function consolidateEntity(
     ? rawIds.filter((n): n is number => typeof n === "number")
     : usable.map((f) => f.id);
 
-  const version = upsertEntityProfile(db, {
+  const version = await upsertEntityProfile(pool, {
     entityId,
     profileMd: profileMd.slice(0, MAX_PROFILE_CHARS),
     sourceFactIds: keyFactIds,
@@ -175,15 +191,15 @@ export async function consolidateEntity(
 
 /** One consolidation tick: (re)builds up to MAX_CONSOLIDATIONS_PER_TICK dossiers. */
 export async function runConsolidation(
-  db: Database.Database,
+  pool: DbPool,
   deps: ConsolidateDeps
 ): Promise<{ built: number }> {
   const nowMs = (deps.now ?? Date.now)();
-  const due = selectEntitiesDueForConsolidation(db, nowMs, MAX_CONSOLIDATIONS_PER_TICK);
+  const due = await selectEntitiesDueForConsolidation(pool, nowMs, MAX_CONSOLIDATIONS_PER_TICK);
   let built = 0;
   for (const id of due) {
     try {
-      const r = await consolidateEntity(db, id, deps);
+      const r = await consolidateEntity(pool, id, deps);
       if (r.built) built++;
     } catch (err) {
       log.warn({ err, entityId: id }, "consolidateEntity failed (non-fatal)");

@@ -184,7 +184,7 @@ export async function runOnce(
 ): Promise<void> {
   try {
     const nowMs = Date.now();
-    purgeOldJoinedIds(nowMs);
+    await purgeOldJoinedIds(nowMs);
 
     const now = new Date(nowMs);
     const timeMin = now.toISOString();
@@ -203,7 +203,7 @@ export async function runOnce(
 
     // Read the persisted joined set within the TTL window so dedup survives
     // restarts (rows older than the TTL were just purged above).
-    const joinedIds = getJoinedIds(nowMs - JOINED_TTL_MS);
+    const joinedIds = await getJoinedIds(nowMs - JOINED_TTL_MS);
     const toJoin = filterEventsToJoin(events, nowMs, joinedIds);
 
     if (toJoin.length === 0) return;
@@ -240,7 +240,7 @@ export async function runOnce(
         "Launching bot for upcoming meeting"
       );
 
-      markJoined(item.event.id, nowMs);
+      await markJoined(item.event.id, nowMs);
       spawnJoiner(item.meetUrl, item.durationSec);
     }
   } catch (err) {
@@ -347,6 +347,6 @@ function spawnJoiner(meetUrl: string, durationSec: number): void {
  * optional `nowMs` for deterministic testing) so the purge can be driven
  * without real time.
  */
-export function purgeOldJoinedIds(nowMs: number = Date.now()): void {
-  purgeJoined(nowMs - JOINED_TTL_MS);
+export async function purgeOldJoinedIds(nowMs: number = Date.now()): Promise<void> {
+  await purgeJoined(nowMs - JOINED_TTL_MS);
 }

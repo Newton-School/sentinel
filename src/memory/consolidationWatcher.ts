@@ -12,7 +12,7 @@
 
 import { config } from "../config.js";
 import { createLogger } from "../logging/logger.js";
-import { getDb } from "../state/db.js";
+import { getPool } from "../state/db.js";
 import { runConsolidation } from "./consolidate.js";
 import { backfillEmbeddings, isEmbeddingsEnabled } from "./embeddingBackfill.js";
 import { openaiApiKey } from "../llm/openaiClient.js";
@@ -45,7 +45,7 @@ export function startConsolidationWatcher(): () => void {
       // Consolidation (gated on the OpenAI key + its kill switch).
       if (llmKey && process.env.MEMORY_CONSOLIDATION !== "0") {
         try {
-          await runConsolidation(getDb(), { apiKey: llmKey });
+          await runConsolidation(getPool(), { apiKey: llmKey });
         } catch (err) {
           log.error({ err }, "Consolidation tick failed");
         }
@@ -53,7 +53,7 @@ export function startConsolidationWatcher(): () => void {
       // Embedding backfill (gated on the embedding key + MEMORY_EMBEDDINGS).
       if (isEmbeddingsEnabled()) {
         try {
-          await backfillEmbeddings(getDb(), {
+          await backfillEmbeddings(getPool(), {
             apiKey: openaiApiKey(),
             model: config.MEMORY_EMBEDDING_MODEL,
           });

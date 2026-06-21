@@ -66,7 +66,7 @@ export function extractFromConversation(opts: ConversationHookOptions): void {
     });
 
     for (const fact of facts) {
-      insertFact({
+      await insertFact({
         text: fact.text,
         category: fact.category,
         entities: fact.entities,
@@ -89,7 +89,7 @@ export function extractFromConversation(opts: ConversationHookOptions): void {
   })().catch((err) => {
     // LLM-call failures are already counted inside the OpenAI client (which
     // resolves null instead of throwing) — this catch counts the disjoint
-    // pipeline failures (extractor throw, SQLite insert error), so no event
+    // pipeline failures (extractor throw, Postgres insert error), so no event
     // is double-counted.
     recordMemoryExtractError();
     log.error({ err }, "Conversation fact extraction failed (non-fatal)");

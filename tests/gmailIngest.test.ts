@@ -95,15 +95,18 @@ async function loadGmailIngest(opts: {
   extractFacts?: ReturnType<typeof vi.fn>;
 } = {}) {
   vi.doMock("../src/config.js", () => ({
-    config: { SQLITE_DB_PATH: ":memory:", LOG_LEVEL: "silent" },
+    config: { DATABASE_URL: process.env.DATABASE_URL, PG_POOL_MAX: 5, LOG_LEVEL: "silent" },
   }));
   const extractFacts = opts.extractFacts ?? vi.fn(async () => []);
   vi.doMock("../src/memory/extractor.js", () => ({ extractFacts }));
 
   const mod = await import("../src/memory/gmailIngest.js");
-  const { getDb } = await import("../src/state/db.js");
+  const { initDb, getPool } = await import("../src/state/db.js");
+  await initDb();
+  const { resetTestDb } = await import("./helpers/pgTest.js");
+  await resetTestDb();
   const sql = await import("../src/memory/memorySql.js");
-  return { mod, extractFacts, getDb, sql };
+  return { mod, extractFacts, getDb: getPool, sql };
 }
 
 function baseDeps(gmail: unknown, extra: Record<string, unknown> = {}) {
@@ -122,6 +125,11 @@ describe("gmailIngest pure helpers", () => {
   beforeEach(() => {
     vi.resetModules();
     delete process.env.MEMORY_GMAIL_DOMAINS;
+  });
+
+  afterEach(async () => {
+    const { closeDb } = await import("../src/state/db.js");
+    await closeDb();
   });
 
   it("parseFromEmail extracts and lowercases the address", async () => {
@@ -232,7 +240,7 @@ describe("runGmailIngest", () => {
 
   afterEach(async () => {
     const { closeDb } = await import("../src/state/db.js");
-    closeDb();
+    await closeDb();
   });
 
   it("MANDATORY: an external-domain sender NEVER reaches the extractor (marked, not re-examined)", async () => {
@@ -253,11 +261,11 @@ describe("runGmailIngest", () => {
     await mod.runGmailIngest(baseDeps(client));
 
     expect(extractFacts).not.toHaveBeenCalled();
-    expect(sql.isIngested(getDb(), "gmail:ext1")).toBe(true);
-    const count = getDb()
-      .prepare("SELECT COUNT(*) AS n FROM memories")
-      .get() as { n: number };
-    expect(count.n).toBe(0);
+    expect(await sql.isIngested(getDb(), "gmail:ext1")).toBe(true);
+    const count = (
+      await getDb().query("SELECT COUNT(*) AS n FROM memories")
+    ).rows[0] as { n: number | string };
+    expect(Number(count.n)).toBe(0);
   });
 
   it("initializes the cursor to now−24h and queries with after: + category exclusions", async () => {
@@ -266,7 +274,7 @@ describe("runGmailIngest", () => {
 
     await mod.runGmailIngest(baseDeps(client));
 
-    expect(sql.getCursor(getDb(), "gmail")).toBe(String(INIT_CURSOR_MS));
+    expect(await sql.getCursor(getDb(), "gmail")).toBe(String(INIT_CURSOR_MS));
     expect(list).toHaveBeenCalledTimes(1);
     const params = list.mock.calls[0][0] as { userId: string; q: string; maxResults: number };
     expect(params.userId).toBe("me");
@@ -302,11 +310,11 @@ describe("runGmailIngest", () => {
     expect(input.content).toContain("finalized the Q3 pricing decision");
     expect(input.apiKey).toBe("sk-test");
 
-    const rows = getDb()
-      .prepare(
+    const rows = (
+      await getDb().query(
         `SELECT text, source_type, source_ref, confidence, asserted_at FROM memories`
       )
-      .all() as Array<{
+    ).rows as Array<{
       text: string;
       source_type: string;
       source_ref: string;
@@ -321,8 +329,8 @@ describe("runGmailIngest", () => {
     // assertedAt from the Date header (09:30 IST → 04:00 UTC).
     expect(rows[0].asserted_at).toBe("2026-06-10T04:00:00.000Z");
 
-    expect(sql.isIngested(getDb(), "gmail:m1")).toBe(true);
-    expect(sql.getCursor(getDb(), "gmail")).toBe(String(internalDate));
+    expect(await sql.isIngested(getDb(), "gmail:m1")).toBe(true);
+    expect(await sql.getCursor(getDb(), "gmail")).toBe(String(internalDate));
   });
 
   it("honors an extended allowlist (MEMORY_GMAIL_DOMAINS semantics)", async () => {
@@ -383,10 +391,10 @@ describe("runGmailIngest", () => {
 
     expect(extractFacts).not.toHaveBeenCalled();
     for (const id of ["bulk", "noreply", "self", "tiny"]) {
-      expect(sql.isIngested(getDb(), `gmail:${id}`)).toBe(true);
+      expect(await sql.isIngested(getDb(), `gmail:${id}`)).toBe(true);
     }
     // Cursor advanced over the skipped (fully-examined) messages.
-    expect(sql.getCursor(getDb(), "gmail")).toBe(String(t + 4));
+    expect(await sql.getCursor(getDb(), "gmail")).toBe(String(t + 4));
   });
 
   it("strips quoted replies before extraction", async () => {
@@ -431,13 +439,13 @@ describe("runGmailIngest", () => {
 
     expect(extractFacts).toHaveBeenCalledTimes(10);
     for (let i = 1; i <= 10; i++) {
-      expect(sql.isIngested(getDb(), `gmail:m${i}`)).toBe(true);
+      expect(await sql.isIngested(getDb(), `gmail:m${i}`)).toBe(true);
     }
     // The two newest were deferred: unmarked, and the cursor stops at the
     // 10th message so the next tick re-lists them.
-    expect(sql.isIngested(getDb(), "gmail:m11")).toBe(false);
-    expect(sql.isIngested(getDb(), "gmail:m12")).toBe(false);
-    expect(sql.getCursor(getDb(), "gmail")).toBe(String(t0 + 9 * 3600_000));
+    expect(await sql.isIngested(getDb(), "gmail:m11")).toBe(false);
+    expect(await sql.isIngested(getDb(), "gmail:m12")).toBe(false);
+    expect(await sql.getCursor(getDb(), "gmail")).toBe(String(t0 + 9 * 3600_000));
   });
 
   it("dedups on the second run: already-ingested messages are not refetched/extracted", async () => {
@@ -458,7 +466,7 @@ describe("runGmailIngest", () => {
     await mod.runGmailIngest(baseDeps(client));
     expect(extractFacts).toHaveBeenCalledTimes(1);
     expect(get).toHaveBeenCalledTimes(1);
-    expect(sql.isIngested(getDb(), "gmail:m1")).toBe(true);
+    expect(await sql.isIngested(getDb(), "gmail:m1")).toBe(true);
   });
 
   it("resolves the self address via users.getProfile once when not injected", async () => {
@@ -473,7 +481,7 @@ describe("runGmailIngest", () => {
     expect(getProfile).toHaveBeenCalledTimes(1);
     // The self-sent message was skipped via the fetched profile address.
     expect(extractFacts).not.toHaveBeenCalled();
-    expect(sql.isIngested(getDb(), "gmail:self1")).toBe(true);
+    expect(await sql.isIngested(getDb(), "gmail:self1")).toBe(true);
 
     // Second run within the same process reuses the cached profile.
     await mod.runGmailIngest(baseDeps(client, { selfEmail: undefined }));

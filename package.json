@@ -24,16 +24,16 @@
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@openai/agents": "^0.11.8",
     "@slack/bolt": "^4.3.0",
-    "better-sqlite3": "^11.8.1",
+    "@types/pg": "^8.20.0",
     "dotenv": "^16.5.0",
     "googleapis": "^171.4.0",
     "node-sql-parser": "^5.4.0",
+    "pg": "^8.22.0",
     "pino": "^9.6.0",
     "playwright": "^1.59.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.14.1",
     "tsx": "^4.19.3",
     "typescript": "^5.8.3",

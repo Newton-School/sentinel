@@ -30,15 +30,25 @@ export interface LivenessStatus {
 export function createHealthServer(
   getReadiness: () => HealthStatus,
   getUptime: () => number = () => 0,
-  getMetricsText?: () => string
+  getMetricsText?: () => string | Promise<string>
 ): http.Server {
   const server = http.createServer((req, res) => {
     // Ops metrics: Prometheus text exposition. Served only when a provider is
     // wired in. Independent of Slack/DB readiness so scraping never flaps.
     if (req.url === "/metrics" && getMetricsText) {
-      res.setHeader("Content-Type", "text/plain; version=0.0.4");
-      res.writeHead(200);
-      res.end(getMetricsText());
+      // The provider may be async (eval gauges read eval_runs from the DB).
+      Promise.resolve(getMetricsText())
+        .then((text) => {
+          res.setHeader("Content-Type", "text/plain; version=0.0.4");
+          res.writeHead(200);
+          res.end(text);
+        })
+        .catch(() => {
+          // A metrics read must never crash a scrape — return 200 empty.
+          res.setHeader("Content-Type", "text/plain; version=0.0.4");
+          res.writeHead(200);
+          res.end("");
+        });
       return;
     }
 
@@ -75,7 +85,7 @@ export function startHealthServer(
   port: number,
   getReadiness: () => HealthStatus,
   getUptime?: () => number,
-  getMetricsText?: () => string
+  getMetricsText?: () => string | Promise<string>
 ): http.Server {
   const server = createHealthServer(getReadiness, getUptime, getMetricsText);
   server.listen(port, () => {

@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { runWithTrace } from "../src/llm/traceContext.js";
-import { isDbOpen, getDb } from "../src/state/db.js";
+import { isDbOpen, initDb } from "../src/state/db.js";
 import { config } from "../src/config.js";
 import { openaiApiKey } from "../src/llm/openaiClient.js";
 import { activePromptVersionId } from "../src/prompts/registry.js";
@@ -98,7 +98,7 @@ export async function runEvals(opts: RunEvalsOptions): Promise<EvalReport> {
       const meanScore = mean(cases.map((c) => c.f1));
       suites.push({ suite: "extraction", nCases: cases.length, nPass, meanScore, passed: meanScore >= opts.threshold, cases });
       if (opts.persist && isDbOpen()) {
-        recordEvalRun({
+        await recordEvalRun({
           runId: opts.runId,
           suite: "extraction",
           nCases: cases.length,
@@ -118,7 +118,7 @@ export async function runEvals(opts: RunEvalsOptions): Promise<EvalReport> {
       const meanScore = mean(cases.map((c) => c.score ?? 0));
       suites.push({ suite: "answers", nCases: cases.length, nPass, meanScore, passed: meanScore >= opts.threshold, cases });
       if (opts.persist && isDbOpen()) {
-        recordEvalRun({
+        await recordEvalRun({
           runId: opts.runId,
           suite: "answers",
           nCases: cases.length,
@@ -144,7 +144,7 @@ export async function runEvals(opts: RunEvalsOptions): Promise<EvalReport> {
       const meanScore = mean(cases.map((c) => c.score ?? 0));
       suites.push({ suite: "analytics", nCases: cases.length, nPass, meanScore, passed: meanScore >= opts.threshold, cases });
       if (opts.persist && isDbOpen()) {
-        recordEvalRun({
+        await recordEvalRun({
           runId: opts.runId,
           suite: "analytics",
           nCases: cases.length,
@@ -204,7 +204,7 @@ async function main(): Promise<void> {
     );
   }
 
-  getDb(); // open so eval_runs persistence is enabled
+  await initDb(); // open so eval_runs persistence is enabled
 
   const runId = `${new Date().toISOString().replace(/[:.]/g, "-")}`;
   const ranAt = new Date().toISOString();

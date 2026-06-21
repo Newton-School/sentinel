@@ -31,7 +31,7 @@ import { resolveServerSpecs, buildMcpServers } from "../src/agent/mcpServers.js"
 
 const reset = (over: Record<string, unknown> = {}): void => {
   for (const k of Object.keys(cfg)) delete cfg[k];
-  cfg.SQLITE_DB_PATH = "./sentinel.db";
+  cfg.DATABASE_URL = "postgres://localhost:5432/sentinel";
   Object.assign(cfg, over);
 };
 
@@ -41,6 +41,10 @@ describe("resolveServerSpecs", () => {
   beforeEach(() => {
     reset();
     stdioCtor.mockReset();
+    // The memory server's connection string is baked from process.env.DATABASE_URL
+    // (the child MCP subprocess connects to the same Postgres). Pin it so the env
+    // assertion below is deterministic regardless of the worker's test DB url.
+    process.env.DATABASE_URL = "postgres://localhost:5432/sentinel_test";
   });
 
   it("always includes the memory server, even with no credentials", () => {
@@ -49,9 +53,8 @@ describe("resolveServerSpecs", () => {
     const memory = specs.find((s) => s.name === "memory")!;
     expect(memory.command).toBe("node");
     expect(memory.args[0]).toMatch(/dist\/mcp\/memory\.js$/);
-    expect(memory.env.SQLITE_DB_PATH).toMatch(/sentinel\.db$/);
-    // resolved to absolute (child process may run with a different cwd)
-    expect(memory.env.SQLITE_DB_PATH.startsWith("/")).toBe(true);
+    // The memory child connects to the same Postgres via DATABASE_URL.
+    expect(memory.env.DATABASE_URL).toBe("postgres://localhost:5432/sentinel_test");
   });
 
   it("SECURITY: bakes the request's viewer scope into the memory server env", () => {

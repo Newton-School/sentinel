@@ -8,14 +8,14 @@
  * through the hardened extractor, and store the surviving facts plus ONE
  * meeting-summary fact.
  *
- * Restart safety: an SQLite cursor (`ingest_cursors.meet`, an ISO endTime)
+ * Restart safety: a Postgres cursor (`ingest_cursors.meet`, an ISO endTime)
  * plus per-document dedup (`ingested_docs`, `meet:<recordId>`). A conference
  * is marked ingested and the cursor advanced ONLY after it fully succeeded;
  * on a mid-conference failure the run stops so the cursor can never jump over
  * a failed record (insert-level hash dedup makes the retry safe).
  */
 
-import { getDb } from "../state/db.js";
+import { getPool } from "../state/db.js";
 import { createLogger } from "../logging/logger.js";
 import { extractFacts } from "./extractor.js";
 import { extractJson } from "../llm/openaiClient.js";
@@ -73,15 +73,15 @@ export interface MeetIngestDeps {
 export async function runMeetIngest(deps: MeetIngestDeps): Promise<void> {
   const now = (deps.now ?? (() => new Date()))();
   const nowMs = now.getTime();
-  const db = getDb();
+  const pool = getPool();
 
   // TTL purge of ingest-dedup rows, once per run (joinStore purge pattern).
-  purgeIngested(db, nowMs - INGESTED_TTL_MS);
+  await purgeIngested(pool, nowMs - INGESTED_TTL_MS);
 
-  let cursor = getCursor(db, CURSOR_SOURCE);
+  let cursor = await getCursor(pool, CURSOR_SOURCE);
   if (!cursor) {
     cursor = new Date(nowMs - INIT_LOOKBACK_MS).toISOString();
-    setCursor(db, CURSOR_SOURCE, cursor, now);
+    await setCursor(pool, CURSOR_SOURCE, cursor, now);
   }
 
   const records = await deps.meetClient.listConferenceRecords(
@@ -91,12 +91,17 @@ export async function runMeetIngest(deps: MeetIngestDeps): Promise<void> {
   // Keep only conferences that have ended, are past the transcript-generation
   // grace window, and were not already ingested. Sort by endTime ascending so
   // the cursor advances monotonically.
-  const eligible = records
-    .filter((r): r is ConferenceRecord & { endTime: string } => {
+  const ended = records.filter(
+    (r): r is ConferenceRecord & { endTime: string } => {
       if (!r.endTime) return false;
       return new Date(r.endTime).getTime() <= nowMs - TRANSCRIPT_GRACE_MS;
-    })
-    .filter((r) => !isIngested(db, docId(r)))
+    }
+  );
+  const ingestedFlags = await Promise.all(
+    ended.map((r) => isIngested(pool, docId(r)))
+  );
+  const eligible = ended
+    .filter((_r, i) => !ingestedFlags[i])
     .sort((a, b) => (a.endTime < b.endTime ? -1 : 1));
 
   if (eligible.length > MAX_CONFERENCES_PER_TICK) {
@@ -114,8 +119,8 @@ export async function runMeetIngest(deps: MeetIngestDeps): Promise<void> {
     try {
       await ingestConference(record, deps, now);
       // Mark + advance ONLY after the conference fully succeeded.
-      markIngested(db, docId(record), nowMs);
-      setCursor(db, CURSOR_SOURCE, record.endTime, now);
+      await markIngested(pool, docId(record), nowMs);
+      await setCursor(pool, CURSOR_SOURCE, record.endTime, now);
     } catch (err) {
       // Stop the whole run: advancing the cursor past a failed record would
       // permanently skip it (the filter only lists end_time > cursor).
@@ -185,7 +190,7 @@ async function ingestConference(
     });
 
     for (const fact of facts) {
-      insertFact({
+      await insertFact({
         text: fact.text,
         category: fact.category,
         entities: fact.entities,
@@ -223,7 +228,7 @@ async function ingestConference(
         : "";
 
     if (summary) {
-      insertFact({
+      await insertFact({
         text: `Meeting ${dateStr}: ${summary}`,
         category: "summary",
         sourceType: "meeting",

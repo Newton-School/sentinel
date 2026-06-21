@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import type Database from "better-sqlite3";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { DbPool } from "../src/state/db.js";
 
 vi.mock("pino", () => {
   const noop = () => {};
@@ -14,25 +14,29 @@ const NOW_MS = Date.parse("2026-06-14T00:00:00.000Z");
 async function setup() {
   vi.resetModules();
   vi.doMock("../src/config.js", () => ({
-    config: { SQLITE_DB_PATH: ":memory:", LOG_LEVEL: "silent" },
+    config: { DATABASE_URL: process.env.DATABASE_URL, PG_POOL_MAX: 5, LOG_LEVEL: "silent" },
   }));
-  const { getDb } = await import("../src/state/db.js");
+  const { initDb, getPool } = await import("../src/state/db.js");
+  await initDb();
+  const { resetTestDb } = await import("./helpers/pgTest.js");
+  await resetTestDb();
   const entitySql = await import("../src/memory/entitySql.js");
   const consolidate = await import("../src/memory/consolidate.js");
   const client = await import("../src/llm/openaiClient.js");
   client.__resetBudgetForTests();
-  return { db: getDb(), entitySql, consolidate, client };
+  return { db: getPool(), entitySql, consolidate, client };
 }
 
-function insertMemory(db: Database.Database, text: string, sensitivity = "normal"): number {
+async function insertMemory(db: DbPool, text: string, sensitivity = "normal"): Promise<number> {
   const now = "2026-06-10T00:00:00.000Z";
   return (
-    db
-      .prepare(
+    (
+      await db.query(
         `INSERT INTO memories (text, category, source_type, sensitivity, content_hash, created_at, updated_at)
-         VALUES (?, 'fact', 'meeting', ?, ?, ?, ?) RETURNING id`
+         VALUES ($1, 'fact', 'meeting', $2, $3, $4, $5) RETURNING id`,
+        [text, sensitivity, `h-${text}`, now, now]
       )
-      .get(text, sensitivity, `h-${text}`, now, now) as { id: number }
+    ).rows[0] as { id: number }
   ).id;
 }
 
@@ -59,36 +63,41 @@ describe("consolidateEntity", () => {
     ctx = await setup();
   });
 
-  function linkFacts(entityId: number, texts: Array<[string, string?]>) {
+  afterEach(async () => {
+    const { closeDb } = await import("../src/state/db.js");
+    await closeDb();
+  });
+
+  async function linkFacts(entityId: number, texts: Array<[string, string?]>) {
     for (const [text, sens] of texts) {
-      const id = insertMemory(ctx.db, text, sens ?? "normal");
-      ctx.entitySql.linkMemoryEntity(ctx.db, { memoryId: id, entityId, role: "subject" });
+      const id = await insertMemory(ctx.db, text, sens ?? "normal");
+      await ctx.entitySql.linkMemoryEntity(ctx.db, { memoryId: id, entityId, role: "subject" });
     }
   }
 
   it("builds and stores a dossier, bumping version on rebuild", async () => {
     const { db, entitySql, consolidate } = ctx;
-    const e = entitySql.createEntity(db, { type: "person", canonicalName: "Rahul Sharma" });
-    linkFacts(e.id, [["owns placements"], ["closed 50 offers"], ["flagged 3 at-risk accounts"]]);
+    const e = await entitySql.createEntity(db, { type: "person", canonicalName: "Rahul Sharma" });
+    await linkFacts(e.id, [["owns placements"], ["closed 50 offers"], ["flagged 3 at-risk accounts"]]);
 
     const { fn } = fakeFetch("Rahul leads placements; 50 offers closed; 3 at-risk accounts.");
     const r1 = await consolidate.consolidateEntity(db, e.id, { apiKey: "k", fetchImpl: fn, now: () => NOW_MS });
     expect(r1.built).toBe(true);
     expect(r1.version).toBe(1);
 
-    const prof = entitySql.getEntityProfile(db, e.id);
+    const prof = await entitySql.getEntityProfile(db, e.id);
     expect(prof?.profileMd).toContain("Rahul leads placements");
     expect(prof?.factCount).toBe(3);
 
     const r2 = await consolidate.consolidateEntity(db, e.id, { apiKey: "k", fetchImpl: fakeFetch("v2").fn, now: () => NOW_MS });
     expect(r2.version).toBe(2);
-    expect(entitySql.getProfileCursor(db, e.id)).toBe(3);
+    expect(await entitySql.getProfileCursor(db, e.id)).toBe(3);
   });
 
   it("excludes sensitive facts from the synthesis input", async () => {
     const { db, entitySql, consolidate } = ctx;
-    const e = entitySql.createEntity(db, { type: "person", canonicalName: "Rahul Sharma" });
-    linkFacts(e.id, [["public roadmap note"], ["SECRET comp is 90 LPA", "sensitive"]]);
+    const e = await entitySql.createEntity(db, { type: "person", canonicalName: "Rahul Sharma" });
+    await linkFacts(e.id, [["public roadmap note"], ["SECRET comp is 90 LPA", "sensitive"]]);
 
     const { fn, bodies } = fakeFetch("profile");
     await consolidate.consolidateEntity(db, e.id, { apiKey: "k", fetchImpl: fn, now: () => NOW_MS });
@@ -98,13 +107,13 @@ describe("consolidateEntity", () => {
     expect(userContent).not.toContain("SECRET comp");
     // The cursor still tracks the TOTAL active fact count (incl. sensitive)
     // so new sensitive facts still trigger eventual rebuilds.
-    expect(entitySql.getProfileCursor(db, e.id)).toBe(2);
+    expect(await entitySql.getProfileCursor(db, e.id)).toBe(2);
   });
 
   it("uses Sonnet when deps.model='sonnet', Haiku otherwise", async () => {
     const { db, entitySql, consolidate, client } = ctx;
-    const e = entitySql.createEntity(db, { type: "person", canonicalName: "X Y" });
-    linkFacts(e.id, [["a fact"]]);
+    const e = await entitySql.createEntity(db, { type: "person", canonicalName: "X Y" });
+    await linkFacts(e.id, [["a fact"]]);
     const { fn, bodies } = fakeFetch("p");
     await consolidate.consolidateEntity(db, e.id, { apiKey: "k", fetchImpl: fn, now: () => NOW_MS, model: "sonnet" });
     expect(bodies[0].model).toBe(client.OPENAI_CONSOLIDATION_MODEL);
@@ -112,12 +121,12 @@ describe("consolidateEntity", () => {
 
   it("returns built:false (leaves no profile) when the LLM call fails", async () => {
     const { db, entitySql, consolidate } = ctx;
-    const e = entitySql.createEntity(db, { type: "person", canonicalName: "Z" });
-    linkFacts(e.id, [["a fact"]]);
+    const e = await entitySql.createEntity(db, { type: "person", canonicalName: "Z" });
+    await linkFacts(e.id, [["a fact"]]);
     const failing = (async () => new Response("err", { status: 500 })) as unknown as typeof fetch;
     const r = await consolidate.consolidateEntity(db, e.id, { apiKey: "k", fetchImpl: failing, now: () => NOW_MS });
     expect(r.built).toBe(false);
-    expect(entitySql.getEntityProfile(db, e.id)).toBeNull();
+    expect(await entitySql.getEntityProfile(db, e.id)).toBeNull();
   });
 });
 
@@ -127,40 +136,45 @@ describe("selectEntitiesDueForConsolidation + runConsolidation", () => {
     ctx = await setup();
   });
 
-  function entityWithFacts(name: string, n: number): number {
-    const e = ctx.entitySql.createEntity(ctx.db, { type: "person", canonicalName: name });
+  afterEach(async () => {
+    const { closeDb } = await import("../src/state/db.js");
+    await closeDb();
+  });
+
+  async function entityWithFacts(name: string, n: number): Promise<number> {
+    const e = await ctx.entitySql.createEntity(ctx.db, { type: "person", canonicalName: name });
     for (let i = 0; i < n; i++) {
-      const id = insertMemory(ctx.db, `${name} fact ${i}`);
-      ctx.entitySql.linkMemoryEntity(ctx.db, { memoryId: id, entityId: e.id, role: "subject" });
+      const id = await insertMemory(ctx.db, `${name} fact ${i}`);
+      await ctx.entitySql.linkMemoryEntity(ctx.db, { memoryId: id, entityId: e.id, role: "subject" });
     }
     return e.id;
   }
 
   it("marks a never-built entity with enough facts as due, and a sparse one as not", async () => {
     const { db, consolidate } = ctx;
-    const big = entityWithFacts("Has Three", 3);
-    entityWithFacts("Has One", 1); // below MIN_FACTS_FOR_PROFILE
-    const due = consolidate.selectEntitiesDueForConsolidation(db, NOW_MS, 10);
+    const big = await entityWithFacts("Has Three", 3);
+    await entityWithFacts("Has One", 1); // below MIN_FACTS_FOR_PROFILE
+    const due = await consolidate.selectEntitiesDueForConsolidation(db, NOW_MS, 10);
     expect(due).toContain(big);
     expect(due).toHaveLength(1);
   });
 
   it("does not re-consolidate until enough new facts accumulate", async () => {
     const { db, entitySql, consolidate } = ctx;
-    const id = entityWithFacts("Settled", 3);
+    const id = await entityWithFacts("Settled", 3);
     // Simulate a prior consolidation at fact_count=3.
-    entitySql.upsertEntityProfile(db, { entityId: id, profileMd: "p", sourceFactIds: [], factCount: 3, model: "haiku", now: new Date(NOW_MS) });
-    expect(consolidate.selectEntitiesDueForConsolidation(db, NOW_MS, 10)).toHaveLength(0);
+    await entitySql.upsertEntityProfile(db, { entityId: id, profileMd: "p", sourceFactIds: [], factCount: 3, model: "haiku", now: new Date(NOW_MS) });
+    expect(await consolidate.selectEntitiesDueForConsolidation(db, NOW_MS, 10)).toHaveLength(0);
 
     // Add fewer than the delta → still not due.
-    const m = insertMemory(db, "one more fact");
-    entitySql.linkMemoryEntity(db, { memoryId: m, entityId: id, role: "mention" });
-    expect(consolidate.selectEntitiesDueForConsolidation(db, NOW_MS, 10)).toHaveLength(0);
+    const m = await insertMemory(db, "one more fact");
+    await entitySql.linkMemoryEntity(db, { memoryId: m, entityId: id, role: "mention" });
+    expect(await consolidate.selectEntitiesDueForConsolidation(db, NOW_MS, 10)).toHaveLength(0);
   });
 
   it("runConsolidation is bounded by MAX_CONSOLIDATIONS_PER_TICK", async () => {
     const { db, consolidate } = ctx;
-    for (let i = 0; i < 5; i++) entityWithFacts(`Team ${i}`, 3);
+    for (let i = 0; i < 5; i++) await entityWithFacts(`Team ${i}`, 3);
     const { fn } = fakeFetch("profile");
     const res = await consolidate.runConsolidation(db, { apiKey: "k", fetchImpl: fn, now: () => NOW_MS });
     expect(res.built).toBe(consolidate.MAX_CONSOLIDATIONS_PER_TICK);

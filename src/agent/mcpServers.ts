@@ -1,4 +1,4 @@
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { MCPServerStdio } from "@openai/agents";
 import { config } from "../config.js";
 import { createLogger } from "../logging/logger.js";
@@ -107,7 +107,7 @@ export function resolveServerSpecs(opts: BuildMcpServersOptions = {}): McpServer
   // this scope once at module load (src/mcp/memory.ts), so a fresh server MUST
   // be spawned per request — never warm-pooled — or one user's scope would leak
   // into another's reply. The runner constructs+closes these per call.
-  const memoryEnv: Record<string, string> = { SQLITE_DB_PATH: resolve(config.SQLITE_DB_PATH) };
+  const memoryEnv: Record<string, string> = { DATABASE_URL: process.env.DATABASE_URL ?? "" };
   if (process.env.MEMORY_ACL_MODE) memoryEnv.MEMORY_ACL_MODE = process.env.MEMORY_ACL_MODE;
   if (process.env.MEMORY_SENSITIVE_RECALL) {
     memoryEnv.MEMORY_SENSITIVE_RECALL = process.env.MEMORY_SENSITIVE_RECALL;
