@@ -1,14 +1,16 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 import { EventEmitter } from "node:events";
 
 // Mirror the mocking setup of meetWatcherSpawn.test.ts so importing the watcher
-// is safe/deterministic and the SQLite-backed join store runs against :memory:.
+// is safe/deterministic and the Postgres-backed join store runs against the
+// per-worker test database.
 vi.mock("../src/config.js", () => ({
   config: {
     GOOGLE_CLIENT_ID: "gid",
     GOOGLE_CLIENT_SECRET: "gsecret",
     GOOGLE_REFRESH_TOKEN: "grefresh",
-    SQLITE_DB_PATH: ":memory:",
+    DATABASE_URL: process.env.DATABASE_URL,
+    PG_POOL_MAX: 5,
     LOG_LEVEL: "silent",
   },
 }));
@@ -54,20 +56,25 @@ vi.mock("node:fs", () => ({
   openSync: openSyncMock,
 }));
 
+// The watcher's join dedup is persisted in Postgres via joinStore. Open the
+// per-worker test pool before any runOnce/markJoined touches it.
+const { initDb, closeDb } = await import("../src/state/db.js");
+await initDb();
+const { resetTestDb } = await import("./helpers/pgTest.js");
+
 const {
   runOnce,
   canSpawnJoiner,
   activeJoinerCount,
   resetActiveJoinerCount,
-  resetJoinedAt,
 } = await import("../src/meet-bot/watcher.js");
 
 const { getJoinedIds } = await import("../src/meet-bot/joinStore.js");
 
 const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
 
-function isJoined(id: string): boolean {
-  return getJoinedIds(Date.now() - FOUR_HOURS_MS).has(id);
+async function isJoined(id: string): Promise<boolean> {
+  return (await getJoinedIds(Date.now() - FOUR_HOURS_MS)).has(id);
 }
 
 function makeCalendar(items: unknown[]) {
@@ -104,10 +111,10 @@ describe("canSpawnJoiner", () => {
 });
 
 describe("active joiner count tracking", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     spawnedChildren.length = 0;
-    resetJoinedAt();
+    await resetTestDb();
     resetActiveJoinerCount();
   });
 
@@ -129,10 +136,10 @@ describe("active joiner count tracking", () => {
 });
 
 describe("runOnce concurrency cap (shared Chrome profile → default 1)", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     spawnedChildren.length = 0;
-    resetJoinedAt();
+    await resetTestDb();
     resetActiveJoinerCount();
     delete process.env.MAX_CONCURRENT_JOINERS;
   });
@@ -151,8 +158,10 @@ describe("runOnce concurrency cap (shared Chrome profile → default 1)", () => 
 
     // Exactly one of the two events was marked joined; the deferred one is NOT
     // marked, so it can be retried on the next poll.
-    const joinedCount = [isJoined("evt-1"), isJoined("evt-2")].filter(Boolean)
-      .length;
+    const joinedCount = [
+      await isJoined("evt-1"),
+      await isJoined("evt-2"),
+    ].filter(Boolean).length;
     expect(joinedCount).toBe(1);
   });
 
@@ -188,8 +197,8 @@ describe("runOnce concurrency cap (shared Chrome profile → default 1)", () => 
       "https://meet.google.com/aaa-bbbb-ccc",
       "https://meet.google.com/ddd-eeee-fff",
     ]);
-    expect(isJoined("evt-1")).toBe(true);
-    expect(isJoined("evt-2")).toBe(true);
+    expect(await isJoined("evt-1")).toBe(true);
+    expect(await isJoined("evt-2")).toBe(true);
   });
 
   it("does not spawn a second joiner while one is still active", async () => {
@@ -204,7 +213,7 @@ describe("runOnce concurrency cap (shared Chrome profile → default 1)", () => 
 
     // Still capped — no second spawn, and the new event is NOT marked joined.
     expect(spawnMock).toHaveBeenCalledTimes(1);
-    expect(isJoined("evt-2")).toBe(false);
+    expect(await isJoined("evt-2")).toBe(false);
   });
 
   it("honors MAX_CONCURRENT_JOINERS override (cap=2 spawns both)", async () => {
@@ -218,7 +227,11 @@ describe("runOnce concurrency cap (shared Chrome profile → default 1)", () => 
 
     expect(spawnMock).toHaveBeenCalledTimes(2);
     expect(activeJoinerCount()).toBe(2);
-    expect(isJoined("evt-1")).toBe(true);
-    expect(isJoined("evt-2")).toBe(true);
+    expect(await isJoined("evt-1")).toBe(true);
+    expect(await isJoined("evt-2")).toBe(true);
   });
+});
+
+afterAll(async () => {
+  await closeDb();
 });

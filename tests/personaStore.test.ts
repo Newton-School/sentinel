@@ -18,22 +18,26 @@ vi.mock("pino", () => {
 });
 
 describe("persona store snake_case -> camelCase mapping", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
     vi.doMock("../src/config.js", () => ({
-      config: { SQLITE_DB_PATH: ":memory:", LOG_LEVEL: "silent" },
+      config: { DATABASE_URL: process.env.DATABASE_URL, PG_POOL_MAX: 5, LOG_LEVEL: "silent" },
     }));
+    const { initDb } = await import("../src/state/db.js");
+    await initDb();
+    const { resetTestDb } = await import("./helpers/pgTest.js");
+    await resetTestDb();
   });
 
   afterEach(async () => {
     const { closeDb } = await import("../src/state/db.js");
-    closeDb();
+    await closeDb();
   });
 
   it("getOrCreatePersona returns a camelCase profile on the brand-new path", async () => {
     const { getOrCreatePersona } = await import("../src/persona/store.js");
 
-    const profile = getOrCreatePersona("U_NEW", "Ada Lovelace");
+    const profile = await getOrCreatePersona("U_NEW", "Ada Lovelace");
 
     expect(profile.userId).toBe("U_NEW");
     expect(profile.displayName).toBe("Ada Lovelace");
@@ -46,10 +50,10 @@ describe("persona store snake_case -> camelCase mapping", () => {
     const { getOrCreatePersona } = await import("../src/persona/store.js");
 
     // First call creates the row.
-    getOrCreatePersona("U_RETURN", "Grace Hopper");
+    await getOrCreatePersona("U_RETURN", "Grace Hopper");
 
     // Second call reads the existing row from the DB.
-    const profile = getOrCreatePersona("U_RETURN", "Grace Hopper");
+    const profile = await getOrCreatePersona("U_RETURN", "Grace Hopper");
 
     expect(profile.userId).toBe("U_RETURN");
     expect(profile.displayName).toBe("Grace Hopper");
@@ -64,10 +68,10 @@ describe("persona store snake_case -> camelCase mapping", () => {
     const { upsertTrait, getTraits } = await import("../src/persona/store.js");
 
     // Two upserts for the same (user, label, value) bumps evidence_count to 2.
-    upsertTrait("U_TRAIT", "focus_area", "placements");
-    upsertTrait("U_TRAIT", "focus_area", "placements");
+    await upsertTrait("U_TRAIT", "focus_area", "placements");
+    await upsertTrait("U_TRAIT", "focus_area", "placements");
 
-    const traits = getTraits("U_TRAIT");
+    const traits = await getTraits("U_TRAIT");
 
     expect(traits).toHaveLength(1);
     const trait = traits[0];

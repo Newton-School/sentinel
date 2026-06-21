@@ -4,7 +4,7 @@
  * `memory_entities` links, and sets the fact's governance subject.
  *
  * Runs downstream of the hardened extractor — it never touches extraction.
- * Takes a `db` handle (testable like the SQL layer); the getDb-bound entry
+ * Takes a `Queryable` (testable like the SQL layer); the pool-bound entry
  * point is `memoryStore.insertFact`, which calls this opportunistically when
  * the entity graph is enabled.
  *
@@ -16,7 +16,7 @@
  *    visibility — only fail to narrow.
  */
 
-import type Database from "better-sqlite3";
+import type { Queryable } from "../state/db.js";
 import type { MemoryCategory, MemorySourceType, NewFact } from "./types.js";
 import { recordEntityResolution } from "../metrics/registry.js";
 import {
@@ -88,12 +88,12 @@ export interface LinkResult {
  * Resolves and links the entities a fact mentions. Idempotent on re-run
  * (link inserts dedupe on the composite PK; subject set is overwrite-safe).
  */
-export function linkFactEntities(
-  db: Database.Database,
+export async function linkFactEntities(
+  q: Queryable,
   memoryId: number,
   fact: NewFact,
   now: Date = new Date()
-): LinkResult {
+): Promise<LinkResult> {
   const names = (fact.entities ?? []).map((n) => n.trim()).filter(Boolean);
   if (names.length === 0) return { linked: 0, subjectEntityId: null };
 
@@ -118,7 +118,7 @@ export function linkFactEntities(
 
   for (const rawName of names) {
     const hint = guessEntityType(rawName);
-    const candidates = getResolutionCandidates(db, { rawName });
+    const candidates = await getResolutionCandidates(q, { rawName });
     const decision = resolveEntity({ rawName, type: hint }, candidates);
 
     let entityId = decision.entityId;
@@ -128,13 +128,13 @@ export function linkFactEntities(
       // Use the matched entity's actual type, not the name-guessed hint.
       entityType = candidates.find((c) => c.id === entityId)?.type ?? hint;
     } else if (decision.shouldCreate) {
-      entityId = createEntity(db, {
+      entityId = (await createEntity(q, {
         type: hint,
         canonicalName: rawName,
         confidence: decision.confidence,
         sourceRef: fact.sourceRef,
         now,
-      }).id;
+      })).id;
       recordEntityResolution("created");
     } else {
       recordEntityResolution("ambiguous");
@@ -149,7 +149,7 @@ export function linkFactEntities(
         id: entityId,
         conf: decision.confidence,
         type: entityType,
-        excluded: isEntityExcluded(db, entityId),
+        excluded: await isEntityExcluded(q, entityId),
         alias: decision.match === "fuzzy" ? decision.newAlias : undefined,
         cleanForSubject: decision.match !== "fuzzy",
       });
@@ -184,7 +184,7 @@ export function linkFactEntities(
   // (it is that entity's subject), forget the whole fact — otherwise its text
   // would stay keyword-searchable even though the entity was forgotten.
   if (subject && subject.excluded) {
-    forgetMemory(db, memoryId, now);
+    await forgetMemory(q, memoryId, now);
     return { linked: 0, subjectEntityId: null, forgotten: true };
   }
 
@@ -193,12 +193,12 @@ export function linkFactEntities(
   let linked = 0;
   for (const r of resolvedById.values()) {
     if (r.excluded) continue;
-    if (r.alias) addAlias(db, r.id, r.alias, now);
+    if (r.alias) await addAlias(q, r.id, r.alias, now);
     const role: MemoryEntityRole = subject && r.id === subject.id ? subjectRole : "mention";
-    linkMemoryEntity(db, { memoryId, entityId: r.id, role, confidence: r.conf, now });
+    await linkMemoryEntity(q, { memoryId, entityId: r.id, role, confidence: r.conf, now });
     linked++;
   }
-  if (subject) setMemorySubject(db, memoryId, subject.id);
+  if (subject) await setMemorySubject(q, memoryId, subject.id);
 
   // Derive org-graph edges (subject is guaranteed non-excluded here). Each fact
   // contributes its signals exactly once (insert OR backfill), so edge
@@ -215,7 +215,7 @@ export function linkFactEntities(
       assertedAt: fact.assertedAt,
     });
     for (const e of proposed) {
-      upsertEdge(db, {
+      await upsertEdge(q, {
         srcId: e.srcId,
         dstId: e.dstId,
         relation: e.relation,
@@ -242,29 +242,31 @@ export function linkFactEntities(
  * reports both owners. Idempotent: re-running after the edge is already retired
  * is a no-op (retractEdge only touches active edges). Returns edges retracted.
  */
-export function retractFactEdges(
-  db: Database.Database,
+export async function retractFactEdges(
+  q: Queryable,
   memoryId: number,
   now: Date = new Date()
-): number {
-  const mem = db
-    .prepare(`SELECT category, asserted_at FROM memories WHERE id = ?`)
-    .get(memoryId) as { category: MemoryCategory; asserted_at: string | null } | undefined;
+): Promise<number> {
+  const mem = (await q.query(
+    `SELECT category, asserted_at FROM memories WHERE id = $1`,
+    [memoryId]
+  )).rows[0] as { category: MemoryCategory; asserted_at: string | null } | undefined;
   if (!mem) return 0;
 
-  const links = getMemoryEntities(db, memoryId);
+  const links = await getMemoryEntities(q, memoryId);
   const subjectLink = links.find((l) => l.role === "owner" || l.role === "subject");
   if (!subjectLink) return 0;
-  const subjectEntity = getEntityById(db, subjectLink.entityId);
+  const subjectEntity = await getEntityById(q, subjectLink.entityId);
   if (!subjectEntity) return 0;
 
   const otherIds = [...new Set(links.map((l) => l.entityId))].filter(
     (id) => id !== subjectLink.entityId
   );
-  const others = otherIds
-    .map((id) => getEntityById(db, id))
-    .filter((e): e is NonNullable<typeof e> => e !== null)
-    .map((e) => ({ id: e.id, type: e.type }));
+  const others: Array<{ id: number; type: EntityType }> = [];
+  for (const id of otherIds) {
+    const e = await getEntityById(q, id);
+    if (e !== null) others.push({ id: e.id, type: e.type });
+  }
 
   const proposed = proposeEdgesForFact({
     category: mem.category,
@@ -275,7 +277,7 @@ export function retractFactEdges(
 
   let retracted = 0;
   for (const e of proposed) {
-    retracted += retractEdge(db, e.srcId, e.dstId, e.relation, now);
+    retracted += await retractEdge(q, e.srcId, e.dstId, e.relation, now);
   }
   return retracted;
 }
@@ -310,25 +312,24 @@ export interface BackfillResult {
  * cursor past every examined id guarantees the drain terminates regardless of
  * linking outcome.
  */
-export function backfillEntityLinks(
-  db: Database.Database,
+export async function backfillEntityLinks(
+  q: Queryable,
   opts: { limit?: number; afterId?: number; now?: Date } = {}
-): BackfillResult {
+): Promise<BackfillResult> {
   const limit = opts.limit ?? 500;
   const afterId = opts.afterId ?? 0;
   const now = opts.now ?? new Date();
-  const rows = db
-    .prepare(
-      `SELECT id, text, category, entities, source_type, source_ref
+  const rows = (await q.query(
+    `SELECT id, text, category, entities, source_type, source_ref
        FROM memories m
        WHERE m.status = 'active'
          AND m.entities IS NOT NULL AND m.entities != '[]'
-         AND m.id > ?
+         AND m.id > $1
          AND NOT EXISTS (SELECT 1 FROM memory_entities me WHERE me.memory_id = m.id)
        ORDER BY m.id
-       LIMIT ?`
-    )
-    .all(afterId, limit) as BackfillRow[];
+       LIMIT $2`,
+    [afterId, limit]
+  )).rows as BackfillRow[];
 
   let linked = 0;
   let maxId = afterId;
@@ -341,8 +342,8 @@ export function backfillEntityLinks(
     } catch {
       continue; // malformed entities JSON — skip this row
     }
-    const res = linkFactEntities(
-      db,
+    const res = await linkFactEntities(
+      q,
       r.id,
       {
         text: r.text,

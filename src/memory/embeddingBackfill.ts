@@ -7,11 +7,11 @@
  * the next pass; a manual CLI seeds history.
  */
 
-import type Database from "better-sqlite3";
+import type { Queryable } from "../state/db.js";
 import { createLogger } from "../logging/logger.js";
 import { recordEmbedding } from "../metrics/registry.js";
 import { memoriesMissingEmbedding, setEmbedding } from "./memorySql.js";
-import { embedTexts, floatToBlob } from "./embedder.js";
+import { embedTexts } from "./embedder.js";
 import { openaiApiKey } from "../llm/openaiClient.js";
 
 const log = createLogger("embedding-backfill");
@@ -40,11 +40,11 @@ export interface EmbeddingBackfillResult {
  * Returns counts. Never throws (the embedder resolves null on any failure).
  */
 export async function backfillEmbeddings(
-  db: Database.Database,
+  q: Queryable,
   deps: EmbeddingBackfillDeps
 ): Promise<EmbeddingBackfillResult> {
   const limit = deps.limit ?? 200;
-  const rows = memoriesMissingEmbedding(db, limit);
+  const rows = await memoriesMissingEmbedding(q, limit);
   if (rows.length === 0) return { scanned: 0, embedded: 0 };
 
   const vectors = await embedTexts(
@@ -56,7 +56,7 @@ export async function backfillEmbeddings(
   for (let i = 0; i < rows.length; i++) {
     const v = vectors[i];
     if (v) {
-      setEmbedding(db, rows[i].id, floatToBlob(v));
+      await setEmbedding(q, rows[i].id, v);
       embedded++;
       recordEmbedding("ok");
     } else {

@@ -12,14 +12,14 @@
  * Bulk mail (List-Unsubscribe / no-reply-ish senders), self-sent mail, and
  * near-empty bodies are likewise skipped-and-marked.
  *
- * Restart safety mirrors meetIngest: SQLite cursor (`ingest_cursors.gmail`)
+ * Restart safety mirrors meetIngest: a Postgres cursor (`ingest_cursors.gmail`)
  * plus per-document dedup (`ingested_docs`, `gmail:<messageId>`). Messages
  * are processed oldest-first so the cursor only ever advances over fully
  * processed mail; extraction-cap deferrals stay unmarked AND ahead of the
  * cursor, so the next tick re-lists them.
  */
 
-import { getDb } from "../state/db.js";
+import { getPool } from "../state/db.js";
 import { createLogger } from "../logging/logger.js";
 import { extractFacts } from "./extractor.js";
 import { insertFact } from "./memoryStore.js";
@@ -202,13 +202,13 @@ async function resolveSelfEmail(
 export async function runGmailIngest(deps: GmailIngestDeps): Promise<void> {
   const now = (deps.now ?? (() => new Date()))();
   const nowMs = now.getTime();
-  const db = getDb();
+  const pool = getPool();
 
-  const rawCursor = getCursor(db, CURSOR_SOURCE);
+  const rawCursor = await getCursor(pool, CURSOR_SOURCE);
   let cursorMs = rawCursor ? Number(rawCursor) : NaN;
   if (!Number.isFinite(cursorMs)) {
     cursorMs = nowMs - INIT_LOOKBACK_MS;
-    setCursor(db, CURSOR_SOURCE, String(cursorMs), now);
+    await setCursor(pool, CURSOR_SOURCE, String(cursorMs), now);
   }
 
   const query =
@@ -220,10 +220,13 @@ export async function runGmailIngest(deps: GmailIngestDeps): Promise<void> {
     maxResults: LIST_MAX_RESULTS,
   });
 
-  const ids = (listRes.data.messages ?? [])
+  const candidateIds = (listRes.data.messages ?? [])
     .map((m) => m.id)
-    .filter((id): id is string => !!id)
-    .filter((id) => !isIngested(db, `gmail:${id}`));
+    .filter((id): id is string => !!id);
+  const ingestedFlags = await Promise.all(
+    candidateIds.map((id) => isIngested(pool, `gmail:${id}`))
+  );
+  const ids = candidateIds.filter((_id, i) => !ingestedFlags[i]);
   if (ids.length === 0) return;
 
   const selfEmail = await resolveSelfEmail(deps);
@@ -278,7 +281,7 @@ export async function runGmailIngest(deps: GmailIngestDeps): Promise<void> {
       // Fully examined: mark so it is never re-fetched, and let the cursor
       // advance over it.
       log.debug({ messageId: id, reason: decision.reason }, "Email skipped");
-      markIngested(db, `gmail:${id}`, nowMs);
+      await markIngested(pool, `gmail:${id}`, nowMs);
       if (Number.isFinite(internalDateMs)) {
         maxProcessedMs = Math.max(maxProcessedMs, internalDateMs);
       }
@@ -316,7 +319,7 @@ export async function runGmailIngest(deps: GmailIngestDeps): Promise<void> {
     extractions++;
 
     for (const fact of facts) {
-      insertFact({
+      await insertFact({
         text: fact.text,
         category: fact.category,
         entities: fact.entities,
@@ -334,13 +337,13 @@ export async function runGmailIngest(deps: GmailIngestDeps): Promise<void> {
       log.info({ messageId: id, count: facts.length }, "Stored email facts");
     }
 
-    markIngested(db, `gmail:${id}`, nowMs);
+    await markIngested(pool, `gmail:${id}`, nowMs);
     if (Number.isFinite(internalDateMs)) {
       maxProcessedMs = Math.max(maxProcessedMs, internalDateMs);
     }
   }
 
   if (maxProcessedMs > cursorMs) {
-    setCursor(db, CURSOR_SOURCE, String(maxProcessedMs), now);
+    await setCursor(pool, CURSOR_SOURCE, String(maxProcessedMs), now);
   }
 }

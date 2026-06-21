@@ -46,7 +46,7 @@ describe("config envSchema (real module)", () => {
     if (result.success) {
       expect(result.data.ALLOWED_USER_IDS).toEqual(["U123", "U456"]);
       expect(result.data.LOG_LEVEL).toBe("info");
-      expect(result.data.SQLITE_DB_PATH).toBe("./sentinel.db");
+      expect(result.data.PG_POOL_MAX).toBe(10);
       expect(result.data.OPENAI_REPLY_MODEL).toMatch(/^gpt-5/);
     }
   });
@@ -305,7 +305,10 @@ describe("loadConfig (real module)", () => {
     expect(result.ALLOWED_USER_IDS).toEqual(["U123"]);
     expect(result.LOG_LEVEL).toBe("info");
     expect(result.HEALTH_CHECK_PORT).toBe(8930);
-    expect(result.SQLITE_DB_PATH).toBe("./sentinel.db");
+    // DATABASE_URL passes through from the env (tests/setup.ts sets the
+    // per-worker test URL); PG_POOL_MAX defaults to 10.
+    expect(result.DATABASE_URL).toBe(process.env.DATABASE_URL);
+    expect(result.PG_POOL_MAX).toBe(10);
   });
 
   it("calls process.exit(1) and console.error on an invalid config", () => {

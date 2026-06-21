@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import type Database from "better-sqlite3";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { DbPool } from "../src/state/db.js";
 import {
   resolveIngestChannels,
   shouldIngestSlackMessage,
@@ -43,14 +43,17 @@ describe("shouldIngestSlackMessage", () => {
 async function setup() {
   vi.resetModules();
   vi.doMock("../src/config.js", () => ({
-    config: { SQLITE_DB_PATH: ":memory:", LOG_LEVEL: "silent" },
+    config: { DATABASE_URL: process.env.DATABASE_URL, PG_POOL_MAX: 5, LOG_LEVEL: "silent" },
   }));
-  const { getDb } = await import("../src/state/db.js");
+  const { initDb, getPool } = await import("../src/state/db.js");
+  await initDb();
+  const { resetTestDb } = await import("./helpers/pgTest.js");
+  await resetTestDb();
   const slackIngest = await import("../src/memory/slackIngest.js");
   const client = await import("../src/llm/openaiClient.js");
   client.__resetBudgetForTests();
   delete process.env.MEMORY_ENTITY_GRAPH;
-  return { db: getDb(), slackIngest };
+  return { db: getPool(), slackIngest };
 }
 
 // Every test message contains this exact phrase (a valid evidence quote) plus a
@@ -90,10 +93,15 @@ function msg(ts: string, text: string): SlackHistoryMessage {
 }
 
 describe("runSlackIngest", () => {
-  let db: Database.Database;
+  let db: DbPool;
   let slackIngest: typeof import("../src/memory/slackIngest.js");
   beforeEach(async () => {
     ({ db, slackIngest } = await setup());
+  });
+
+  afterEach(async () => {
+    const { closeDb } = await import("../src/state/db.js");
+    await closeDb();
   });
 
   it("ingests a qualifying message: stores a capped 'conversation' fact, advances cursor, dedupes", async () => {
@@ -102,7 +110,7 @@ describe("runSlackIngest", () => {
     const slack = mockClient({ C1: [msg("1718323200.000100", text)] });
     await slackIngest.runSlackIngest({ slack, apiKey: "k", channels: ["C1"], fetchImpl: fakeExtractor });
 
-    const rows = db.prepare("SELECT source_type, source_ref, confidence FROM memories").all() as Array<{
+    const rows = (await db.query("SELECT source_type, source_ref, confidence FROM memories")).rows as Array<{
       source_type: string; source_ref: string; confidence: number;
     }>;
     expect(rows).toHaveLength(1);
@@ -111,12 +119,13 @@ describe("runSlackIngest", () => {
     expect(rows[0].confidence).toBeLessThanOrEqual(slackIngest.SLACK_CONFIDENCE_CAP);
 
     const { getCursor } = await import("../src/memory/memorySql.js");
-    expect(getCursor(db, "slack:C1")).toBe("1718323200.0001");
+    expect(await getCursor(db, "slack:C1")).toBe("1718323200.0001");
 
     // Re-run: the message is already ingested → no new rows.
     const slack2 = mockClient({ C1: [msg("1718323200.000100", text)] });
     await slackIngest.runSlackIngest({ slack: slack2, apiKey: "k", channels: ["C1"], fetchImpl: fakeExtractor });
-    expect((db.prepare("SELECT COUNT(*) AS n FROM memories").get() as { n: number }).n).toBe(1);
+    const n = ((await db.query("SELECT COUNT(*) AS n FROM memories")).rows[0] as { n: number | string }).n;
+    expect(Number(n)).toBe(1);
   });
 
   it("skips bot and short messages without extracting", async () => {
@@ -127,7 +136,8 @@ describe("runSlackIngest", () => {
       ],
     });
     await slackIngest.runSlackIngest({ slack, apiKey: "k", channels: ["C1"], fetchImpl: fakeExtractor });
-    expect((db.prepare("SELECT COUNT(*) AS n FROM memories").get() as { n: number }).n).toBe(0);
+    const n = ((await db.query("SELECT COUNT(*) AS n FROM memories")).rows[0] as { n: number | string }).n;
+    expect(Number(n)).toBe(0);
   });
 
   it("caps extractions per tick and leaves deferred messages behind the cursor", async () => {
@@ -140,13 +150,13 @@ describe("runSlackIngest", () => {
     const slack = mockClient({ C1: many });
     await slackIngest.runSlackIngest({ slack, apiKey: "k", channels: ["C1"], fetchImpl: fakeExtractor });
 
-    const n = (db.prepare("SELECT COUNT(*) AS n FROM memories").get() as { n: number }).n;
+    const n = Number(((await db.query("SELECT COUNT(*) AS n FROM memories")).rows[0] as { n: number | string }).n);
     expect(n).toBe(MAX_EXTRACTIONS_PER_TICK);
 
     // Cursor stops at the last EXTRACTED message (i = MAX-1) — deferred ones
     // (i >= MAX) stay strictly ahead so a later tick re-lists them.
     const { getCursor } = await import("../src/memory/memorySql.js");
-    const cursor = Number(getCursor(db, "slack:C1"));
+    const cursor = Number(await getCursor(db, "slack:C1"));
     const lastExtractedTs = Number(`${1000 + (MAX_EXTRACTIONS_PER_TICK - 1)}.0001`);
     const firstDeferredTs = Number(`${1000 + MAX_EXTRACTIONS_PER_TICK}.0001`);
     expect(cursor).toBe(lastExtractedTs);

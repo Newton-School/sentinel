@@ -5,7 +5,7 @@
  * quality metric.
  */
 
-import { getDb } from "../state/db.js";
+import { getPool } from "../state/db.js";
 import { classifyReaction } from "./reactions.js";
 import { recordFeedback as recordFeedbackMetric } from "../metrics/registry.js";
 
@@ -19,21 +19,27 @@ export interface RecordReplyInput {
 }
 
 /** Remembers a bot reply so a later reaction on it can be attributed. */
-export function recordReply(opts: RecordReplyInput): void {
-  getDb()
-    .prepare(
-      `INSERT OR REPLACE INTO bot_replies (channel_id, reply_ts, trace_id, user_id, question, answer, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
+export async function recordReply(opts: RecordReplyInput): Promise<void> {
+  const pool = getPool();
+  await pool.query(
+    `INSERT INTO bot_replies (channel_id, reply_ts, trace_id, user_id, question, answer, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (channel_id, reply_ts) DO UPDATE SET
+       trace_id = EXCLUDED.trace_id,
+       user_id = EXCLUDED.user_id,
+       question = EXCLUDED.question,
+       answer = EXCLUDED.answer,
+       created_at = EXCLUDED.created_at`,
+    [
       opts.channelId,
       opts.replyTs,
       opts.traceId ?? null,
       opts.userId ?? null,
       opts.question ?? null,
       opts.answer ?? null,
-      new Date().toISOString()
-    );
+      new Date().toISOString(),
+    ]
+  );
 }
 
 export interface RecordFeedbackInput {
@@ -50,23 +56,23 @@ export interface RecordFeedbackInput {
  * row was written (deduped on channel+reply+reactor+reaction); only then is the
  * online metric incremented.
  */
-export function recordFeedback(opts: RecordFeedbackInput): boolean {
+export async function recordFeedback(opts: RecordFeedbackInput): Promise<boolean> {
   const sentiment = classifyReaction(opts.reaction);
   if (!sentiment) return false;
 
-  const db = getDb();
-  const reply = db
-    .prepare(`SELECT trace_id FROM bot_replies WHERE channel_id = ? AND reply_ts = ?`)
-    .get(opts.channelId, opts.replyTs) as { trace_id: string | null } | undefined;
+  const pool = getPool();
+  const reply = (await pool.query(
+    `SELECT trace_id FROM bot_replies WHERE channel_id = $1 AND reply_ts = $2`,
+    [opts.channelId, opts.replyTs]
+  )).rows[0] as { trace_id: string | null } | undefined;
   if (!reply) return false; // reaction was not on a tracked bot reply
 
-  const res = db
-    .prepare(
-      `INSERT OR IGNORE INTO feedback
-         (trace_id, channel_id, reply_ts, reactor_user_id, reaction, sentiment, score, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
+  const res = await pool.query(
+    `INSERT INTO feedback
+       (trace_id, channel_id, reply_ts, reactor_user_id, reaction, sentiment, score, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     ON CONFLICT (channel_id, reply_ts, reactor_user_id, reaction) DO NOTHING`,
+    [
       reply.trace_id ?? null,
       opts.channelId,
       opts.replyTs,
@@ -74,11 +80,13 @@ export function recordFeedback(opts: RecordFeedbackInput): boolean {
       opts.reaction,
       sentiment,
       sentiment === "positive" ? 1 : -1,
-      opts.addedAtIso
-    );
+      opts.addedAtIso,
+    ]
+  );
 
-  if (res.changes > 0) recordFeedbackMetric(sentiment);
-  return res.changes > 0;
+  const changes = res.rowCount ?? 0;
+  if (changes > 0) recordFeedbackMetric(sentiment);
+  return changes > 0;
 }
 
 /**
@@ -87,31 +95,38 @@ export function recordFeedback(opts: RecordFeedbackInput): boolean {
  * (or switching) replaces it (reaction column fixed to 'button'). Returns true
  * when the reply is tracked; increments the online metric on each click.
  */
-export function recordButtonFeedback(opts: {
+export async function recordButtonFeedback(opts: {
   channelId: string;
   replyTs: string;
   reactorUserId: string;
   sentiment: "positive" | "negative";
   addedAtIso: string;
-}): boolean {
-  const db = getDb();
-  const reply = db
-    .prepare(`SELECT trace_id FROM bot_replies WHERE channel_id = ? AND reply_ts = ?`)
-    .get(opts.channelId, opts.replyTs) as { trace_id: string | null } | undefined;
+}): Promise<boolean> {
+  const pool = getPool();
+  const reply = (await pool.query(
+    `SELECT trace_id FROM bot_replies WHERE channel_id = $1 AND reply_ts = $2`,
+    [opts.channelId, opts.replyTs]
+  )).rows[0] as { trace_id: string | null } | undefined;
   if (!reply) return false;
 
-  db.prepare(
-    `INSERT OR REPLACE INTO feedback
+  await pool.query(
+    `INSERT INTO feedback
        (trace_id, channel_id, reply_ts, reactor_user_id, reaction, sentiment, score, created_at)
-     VALUES (?, ?, ?, ?, 'button', ?, ?, ?)`
-  ).run(
-    reply.trace_id ?? null,
-    opts.channelId,
-    opts.replyTs,
-    opts.reactorUserId,
-    opts.sentiment,
-    opts.sentiment === "positive" ? 1 : -1,
-    opts.addedAtIso
+     VALUES ($1, $2, $3, $4, 'button', $5, $6, $7)
+     ON CONFLICT (channel_id, reply_ts, reactor_user_id, reaction) DO UPDATE SET
+       trace_id = EXCLUDED.trace_id,
+       sentiment = EXCLUDED.sentiment,
+       score = EXCLUDED.score,
+       created_at = EXCLUDED.created_at`,
+    [
+      reply.trace_id ?? null,
+      opts.channelId,
+      opts.replyTs,
+      opts.reactorUserId,
+      opts.sentiment,
+      opts.sentiment === "positive" ? 1 : -1,
+      opts.addedAtIso,
+    ]
   );
 
   recordFeedbackMetric(opts.sentiment);
@@ -129,15 +144,15 @@ export interface HarvestedCase {
  * and add to the answer eval dataset (closing the loop from real feedback to
  * offline evals).
  */
-export function harvestNegativeFeedback(limit = 100): HarvestedCase[] {
-  return getDb()
-    .prepare(
-      `SELECT f.id AS id, b.question AS question, b.answer AS answer
-       FROM feedback f
-       JOIN bot_replies b ON b.channel_id = f.channel_id AND b.reply_ts = f.reply_ts
-       WHERE f.sentiment = 'negative' AND b.question IS NOT NULL AND b.answer IS NOT NULL
-       ORDER BY f.created_at DESC
-       LIMIT ?`
-    )
-    .all(limit) as HarvestedCase[];
+export async function harvestNegativeFeedback(limit = 100): Promise<HarvestedCase[]> {
+  const pool = getPool();
+  return (await pool.query(
+    `SELECT f.id AS id, b.question AS question, b.answer AS answer
+     FROM feedback f
+     JOIN bot_replies b ON b.channel_id = f.channel_id AND b.reply_ts = f.reply_ts
+     WHERE f.sentiment = 'negative' AND b.question IS NOT NULL AND b.answer IS NOT NULL
+     ORDER BY f.created_at DESC
+     LIMIT $1`,
+    [limit]
+  )).rows as HarvestedCase[];
 }

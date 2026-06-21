@@ -17,12 +17,12 @@ function fmt(n: number): string {
   return String(n);
 }
 
-export function renderEvalGauges(): string {
+export async function renderEvalGauges(): Promise<string> {
   try {
     const ratios: string[] = [];
     const scores: string[] = [];
     for (const suite of SUITES) {
-      const run = latestEvalRunBySuite(suite);
+      const run = await latestEvalRunBySuite(suite);
       if (!run) continue;
       const ratio = run.nCases === 0 ? 0 : run.nPass / run.nCases;
       ratios.push(`sentinel_eval_pass_ratio{suite="${suite}"} ${fmt(ratio)}`);

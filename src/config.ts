@@ -65,7 +65,11 @@ export const envSchema = z
 
   HEALTH_CHECK_PORT: z.coerce.number().default(8930),
 
-  SQLITE_DB_PATH: z.string().default("./sentinel.db"),
+  // Postgres (ParadeDB in prod) — system of record for personas, the company
+  // brain (facts + entity graph), telemetry, and feedback. Required in prod;
+  // the memory MCP subprocess receives the same URL via its env.
+  DATABASE_URL: z.string().min(1).optional(),
+  PG_POOL_MAX: z.coerce.number().int().positive().default(10),
 
   // Entry gate: access is granted to members of this Slack user group (resolved
   // by handle) plus SENTINEL_OWNER_USER_ID. Requires the bot's `usergroups:read`

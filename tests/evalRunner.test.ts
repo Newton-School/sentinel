@@ -30,11 +30,32 @@ async function load() {
     pino.stdTimeFunctions = { isoTime: () => "" };
     return { default: pino };
   });
-  vi.doMock("../src/config.js", () => ({ config: { SQLITE_DB_PATH: ":memory:", LOG_LEVEL: "silent" } }));
+  vi.doMock("../src/config.js", () => ({
+    config: { DATABASE_URL: process.env.DATABASE_URL, PG_POOL_MAX: 5, LOG_LEVEL: "silent" },
+  }));
   const db = await import("../src/state/db.js");
+  await db.initDb();
+  const { resetTestDb } = await import("./helpers/pgTest.js");
+  await resetTestDb();
   const runner = await import("../evals/runner.js");
   const store = await import("../evals/store.js");
   return { db, runner, store };
+}
+
+// runEvals now awaits the eval_runs persistence, so the row is present once it
+// resolves. We still poll briefly (first iteration normally succeeds) as a
+// defensive guard against any future re-introduction of a fire-and-forget write.
+async function waitForEvalRun(
+  store: { latestEvalRunBySuite: (s: string) => Promise<{ runId: string; promptVersion?: string } | null> },
+  suite: string,
+  runId: string
+): Promise<{ runId: string; promptVersion?: string }> {
+  for (let i = 0; i < 50; i++) {
+    const row = await store.latestEvalRunBySuite(suite);
+    if (row?.runId === runId) return row;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  throw new Error(`eval_runs row for suite=${suite} runId=${runId} never persisted`);
 }
 
 const EXTRACTION_OK = {
@@ -61,18 +82,20 @@ const EXTRACTION_CASE = {
 
 describe("evals/runner parseArgs", () => {
   it("defaults to all suites, no gate, threshold 0.8, judge off", async () => {
-    const { runner } = await load();
+    const { db, runner } = await load();
     expect(runner.parseArgs([])).toMatchObject({ suite: "all", gate: false, threshold: 0.8, useJudge: false });
+    await db.closeDb();
   });
 
   it("parses --suite, --gate, --threshold, --judge", async () => {
-    const { runner } = await load();
+    const { db, runner } = await load();
     expect(runner.parseArgs(["--suite", "extraction", "--gate", "--threshold", "0.9", "--judge"])).toMatchObject({
       suite: "extraction",
       gate: true,
       threshold: 0.9,
       useJudge: true,
     });
+    await db.closeDb();
   });
 });
 
@@ -81,7 +104,6 @@ describe("evals/runner runEvals", () => {
 
   it("scores a perfect extraction suite, persists an eval_runs row, and passes the gate", async () => {
     const { db, runner, store } = await load();
-    db.getDb();
     const fetchImpl = (async () => chatResponse(EXTRACTION_OK)) as unknown as typeof fetch;
 
     const report = await runner.runEvals({
@@ -98,15 +120,14 @@ describe("evals/runner runEvals", () => {
     expect(report.suites[0].nPass).toBe(1);
     expect(report.passed).toBe(true);
 
-    const persisted = store.latestEvalRunBySuite("extraction");
-    expect(persisted?.runId).toBe("run-A");
-    expect(persisted?.promptVersion).toMatch(/^extraction@/);
-    db.closeDb();
+    const persisted = await waitForEvalRun(store, "extraction", "run-A");
+    expect(persisted.runId).toBe("run-A");
+    expect(persisted.promptVersion).toMatch(/^extraction@/);
+    await db.closeDb();
   });
 
   it("fails the gate when extraction misses the expected facts", async () => {
     const { db, runner } = await load();
-    db.getDb();
     const fetchImpl = (async () => chatResponse({ facts: [] })) as unknown as typeof fetch;
     const report = await runner.runEvals({
       runId: "run-B",
@@ -118,12 +139,11 @@ describe("evals/runner runEvals", () => {
     });
     expect(report.suites[0].meanScore).toBe(0);
     expect(report.passed).toBe(false);
-    db.closeDb();
+    await db.closeDb();
   });
 
   it("scores an answers suite from judge verdicts", async () => {
     const { db, runner } = await load();
-    db.getDb();
     const fetchImpl = (async () => chatResponse({ score: 0.9, pass: true, rationale: "cites a source" })) as unknown as typeof fetch;
     const report = await runner.runEvals({
       runId: "run-C",
@@ -136,11 +156,11 @@ describe("evals/runner runEvals", () => {
     expect(report.suites[0].suite).toBe("answers");
     expect(report.suites[0].meanScore).toBeCloseTo(0.9, 5);
     expect(report.passed).toBe(true);
-    db.closeDb();
+    await db.closeDb();
   });
 
   it("formatReport renders a PASS/FAIL summary", async () => {
-    const { runner } = await load();
+    const { db, runner } = await load();
     const text = runner.formatReport({
       runId: "r",
       ranAt: "t",
@@ -150,5 +170,6 @@ describe("evals/runner runEvals", () => {
     });
     expect(text).toContain("PASS extraction");
     expect(text).toContain("PASSED");
+    await db.closeDb();
   });
 });

@@ -1,14 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import Database from "better-sqlite3";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-// memorySql is pure (db-handle-parameterized, no config/logger imports), so a
+import pg from "pg";
+// memorySql is pure (pool/handle-parameterized, no config/logger imports), so a
 // static import is safe even though src/state/db.js is imported dynamically
 // after the per-test config mock.
 import { insertFact, searchCandidates } from "../src/memory/memorySql.js";
 
-// Mock pino (same pattern as memoryStore.test.ts)
+// Mock pino (same pattern as personaStore.test.ts)
 vi.mock("pino", () => {
   const noop = () => {};
   const logger = {
@@ -26,85 +23,75 @@ vi.mock("pino", () => {
 });
 
 /**
- * Opens a second connection to the database file exactly the way the memory
- * MCP server does (src/mcp/memory.ts): its own better-sqlite3 handle, WAL +
- * busy_timeout pragmas, and NO migrations — the main process owns the schema.
+ * Cross-connection visibility for the organizational memory store.
+ *
+ * The SQLite era proved cross-PROCESS file sharing/locking: the main process
+ * (real migrations) and the separate memory MCP server (its own pg Pool, no
+ * migrations) had to see each other's writes on one db file. Postgres is a
+ * server, not a file, so that whole concern — WAL
+ * journal mode, busy_timeout, the `sqlite_master` missing-table startup guard,
+ * the "open a file without running migrations creates no schema" semantics — is
+ * N/A and was DROPPED (see report).
+ *
+ * The surviving, still-meaningful intent is the SAME one the SQLite test
+ * asserted at the application level: a fact written through one connection is
+ * visible to a different, independent connection to the same database. On
+ * Postgres that means two separate pg Pools to the per-worker test DB. We open
+ * both as genuinely independent pools (the way the main app and the per-request
+ * memory MCP subprocess each bind their own pool to the same DATABASE_URL) and
+ * check that a COMMITTED write on one is readable on the other, in both
+ * directions.
  */
-function openServerConnection(path: string): Database.Database {
-  const conn = new Database(path);
-  conn.pragma("journal_mode = WAL");
-  conn.pragma("busy_timeout = 5000");
-  return conn;
-}
+describe("memory store across separate Postgres connections (main process + memory MCP server)", () => {
+  let poolA: pg.Pool;
+  let poolB: pg.Pool;
 
-/** The startup guard query the memory MCP server runs (src/mcp/memory.ts). */
-function memoriesTableExists(conn: Database.Database): boolean {
-  const row = conn
-    .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='memories'`)
-    .get();
-  return row !== undefined;
-}
-
-// These tests are specifically about CROSS-CONNECTION behavior, so they use a
-// real temp-file database (":memory:" databases are private to one handle).
-describe("memory store across separate connections (main process + memory MCP server)", () => {
-  let dir: string;
-  let dbPath: string;
-  const serverConns: Database.Database[] = [];
-
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
-    dir = mkdtempSync(join(tmpdir(), "sentinel-mem-mp-"));
-    dbPath = join(dir, "sentinel.db");
     vi.doMock("../src/config.js", () => ({
-      config: { SQLITE_DB_PATH: dbPath, LOG_LEVEL: "silent" },
+      config: { DATABASE_URL: process.env.DATABASE_URL, PG_POOL_MAX: 5, LOG_LEVEL: "silent" },
     }));
+    // Build the schema once via the canonical singleton, then reset to a clean
+    // slate. The two pools below are separate from this singleton — they only
+    // need the schema to already exist.
+    const { initDb } = await import("../src/state/db.js");
+    await initDb();
+    const { resetTestDb } = await import("./helpers/pgTest.js");
+    await resetTestDb();
+
+    // Two genuinely independent connection pools to the same database — the
+    // Postgres analogue of the main process and the memory MCP server each
+    // owning their own handle to the shared store.
+    poolA = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+    poolB = new pg.Pool({ connectionString: process.env.DATABASE_URL });
   });
 
   afterEach(async () => {
+    await poolA.end();
+    await poolB.end();
     const { closeDb } = await import("../src/state/db.js");
-    closeDb();
-    for (const conn of serverConns.splice(0)) {
-      try {
-        conn.close();
-      } catch {
-        // already closed
-      }
-    }
-    rmSync(dir, { recursive: true, force: true });
+    await closeDb();
   });
 
-  it("connection B (server-style, no migrations) sees a fact written by connection A (main, real migrations)", async () => {
-    // Connection A: the main process — getDb() runs the real migrations.
-    const { getDb } = await import("../src/state/db.js");
-    const a = getDb();
-    const written = insertFact(a, {
+  it("connection B sees a fact written (and committed) by connection A", async () => {
+    // Connection A: the main-process analogue writes a fact.
+    const written = await insertFact(poolA, {
       text: "Q3 placement target is 250 offers",
       category: "decision",
       sourceType: "meeting",
       sourceLabel: "Growth review",
     });
 
-    // Connection B: a fresh handle on the same file, server-style.
-    const b = openServerConnection(dbPath);
-    serverConns.push(b);
-    expect(b.pragma("busy_timeout", { simple: true })).toBe(5000);
-
-    const hits = searchCandidates(b, '"placement" OR "offers"');
+    // Connection B: a wholly separate pool searches and finds it.
+    const hits = await searchCandidates(poolB, '"placement" OR "offers"');
     expect(hits).toHaveLength(1);
     expect(hits[0].id).toBe(written.id);
     expect(hits[0].text).toBe("Q3 placement target is 250 offers");
   });
 
   it("a fact written via connection B (memory_store path) is visible to connection A", async () => {
-    const { getDb } = await import("../src/state/db.js");
-    const a = getDb();
-
-    const b = openServerConnection(dbPath);
-    serverConns.push(b);
-
-    // The exact write shape memory_store uses.
-    const result = insertFact(b, {
+    // The exact write shape memory_store uses, on the second pool.
+    const result = await insertFact(poolB, {
       text: "Admissions funnel conversion is 14 percent",
       category: "metric",
       sourceType: "manual",
@@ -113,28 +100,11 @@ describe("memory store across separate connections (main process + memory MCP se
     });
     expect(result.deduped).toBe(false);
 
-    const hits = searchCandidates(a, '"admissions" OR "funnel"');
+    const hits = await searchCandidates(poolA, '"admissions" OR "funnel"');
     expect(hits).toHaveLength(1);
     expect(hits[0].id).toBe(result.id);
     expect(hits[0].sourceType).toBe("manual");
     expect(hits[0].sourceLabel).toBe("Stored on request via Slack");
     expect(hits[0].confidence).toBe(0.9);
-  });
-
-  it("the missing-table startup guard detects an uninitialized database (and a migrated one)", async () => {
-    // A second, EMPTY temp DB file that the main process never migrated:
-    // opening it server-style must NOT create any schema, and the guard query
-    // must report the memories table as absent.
-    const emptyPath = join(dir, "uninitialized.db");
-    const b = openServerConnection(emptyPath);
-    serverConns.push(b);
-    expect(memoriesTableExists(b)).toBe(false);
-
-    // On the migrated file the same guard finds the table.
-    const { getDb } = await import("../src/state/db.js");
-    getDb();
-    const c = openServerConnection(dbPath);
-    serverConns.push(c);
-    expect(memoriesTableExists(c)).toBe(true);
   });
 });

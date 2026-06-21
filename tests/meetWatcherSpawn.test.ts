@@ -1,18 +1,20 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 import { EventEmitter } from "node:events";
 
 // watcher.ts imports ../config.js, whose top-level loadConfig() calls
 // process.exit(1) on invalid env. Mock it so importing the module is safe and
 // deterministic. The Google credentials are only read by startMeetWatcher()
 // (not exercised here) — runOnce takes the calendar client directly.
-// SQLITE_DB_PATH points at an in-memory DB so the watcher's now-persistent
-// join dedup (joined_meetings table via joinStore) is exercised for real.
+// DATABASE_URL points at the per-worker Postgres test DB so the watcher's
+// persistent join dedup (joined_meetings table via joinStore) is exercised
+// for real.
 vi.mock("../src/config.js", () => ({
   config: {
     GOOGLE_CLIENT_ID: "gid",
     GOOGLE_CLIENT_SECRET: "gsecret",
     GOOGLE_REFRESH_TOKEN: "grefresh",
-    SQLITE_DB_PATH: ":memory:",
+    DATABASE_URL: process.env.DATABASE_URL,
+    PG_POOL_MAX: 5,
     LOG_LEVEL: "silent",
   },
 }));
@@ -53,16 +55,21 @@ vi.mock("node:fs", () => ({
   openSync: openSyncMock,
 }));
 
+// The watcher's join dedup is persisted in Postgres via joinStore. Open the
+// per-worker test pool before any runOnce/markJoined touches it.
+const { initDb, closeDb } = await import("../src/state/db.js");
+await initDb();
+const { resetTestDb } = await import("./helpers/pgTest.js");
+
 const {
   runOnce,
   buildJoinerArgs,
   mapCalendarEvents,
   purgeOldJoinedIds,
-  resetJoinedAt,
   resetActiveJoinerCount,
 } = await import("../src/meet-bot/watcher.js");
 
-// The watcher's join dedup is now persisted in SQLite via joinStore. Import
+// The watcher's join dedup is now persisted in Postgres via joinStore. Import
 // the store so tests can seed/inspect joined IDs the same way the watcher does.
 const { markJoined, getJoinedIds } = await import(
   "../src/meet-bot/joinStore.js"
@@ -71,8 +78,8 @@ const { markJoined, getJoinedIds } = await import(
 const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
 
 // Helper: is an event ID currently recorded as joined within the 4h TTL window?
-function isJoined(id: string): boolean {
-  return getJoinedIds(Date.now() - FOUR_HOURS_MS).has(id);
+async function isJoined(id: string): Promise<boolean> {
+  return (await getJoinedIds(Date.now() - FOUR_HOURS_MS)).has(id);
 }
 
 // Build a fake googleapis calendar client whose events.list returns a fixed set.
@@ -156,9 +163,9 @@ describe("mapCalendarEvents", () => {
 });
 
 describe("runOnce poll loop", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
-    resetJoinedAt();
+    await resetTestDb();
     // Reset the module-level active-joiner counter; without freeing slots the
     // default cap of 1 would block spawns in later tests of this suite.
     resetActiveJoinerCount();
@@ -204,8 +211,8 @@ describe("runOnce poll loop", () => {
 
     await runOnce(client);
     expect(spawnMock).toHaveBeenCalledTimes(1);
-    // The joined ID is persisted in SQLite (survives restarts).
-    expect(isJoined("evt-dedup")).toBe(true);
+    // The joined ID is persisted in Postgres (survives restarts).
+    expect(await isJoined("evt-dedup")).toBe(true);
 
     // Same event returned again on the next poll — must NOT spawn again.
     await runOnce(client);
@@ -215,7 +222,7 @@ describe("runOnce poll loop", () => {
   it("skips an event already recorded as joined in the persistent store", async () => {
     // Simulate a prior process having joined this event (e.g. before a restart):
     // seed the store directly, then poll. The watcher must NOT spawn again.
-    markJoined("evt-prejoined", Date.now());
+    await markJoined("evt-prejoined", Date.now());
 
     const { client } = makeCalendar([
       eligibleRawEvent("evt-prejoined", "aaa-bbbb-ccc"),
@@ -257,41 +264,45 @@ describe("runOnce poll loop", () => {
   });
 });
 
-describe("purgeOldJoinedIds (TTL purge, now persisted in SQLite)", () => {
-  beforeEach(() => {
-    resetJoinedAt();
+describe("purgeOldJoinedIds (TTL purge, now persisted in Postgres)", () => {
+  beforeEach(async () => {
+    await resetTestDb();
   });
 
   // getJoinedIds uses the same cutoff as the watcher's purge; query at the
   // exact `now` used in the purge so the TTL boundary is asserted precisely.
-  function joinedWithinTtl(id: string, now: number): boolean {
-    return getJoinedIds(now - FOUR_HOURS_MS).has(id);
+  async function joinedWithinTtl(id: string, now: number): Promise<boolean> {
+    return (await getJoinedIds(now - FOUR_HOURS_MS)).has(id);
   }
 
-  it("purges entries older than the 4h TTL but retains recent ones", () => {
+  it("purges entries older than the 4h TTL but retains recent ones", async () => {
     const now = Date.now();
-    markJoined("old", now - FOUR_HOURS_MS - 1);
-    markJoined("recent", now - 1000);
+    await markJoined("old", now - FOUR_HOURS_MS - 1);
+    await markJoined("recent", now - 1000);
 
-    purgeOldJoinedIds(now);
+    await purgeOldJoinedIds(now);
 
-    expect(joinedWithinTtl("old", now)).toBe(false);
-    expect(joinedWithinTtl("recent", now)).toBe(true);
+    expect(await joinedWithinTtl("old", now)).toBe(false);
+    expect(await joinedWithinTtl("recent", now)).toBe(true);
   });
 
-  it("retains an entry exactly at the TTL boundary (not strictly older)", () => {
+  it("retains an entry exactly at the TTL boundary (not strictly older)", async () => {
     const now = Date.now();
-    markJoined("boundary", now - FOUR_HOURS_MS);
-    purgeOldJoinedIds(now);
+    await markJoined("boundary", now - FOUR_HOURS_MS);
+    await purgeOldJoinedIds(now);
     // cutoff = now - TTL; entry kept when joined_at >= cutoff
-    expect(joinedWithinTtl("boundary", now)).toBe(true);
+    expect(await joinedWithinTtl("boundary", now)).toBe(true);
   });
 
-  it("defaults to Date.now() when no time is provided", () => {
-    markJoined("ancient", 0);
-    purgeOldJoinedIds();
-    expect(joinedWithinTtl("ancient", Date.now())).toBe(false);
+  it("defaults to Date.now() when no time is provided", async () => {
+    await markJoined("ancient", 0);
+    await purgeOldJoinedIds();
+    expect(await joinedWithinTtl("ancient", Date.now())).toBe(false);
   });
+});
+
+afterAll(async () => {
+  await closeDb();
 });
 
 describe("buildJoinerArgs is re-exported from watcher", () => {

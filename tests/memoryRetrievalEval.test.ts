@@ -214,37 +214,41 @@ interface CaseOutcome {
 const outcomes: CaseOutcome[] = [];
 
 describe("memory retrieval golden-set eval", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
     vi.doMock("../src/config.js", () => ({
-      config: { SQLITE_DB_PATH: ":memory:", LOG_LEVEL: "silent" },
+      config: { DATABASE_URL: process.env.DATABASE_URL, PG_POOL_MAX: 5, LOG_LEVEL: "silent" },
     }));
+    const { initDb } = await import("../src/state/db.js");
+    await initDb();
+    const { resetTestDb } = await import("./helpers/pgTest.js");
+    await resetTestDb();
   });
 
   afterEach(async () => {
     const { closeDb } = await import("../src/state/db.js");
-    closeDb();
+    await closeDb();
   });
 
   for (const c of CASES) {
     it(c.name, async () => {
-      const { getDb } = await import("../src/state/db.js");
+      const { getPool } = await import("../src/state/db.js");
       const sql = await import("../src/memory/memorySql.js");
       const { searchMemories } = await import("../src/memory/memoryStore.js");
-      const db = getDb();
+      const pool = getPool();
 
       for (const seed of DISTRACTORS) {
-        sql.insertFact(db, seed);
+        await sql.insertFact(pool, seed);
       }
       const seedIds: number[] = [];
       for (const seed of c.seeds) {
-        seedIds.push(sql.insertFact(db, seed).id);
+        seedIds.push((await sql.insertFact(pool, seed)).id);
       }
       if (c.supersede) {
-        sql.supersedeMemory(db, seedIds[c.supersede.oldIndex], c.supersede.fact);
+        await sql.supersedeMemory(pool, seedIds[c.supersede.oldIndex], c.supersede.fact);
       }
 
-      const results = searchMemories(c.query, K);
+      const results = await searchMemories(c.query, K);
       const texts = results.map((r) => r.text);
 
       if (c.expectedTexts.length === 0) {

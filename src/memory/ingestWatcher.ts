@@ -37,7 +37,7 @@ export const INGEST_INTERVAL_MS = 5 * 60 * 1000; // 5 min
 
 /**
  * Start the ingestion poll loop. Returns a `stop()` function that clears the
- * interval; an in-flight tick is allowed to finish (it only writes SQLite).
+ * interval; an in-flight tick is allowed to finish (it only writes Postgres).
  */
 export function startIngestWatcher(): () => void {
   const hasGoogle = Boolean(

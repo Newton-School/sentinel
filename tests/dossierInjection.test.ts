@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import type Database from "better-sqlite3";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { Pool } from "pg";
 import { allocateInjection, renderDossier } from "../src/agent/injectionBudget.js";
 import { buildSystemPrompt } from "../src/agent/systemPrompt.js";
 import type { EntityDossierRef, RetrievalBundle } from "../src/memory/types.js";
@@ -70,40 +70,48 @@ vi.mock("pino", () => {
 async function load() {
   vi.resetModules();
   vi.doMock("../src/config.js", () => ({
-    config: { SQLITE_DB_PATH: ":memory:", LOG_LEVEL: "silent", ALLOWED_USER_IDS: ["U1"] },
+    config: { DATABASE_URL: process.env.DATABASE_URL, PG_POOL_MAX: 5, LOG_LEVEL: "silent", ALLOWED_USER_IDS: ["U1"] },
   }));
-  const { getDb } = await import("../src/state/db.js");
+  const { initDb, getPool } = await import("../src/state/db.js");
+  await initDb();
+  const { resetTestDb } = await import("./helpers/pgTest.js");
+  await resetTestDb();
   const store = await import("../src/memory/memoryStore.js");
   const entitySql = await import("../src/memory/entitySql.js");
   const scope = await import("../src/access/scope.js");
-  return { db: getDb(), store, entitySql, scope };
+  return { db: getPool(), store, entitySql, scope };
 }
 
-function insertMemory(db: Database.Database, text: string): number {
+async function insertMemory(db: Pool, text: string): Promise<number> {
   const now = "2026-06-14T00:00:00.000Z";
   return (
-    db.prepare(
+    (await db.query(
       `INSERT INTO memories (text, category, source_type, content_hash, created_at, updated_at)
-       VALUES (?, 'fact', 'manual', ?, ?, ?) RETURNING id`
-    ).get(text, `h-${text}`, now, now) as { id: number }
+       VALUES ($1, 'fact', 'manual', $2, $3, $4) RETURNING id`,
+      [text, `h-${text}`, now, now]
+    )).rows[0] as { id: number }
   ).id;
 }
 
 describe("assembleRetrieval — dossier replaces raw facts", () => {
   beforeEach(() => { delete process.env.MEMORY_ACL_MODE; });
+  afterEach(async () => {
+    const { closeDb } = await import("../src/state/db.js");
+    await closeDb();
+  });
 
   it("returns a dossier for a mentioned entity and suppresses its raw facts", async () => {
     const { db, store, entitySql, scope } = await load();
-    const team = entitySql.createEntity(db, { type: "team", canonicalName: "Placements Team" });
-    const factId = insertMemory(db, "obscure linked detail");
-    entitySql.linkMemoryEntity(db, { memoryId: factId, entityId: team.id, role: "subject" });
-    entitySql.upsertEntityProfile(db, {
+    const team = await entitySql.createEntity(db, { type: "team", canonicalName: "Placements Team" });
+    const factId = await insertMemory(db, "obscure linked detail");
+    await entitySql.linkMemoryEntity(db, { memoryId: factId, entityId: team.id, role: "subject" });
+    await entitySql.upsertEntityProfile(db, {
       entityId: team.id, profileMd: "Owns the Q3 pipeline.", sourceFactIds: [factId],
       factCount: 1, model: "haiku", now: new Date("2026-06-12T00:00:00.000Z"),
     });
 
     const viewer = scope.buildViewerScope("U1", { founderUserIds: ["U1"] });
-    const b = store.assembleRetrieval("what is the placements team doing", "U1", viewer);
+    const b = await store.assembleRetrieval("what is the placements team doing", "U1", viewer);
     expect(b.dossiers.map((d) => d.entityId)).toContain(team.id);
     // raw fact suppressed because the dossier covers the entity
     expect(b.entityFacts.map((f) => f.id)).not.toContain(factId);
@@ -111,12 +119,12 @@ describe("assembleRetrieval — dossier replaces raw facts", () => {
 
   it("falls back to raw entity facts when the entity has no dossier", async () => {
     const { db, store, entitySql, scope } = await load();
-    const team = entitySql.createEntity(db, { type: "team", canonicalName: "Placements Team" });
-    const factId = insertMemory(db, "linked detail");
-    entitySql.linkMemoryEntity(db, { memoryId: factId, entityId: team.id, role: "subject" });
+    const team = await entitySql.createEntity(db, { type: "team", canonicalName: "Placements Team" });
+    const factId = await insertMemory(db, "linked detail");
+    await entitySql.linkMemoryEntity(db, { memoryId: factId, entityId: team.id, role: "subject" });
 
     const viewer = scope.buildViewerScope("U1", { founderUserIds: ["U1"] });
-    const b = store.assembleRetrieval("placements team", "U1", viewer);
+    const b = await store.assembleRetrieval("placements team", "U1", viewer);
     expect(b.dossiers).toHaveLength(0);
     expect(b.entityFacts.map((f) => f.id)).toContain(factId);
   });

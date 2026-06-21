@@ -16,7 +16,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { getDb, isDbOpen } from "../state/db.js";
+import { getPool, isDbOpen } from "../state/db.js";
 import { currentTrace } from "./traceContext.js";
 import { recordLlmMetric } from "../metrics/registry.js";
 import { createLogger } from "../logging/logger.js";
@@ -71,19 +71,35 @@ export function recordLlmCall(rec: LlmCallRecord): void {
   }
 
   // 2) Durable row — only when the app DB is already live; best-effort.
+  // The pg write is async, but `recordLlmCall` stays a synchronous, never-throwing
+  // fire-and-forget sink: callers invoke it WITHOUT awaiting. We snapshot the
+  // trace context up front (it's request-scoped and must be read on the calling
+  // tick, before any await), then run the INSERT as an internally-caught
+  // floating promise so a slow/broken DB can never block or fail a reply.
   if (_dbSinkDisabled || !isDbOpen()) return;
+  const trace = currentTrace();
+  void writeDurableRow(rec, status, trace?.traceId ?? "untraced", trace?.userId ?? null);
+}
+
+/**
+ * Writes one `llm_calls` row. Internally catches ALL errors and resolves void —
+ * never rejects — so the floating promise in {@link recordLlmCall} stays safe.
+ */
+async function writeDurableRow(
+  rec: LlmCallRecord,
+  status: "ok" | "error",
+  traceId: string,
+  userId: string | null
+): Promise<void> {
   try {
-    const trace = currentTrace();
-    getDb()
-      .prepare(
-        `INSERT INTO llm_calls
-           (call_id, trace_id, provider, model, operation, input_tokens, output_tokens,
-            cost_usd, latency_ms, status, error_kind, num_turns, user_id, prompt_version, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
+    await getPool().query(
+      `INSERT INTO llm_calls
+         (call_id, trace_id, provider, model, operation, input_tokens, output_tokens,
+          cost_usd, latency_ms, status, error_kind, num_turns, user_id, prompt_version, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+      [
         randomUUID(),
-        trace?.traceId ?? "untraced",
+        traceId,
         rec.provider,
         rec.model,
         rec.operation,
@@ -94,10 +110,11 @@ export function recordLlmCall(rec: LlmCallRecord): void {
         status,
         rec.errorKind ?? null,
         rec.numTurns ?? null,
-        trace?.userId ?? null,
+        userId,
         rec.promptVersion ?? null,
-        new Date().toISOString()
-      );
+        new Date().toISOString(),
+      ]
+    );
   } catch (err) {
     _dbSinkDisabled = true;
     log.warn({ err }, "llm_calls sink disabled after write failure (non-fatal)");

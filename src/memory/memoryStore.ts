@@ -1,12 +1,12 @@
 /**
- * Main-process wrappers around the memory SQL: binds the lazy `getDb()`
- * singleton so callers (the Slack event loop, the system-prompt builder)
- * never juggle handles. The db-handle-parameterized functions themselves
+ * Main-process wrappers around the memory SQL: binds the shared `getPool()`
+ * pool so callers (the Slack event loop, the system-prompt builder)
+ * never juggle handles. The Queryable-parameterized functions themselves
  * live in memorySql.ts so a separate-process MCP server can reuse them with
- * its own handle in a later PR.
+ * its own pool in a later PR.
  */
 
-import { getDb } from "../state/db.js";
+import { getPool } from "../state/db.js";
 import { createLogger } from "../logging/logger.js";
 import {
   recordMemoryFactStored,
@@ -98,15 +98,15 @@ function recallVisible(c: MemoryRow, viewer: ViewerScope | string): boolean {
  * to what `viewer` may see via the canView ACL seam. A legacy string viewer
  * (the default) preserves the pre-brain exact-visibility filter.
  *
- * Synchronous (better-sqlite3) and failure-proof by contract: ANY internal
- * error is logged and swallowed, returning [] — a memory failure must never
- * fail a Slack reply.
+ * Async (node-postgres) and failure-proof by contract: ANY internal error is
+ * logged and swallowed, returning [] — a memory failure must never fail a
+ * Slack reply.
  */
-export function searchMemories(
+export async function searchMemories(
   query: string,
   k = 6,
   viewer: ViewerScope | string = "founders"
-): RankedMemory[] {
+): Promise<RankedMemory[]> {
   // Metrics note: searchMemories is the only in-process recall path, and its
   // return value is exactly what buildSystemPrompt injects — so the
   // injected/retrieval-empty counters live here (index.ts's main() is
@@ -114,10 +114,10 @@ export function searchMemories(
   // and error paths, counts as one empty retrieval.
   let results: RankedMemory[] = [];
   try {
-    const db = getDb();
+    const pool = getPool();
     const ftsQuery = sanitizeFtsQuery(query);
     if (ftsQuery) {
-      const candidates = searchCandidates(db, ftsQuery).filter((c) =>
+      const candidates = (await searchCandidates(pool, ftsQuery)).filter((c) =>
         recallVisible(c, viewer)
       );
       results = rankMemories(candidates, new Date(), k);
@@ -143,28 +143,28 @@ export function searchMemories(
  * fact is ranked with a constant relevance term (bm = -1, the LIKE-fallback
  * convention) so recency/category/confidence order them.
  */
-export function assembleRetrieval(
+export async function assembleRetrieval(
   query: string,
   _askerUserId: string,
   viewer: ViewerScope | string = "founders",
   queryVec?: Float32Array
-): RetrievalBundle {
+): Promise<RetrievalBundle> {
   let queryFacts: RankedMemory[] = [];
   let entityFacts: RankedMemory[] = [];
   let mentionedEntities: MentionedEntity[] = [];
   const dossiers: EntityDossierRef[] = [];
   try {
-    const db = getDb();
+    const pool = getPool();
     const now = new Date();
 
     // Query-text facts: hybrid (BM25 ⊕ cosine) when a query embedding is
     // supplied, else BM25-only. Both scope-filtered via canView.
     const ftsQuery = sanitizeFtsQuery(query);
     const ftsCandidates = ftsQuery
-      ? searchCandidates(db, ftsQuery).filter((c) => recallVisible(c, viewer))
+      ? (await searchCandidates(pool, ftsQuery)).filter((c) => recallVisible(c, viewer))
       : [];
     if (queryVec) {
-      const semantic = semanticCandidates(db, queryVec).filter((c) =>
+      const semantic = (await semanticCandidates(pool, queryVec)).filter((c) =>
         recallVisible(c, viewer)
       );
       queryFacts = rankHybrid(fuseCandidates(ftsCandidates, semantic), now, 6);
@@ -172,13 +172,13 @@ export function assembleRetrieval(
       queryFacts = rankMemories(ftsCandidates, now, 6);
     }
 
-    mentionedEntities = resolveQueryEntities(db, query, 3);
+    mentionedEntities = await resolveQueryEntities(pool, query, 3);
     const seen = new Set<number>(queryFacts.map((f) => f.id));
     const entityCandidates: MemoryCandidate[] = [];
     for (const m of mentionedEntities) {
       // A consolidated dossier replaces this entity's raw facts (store a lot,
       // inject a little) — only fall back to raw linked facts when none exists.
-      const profile = getEntityProfile(db, m.entityId);
+      const profile = await getEntityProfile(pool, m.entityId);
       if (profile && profile.profileMd.trim().length > 0) {
         dossiers.push({
           entityId: m.entityId,
@@ -190,8 +190,8 @@ export function assembleRetrieval(
         });
         continue;
       }
-      const ids = getEntityMemoryIds(db, m.entityId);
-      for (const row of getMemoriesByIds(db, ids)) {
+      const ids = await getEntityMemoryIds(pool, m.entityId);
+      for (const row of await getMemoriesByIds(pool, ids)) {
         if (seen.has(row.id) || !recallVisible(row, viewer)) continue;
         seen.add(row.id);
         entityCandidates.push({ ...row, bm: -1 });
@@ -219,11 +219,11 @@ export function assembleRetrieval(
   };
 }
 
-// Thin getDb-bound wrappers (used by the extraction/ingestion PRs).
+// Thin pool-bound wrappers (used by the extraction/ingestion PRs).
 
-export function insertFact(fact: NewFact): InsertResult {
-  const db = getDb();
-  const result = sqlInsertFact(db, fact);
+export async function insertFact(fact: NewFact): Promise<InsertResult> {
+  const pool = getPool();
+  const result = await sqlInsertFact(pool, fact);
   // One "stored" event whether freshly inserted or dedup-reinforced. The
   // memory MCP server (separate process) inserts via memorySql directly and
   // does NOT report metrics — see src/metrics/registry.ts.
@@ -234,7 +234,7 @@ export function insertFact(fact: NewFact): InsertResult {
   // must never fail a fact insert or, transitively, a Slack reply.
   if (isEntityGraphEnabled()) {
     try {
-      linkFactEntities(db, result.id, fact);
+      await linkFactEntities(pool, result.id, fact);
     } catch (err) {
       log.warn({ err }, "Entity linking failed (non-fatal)");
     }
@@ -242,14 +242,14 @@ export function insertFact(fact: NewFact): InsertResult {
   return result;
 }
 
-export function forgetMemory(id: number, now?: Date): boolean {
-  return sqlForgetMemory(getDb(), id, now);
+export async function forgetMemory(id: number, now?: Date): Promise<boolean> {
+  return sqlForgetMemory(getPool(), id, now);
 }
 
-export function supersedeMemory(oldId: number, fact: NewFact): InsertResult {
-  return sqlSupersedeMemory(getDb(), oldId, fact);
+export async function supersedeMemory(oldId: number, fact: NewFact): Promise<InsertResult> {
+  return sqlSupersedeMemory(getPool(), oldId, fact);
 }
 
-export function recentMemories(limit?: number): MemoryRow[] {
-  return sqlRecentMemories(getDb(), limit);
+export async function recentMemories(limit?: number): Promise<MemoryRow[]> {
+  return sqlRecentMemories(getPool(), limit);
 }

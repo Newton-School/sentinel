@@ -42,7 +42,8 @@ async function loadHook(opts: {
 }) {
   vi.doMock("../src/config.js", () => ({
     config: {
-      SQLITE_DB_PATH: ":memory:",
+      DATABASE_URL: process.env.DATABASE_URL,
+      PG_POOL_MAX: 5,
       LOG_LEVEL: "silent",
       ...(opts.apiKey ? { OPENAI_API_KEY: opts.apiKey } : {}),
     },
@@ -51,8 +52,11 @@ async function loadHook(opts: {
   vi.doMock("../src/memory/extractor.js", () => ({ extractFacts }));
 
   const hook = await import("../src/memory/conversationHook.js");
-  const { getDb } = await import("../src/state/db.js");
-  return { hook, extractFacts, getDb };
+  const { initDb, getPool } = await import("../src/state/db.js");
+  await initDb();
+  const { resetTestDb } = await import("./helpers/pgTest.js");
+  await resetTestDb();
+  return { hook, extractFacts, getDb: getPool };
 }
 
 describe("conversationHook.extractFromConversation", () => {
@@ -62,7 +66,7 @@ describe("conversationHook.extractFromConversation", () => {
 
   afterEach(async () => {
     const { closeDb } = await import("../src/state/db.js");
-    closeDb();
+    await closeDb();
   });
 
   it("never throws and never rejects, even when the extractor explodes", async () => {
@@ -159,12 +163,12 @@ describe("conversationHook.extractFromConversation", () => {
     });
     await hook.__testing.flush();
 
-    const rows = getDb()
-      .prepare(
+    const rows = (
+      await getDb().query(
         `SELECT text, source_type, source_ref, source_label, confidence, evidence_quote
          FROM memories ORDER BY id`
       )
-      .all() as Array<{
+    ).rows as Array<{
       text: string;
       source_type: string;
       source_ref: string;

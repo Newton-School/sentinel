@@ -1,11 +1,11 @@
-import { getDb } from "../state/db.js";
+import { getPool } from "../state/db.js";
 import { createLogger } from "../logging/logger.js";
 import type { PersonaProfile, PersonaTrait } from "./types.js";
 import { decayedConfidence } from "./personaDecay.js";
 
 const log = createLogger("persona-store");
 
-// Raw row shapes as returned by SQLite (snake_case columns).
+// Raw row shapes as returned by Postgres (snake_case columns).
 interface PersonaRow {
   user_id: string;
   display_name: string;
@@ -48,39 +48,38 @@ function mapTraitRow(row: PersonaTraitRow): PersonaTrait {
   };
 }
 
-export function getOrCreatePersona(
+export async function getOrCreatePersona(
   userId: string,
   displayName: string
-): PersonaProfile {
-  const db = getDb();
+): Promise<PersonaProfile> {
+  const pool = getPool();
   const now = new Date().toISOString();
 
   // Idempotent upsert: guarantees a row exists without ever throwing on a
   // concurrent/duplicate first-time insert (personas.user_id is the PK).
   // DO NOTHING preserves an existing row's display_name/role/timestamps.
-  db.prepare(
+  await pool.query(
     `INSERT INTO personas (user_id, display_name, role, created_at, updated_at)
-     VALUES (?, ?, NULL, ?, ?)
-     ON CONFLICT(user_id) DO NOTHING`
-  ).run(userId, displayName, now, now);
+     VALUES ($1, $2, NULL, $3, $4)
+     ON CONFLICT (user_id) DO NOTHING`,
+    [userId, displayName, now, now]
+  );
 
   // Always read back through the mapping layer so we return the canonical
   // row (which, on conflict, is the pre-existing one — not our values).
-  const row = db
-    .prepare("SELECT * FROM personas WHERE user_id = ?")
-    .get(userId) as PersonaRow;
+  const row = (await pool.query("SELECT * FROM personas WHERE user_id = $1", [userId]))
+    .rows[0] as PersonaRow;
 
   log.info({ userId, displayName }, "Fetched/created persona");
   return mapPersonaRow(row);
 }
 
-export function getTraits(userId: string): PersonaTrait[] {
-  const db = getDb();
-  const rows = db
-    .prepare(
-      "SELECT * FROM persona_traits WHERE user_id = ? ORDER BY confidence DESC"
-    )
-    .all(userId) as PersonaTraitRow[];
+export async function getTraits(userId: string): Promise<PersonaTrait[]> {
+  const pool = getPool();
+  const rows = (await pool.query(
+    "SELECT * FROM persona_traits WHERE user_id = $1 ORDER BY confidence DESC",
+    [userId]
+  )).rows as PersonaTraitRow[];
   return rows.map(mapTraitRow);
 }
 
@@ -92,11 +91,11 @@ export function getTraits(userId: string): PersonaTrait[] {
  *
  * `now` is injectable for deterministic tests; defaults to the current time.
  */
-export function getTraitsForPrompt(
+export async function getTraitsForPrompt(
   userId: string,
   now: Date = new Date()
-): PersonaTrait[] {
-  return getTraits(userId)
+): Promise<PersonaTrait[]> {
+  return (await getTraits(userId))
     .map((trait) => ({
       ...trait,
       confidence: decayedConfidence(trait.confidence, trait.updatedAt, now),
@@ -104,29 +103,30 @@ export function getTraitsForPrompt(
     .sort((a, b) => b.confidence - a.confidence);
 }
 
-export function upsertTrait(
+export async function upsertTrait(
   userId: string,
   label: string,
   value: string
-): void {
-  const db = getDb();
+): Promise<void> {
+  const pool = getPool();
   const now = new Date().toISOString();
 
   // Single-statement upsert keyed on UNIQUE(user_id, label, value).
   // First insert seeds confidence 0.5 / evidence_count 1. On conflict the
   // existing row is updated: confidence grows asymptotically toward the 0.95
   // ceiling by + (1 - confidence) * 0.15, and evidence_count is incremented.
-  // Bare confidence/evidence_count in the DO UPDATE refer to the existing
-  // row's values; MIN is SQLite's scalar min. This never throws on a
-  // duplicate insert, making it race-safe.
-  db.prepare(
+  // Qualified persona_traits.confidence/evidence_count in the DO UPDATE refer
+  // to the existing row's values; LEAST is Postgres's scalar min. This never
+  // throws on a duplicate insert, making it race-safe.
+  await pool.query(
     `INSERT INTO persona_traits (user_id, label, value, confidence, evidence_count, created_at, updated_at)
-     VALUES (?, ?, ?, 0.5, 1, ?, ?)
-     ON CONFLICT(user_id, label, value) DO UPDATE SET
-       confidence = MIN(confidence + (1 - confidence) * 0.15, 0.95),
-       evidence_count = evidence_count + 1,
-       updated_at = excluded.updated_at`
-  ).run(userId, label, value, now, now);
+     VALUES ($1, $2, $3, 0.5, 1, $4, $5)
+     ON CONFLICT (user_id, label, value) DO UPDATE SET
+       confidence = LEAST(persona_traits.confidence + (1 - persona_traits.confidence) * 0.15, 0.95),
+       evidence_count = persona_traits.evidence_count + 1,
+       updated_at = EXCLUDED.updated_at`,
+    [userId, label, value, now, now]
+  );
 
   log.debug({ userId, label, value }, "Upserted trait");
 }

@@ -13,8 +13,8 @@ export interface ShutdownDeps {
   stopSlackApp: () => Promise<void>;
   /** Close the health HTTP server. */
   closeHealthServer: () => Promise<void> | void;
-  /** Close the SQLite database. */
-  closeDb: () => void;
+  /** Close the Postgres connection pool. */
+  closeDb: () => Promise<void> | void;
   /** Current count of in-flight requests; polled during drain. */
   getActiveRequests: () => number;
   /** Process exit, injectable for tests. */
@@ -101,7 +101,7 @@ export function createGracefulShutdown(
     await deps.closeHealthServer();
 
     // 5. Close the database.
-    deps.closeDb();
+    await deps.closeDb();
 
     deps.log.info({ signal }, "Graceful shutdown complete");
 

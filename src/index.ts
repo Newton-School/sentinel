@@ -1,6 +1,6 @@
 import { config } from "./config.js";
 import { createLogger } from "./logging/logger.js";
-import { getDb, closeDb } from "./state/db.js";
+import { initDb, closeDb, isDbOpen } from "./state/db.js";
 import { getUnavailableSources } from "./agent/mcpServers.js";
 import { createSlackApp } from "./slack/socketClient.js";
 import { fetchThreadContext } from "./slack/threadContext.js";
@@ -138,8 +138,8 @@ async function handleEventInner(
     }
 
     // Load/create persona and build system prompt
-    const persona = getOrCreatePersona(envelope.userId, displayName);
-    const traits = getTraits(envelope.userId);
+    const persona = await getOrCreatePersona(envelope.userId, displayName);
+    const traits = await getTraits(envelope.userId);
 
     // The asker's scope — used for general-path memory recall AND threaded into
     // the memory MCP server on every route (so canView applies at the MCP edge
@@ -178,9 +178,9 @@ async function handleEventInner(
                 model: config.MEMORY_EMBEDDING_MODEL,
               })) ?? undefined;
           }
-          bundle = assembleRetrieval(envelope.text, envelope.userId, viewer, queryVec);
+          bundle = await assembleRetrieval(envelope.text, envelope.userId, viewer, queryVec);
         } else {
-          memories = searchMemories(envelope.text, 6, viewer);
+          memories = await searchMemories(envelope.text, 6, viewer);
         }
       } catch {
         // Never fail the reply over memory recall.
@@ -235,7 +235,7 @@ async function handleEventInner(
     // (and harvested into eval datasets). Best-effort.
     if (posted.ts) {
       try {
-        recordReply({
+        await recordReply({
           channelId: envelope.channelId,
           replyTs: posted.ts,
           traceId: currentTrace()?.traceId,
@@ -265,7 +265,7 @@ async function handleEventInner(
     }
 
     // Track query for persona evolution and audit logging.
-    trackQuery({
+    await trackQuery({
       userId: envelope.userId,
       channelId: envelope.channelId,
       threadTs: envelope.threadTs,
@@ -350,7 +350,7 @@ async function handleEventInner(
  */
 async function handleReaction(env: ReactionEnvelope): Promise<void> {
   try {
-    recordFeedback({
+    await recordFeedback({
       channelId: env.channelId,
       replyTs: env.itemTs,
       reactorUserId: env.reactorUserId,
@@ -371,7 +371,7 @@ async function handleFeedbackAction(
   client: Parameters<import("./slack/socketClient.js").EventHandler>[1]
 ): Promise<void> {
   try {
-    const recorded = recordButtonFeedback({
+    const recorded = await recordButtonFeedback({
       channelId: env.channelId,
       replyTs: env.replyTs,
       reactorUserId: env.reactorUserId,
@@ -405,8 +405,9 @@ let healthServer: http.Server | null = null;
 async function main(): Promise<void> {
   log.info("Starting Sentinel");
 
-  // Initialize database
-  getDb();
+  // Initialize database (open the pool + run migrations) before anything reads
+  // or writes it — the watchers and health probe below all depend on it.
+  await initDb();
   log.info("Database initialized");
 
   // Eagerly init the OpenAI Agents SDK (fail-fast on misconfig + no first-request
@@ -421,19 +422,17 @@ async function main(): Promise<void> {
   const uptimeSeconds = (): number =>
     Math.floor((Date.now() - startTime) / 1000);
 
-  // Readiness (/ready): probes Slack connectivity + a DB SELECT 1. All
+  // Readiness (/ready): probes Slack connectivity + that the DB layer is up. All
   // degradation lives here. Liveness (/health) deliberately does NOT call this
   // — see the uptime provider below — so a slow Socket Mode connect or a
-  // transient SQLite blip cannot flip /health to 503 and trigger a restart loop.
+  // transient DB blip cannot flip /health to 503 and trigger a restart loop.
+  // The readiness probe stays synchronous (the health server invokes it
+  // synchronously), so it reflects pool-open state via isDbOpen() rather than
+  // issuing an async SELECT 1.
   healthServer = startHealthServer(
     config.HEALTH_CHECK_PORT,
     (): HealthStatus => {
-      let dbStatus: "connected" | "error" = "connected";
-      try {
-        getDb().prepare("SELECT 1").get();
-      } catch {
-        dbStatus = "error";
-      }
+      const dbStatus: "connected" | "error" = isDbOpen() ? "connected" : "error";
 
       const isOk = slackConnected && dbStatus === "connected";
       return {
@@ -449,7 +448,7 @@ async function main(): Promise<void> {
     uptimeSeconds,
     // /metrics: in-process request/token/cost/feedback counters, plus eval
     // pass-rate gauges read from eval_runs at scrape time.
-    () => renderPrometheus() + renderEvalGauges()
+    async () => renderPrometheus() + (await renderEvalGauges())
   );
 
   // Start Meet watcher (auto-joins upcoming meetings via Playwright bot)
@@ -475,9 +474,13 @@ async function main(): Promise<void> {
   log.info("Slack Socket Mode connected — Sentinel is ready");
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   log.fatal({ err }, "Fatal error during startup");
-  closeDb();
+  try {
+    await closeDb();
+  } catch {
+    // Best-effort: never let a pool-close error mask the original fatal error.
+  }
   process.exit(1);
 });
 
@@ -502,9 +505,7 @@ const shutdown = createGracefulShutdown({
       }
       healthServer.close(() => resolve());
     }),
-  closeDb: () => {
-    closeDb();
-  },
+  closeDb: () => closeDb(),
   getActiveRequests: () => activeRequests,
   exit: (code) => process.exit(code),
   log,

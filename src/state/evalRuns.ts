@@ -4,7 +4,7 @@
  * reads it for the eval pass-rate gauge; the offline eval runner writes it.
  */
 
-import { getDb } from "./db.js";
+import { getPool } from "./db.js";
 
 export interface EvalRunRow {
   runId: string;
@@ -17,14 +17,13 @@ export interface EvalRunRow {
   ranAt: string; // ISO 8601 UTC
 }
 
-export function recordEvalRun(row: EvalRunRow): void {
-  getDb()
-    .prepare(
-      `INSERT INTO eval_runs
-         (run_id, suite, n_cases, n_pass, mean_score, prompt_version, judge_version, ran_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
+export async function recordEvalRun(row: EvalRunRow): Promise<void> {
+  const pool = getPool();
+  await pool.query(
+    `INSERT INTO eval_runs
+       (run_id, suite, n_cases, n_pass, mean_score, prompt_version, judge_version, ran_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [
       row.runId,
       row.suite,
       row.nCases,
@@ -32,18 +31,21 @@ export function recordEvalRun(row: EvalRunRow): void {
       row.meanScore,
       row.promptVersion ?? null,
       row.judgeVersion ?? null,
-      row.ranAt
-    );
+      row.ranAt,
+    ]
+  );
 }
 
 /** The most recent eval run for a suite (by ran_at), or null if none. */
-export function latestEvalRunBySuite(suite: string): EvalRunRow | null {
-  const r = getDb()
-    .prepare(
+export async function latestEvalRunBySuite(suite: string): Promise<EvalRunRow | null> {
+  const pool = getPool();
+  const r = (
+    await pool.query(
       `SELECT run_id, suite, n_cases, n_pass, mean_score, prompt_version, judge_version, ran_at
-       FROM eval_runs WHERE suite = ? ORDER BY ran_at DESC, id DESC LIMIT 1`
+       FROM eval_runs WHERE suite = $1 ORDER BY ran_at DESC, id DESC LIMIT 1`,
+      [suite]
     )
-    .get(suite) as
+  ).rows[0] as
     | {
         run_id: string;
         suite: string;
