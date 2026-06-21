@@ -210,15 +210,16 @@ async function ftsCandidateIds(
 ): Promise<Array<{ id: number; text: string }>> {
   if (isFtsAvailable()) {
     try {
+      const text = tokens.join(" ");
       return (await q.query(
         `SELECT id, text FROM memories
-         WHERE id @@@ $1 AND status = 'active'
-         ORDER BY paradedb.score(id) DESC
+         WHERE (text ||| $1 OR entities ||| $1 OR source_label ||| $1) AND status = 'active'
+         ORDER BY pdb.score(id) DESC
          LIMIT $2`,
-        [tokens.join(" "), limit]
+        [text, limit]
       )).rows as Array<{ id: number; text: string }>;
     } catch {
-      // pg_search query shape mismatch — fall back to ts_rank.
+      // pg_search version/shape mismatch — fall back to ts_rank.
     }
   }
   const tsquery = tokens.join(" | ");
@@ -247,16 +248,20 @@ export async function searchCandidates(
   const tokens = extractTokens(ftsQuery);
   if (tokens.length === 0) return [];
 
-  // 1. pg_search BM25 (ParadeDB only)
+  // 1. pg_search BM25 (ParadeDB only). Per-field `|||` token disjunction +
+  // pdb.score(id) (current pg_search syntax; the bm25 index over
+  // text/entities/source_label is built in db.ts). Guarded + try/catch so a
+  // version/shape mismatch degrades to ts_rank rather than failing recall.
   if (isFtsAvailable()) {
     try {
+      const text = tokens.join(" ");
       const rows = (await q.query(
-        `SELECT ${MEMORY_COLS}, -paradedb.score(id) AS bm
+        `SELECT ${MEMORY_COLS}, -pdb.score(id) AS bm
          FROM memories
-         WHERE id @@@ $1 AND status = 'active'
-         ORDER BY paradedb.score(id) DESC
+         WHERE (text ||| $1 OR entities ||| $1 OR source_label ||| $1) AND status = 'active'
+         ORDER BY pdb.score(id) DESC
          LIMIT $2`,
-        [tokens.join(" "), limit]
+        [text, limit]
       )).rows as Array<MemoryDbRow & { bm: number }>;
       return rows.map((r) => ({ ...mapMemoryRow(r), bm: r.bm }));
     } catch {
