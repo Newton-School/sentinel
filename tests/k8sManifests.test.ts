@@ -136,7 +136,7 @@ describe("k8s/base/deployment.yaml", () => {
     }
   });
 
-  it("mounts /app/data (PVC) and has no Claude-CLI creds wiring", () => {
+  it("mounts /app/data (PVC), has no Claude-CLI creds wiring, and waits for ParadeDB", () => {
     const raw = readBase("deployment.yaml");
     if (parseAll) {
       const podSpec = deploymentDoc().spec.template.spec;
@@ -147,12 +147,15 @@ describe("k8s/base/deployment.yaml", () => {
       expect(vol.persistentVolumeClaim?.claimName).toBeTruthy();
       // The Claude CLI is gone — no ~/.claude mount, no seed init container.
       expect(c.volumeMounts.some((m: any) => m.mountPath === "/home/pwuser/.claude")).toBe(false);
-      expect(podSpec.initContainers ?? []).toHaveLength(0);
+      // The only init container is wait-for-paradedb (blocks boot until PG is up).
+      const inits = podSpec.initContainers ?? [];
+      expect(inits.map((i: any) => i.name)).toEqual(["wait-for-paradedb"]);
     } else {
       expect(raw).toMatch(/mountPath:\s*\/app\/data/);
       expect(raw).toMatch(/claimName:/);
       expect(raw).not.toMatch(/\.claude/);
       expect(raw).not.toMatch(/claude-cli-creds/);
+      expect(raw).toMatch(/name:\s*wait-for-paradedb/);
     }
   });
 
@@ -198,24 +201,72 @@ describe("k8s/base/pvc.yaml", () => {
 });
 
 describe("k8s/base/secret.example.yaml", () => {
-  it("is a Secret template with only REPLACE_ME placeholders (no real creds)", () => {
+  // Non-secret keys may carry a sensible default (a username/db-name is not a
+  // credential); everything else must be a REPLACE_ME placeholder.
+  const NON_SECRET_KEYS = new Set(["POSTGRES_USER", "POSTGRES_DB"]);
+
+  it("contains two Secret templates (sentinel-secrets + paradedb-credentials) with only placeholders for real creds", () => {
     const raw = readBase("secret.example.yaml");
     if (parseAll) {
-      const doc: any = parseAll(raw).find((d: any) => d?.kind === "Secret");
-      const values = Object.values(doc.stringData ?? {}) as string[];
-      expect(values.length).toBeGreaterThan(0);
-      for (const v of values) {
-        expect(/REPLACE_ME/.test(String(v)), `placeholder expected, got: ${v}`).toBe(true);
+      const docs = parseAll(raw).filter((d: any) => d?.kind === "Secret") as any[];
+      expect(docs.map((d) => d.metadata?.name).sort()).toEqual([
+        "paradedb-credentials",
+        "sentinel-secrets",
+      ]);
+      const entries = docs.flatMap((d) => Object.entries(d.stringData ?? {})) as [string, string][];
+      expect(entries.length).toBeGreaterThan(0);
+      for (const [k, v] of entries) {
+        if (NON_SECRET_KEYS.has(k)) continue;
+        expect(/REPLACE_ME/.test(String(v)), `placeholder expected for ${k}, got: ${v}`).toBe(true);
       }
+      // The sensitive PG creds + the connection URL must be placeholders.
+      const sentinel = docs.find((d) => d.metadata?.name === "sentinel-secrets");
+      expect(sentinel.stringData.DATABASE_URL).toMatch(/REPLACE_ME/);
     } else {
+      // Fallback: scan stringData value lines across both documents, skipping
+      // metadata/structural lines; only `KEY: value` pairs are checked.
       const lines = raw.split("\n");
-      const idx = lines.findIndex((l) => /^\s*stringData:/.test(l));
-      const valueLines = lines.slice(idx + 1).filter((l) => /^\s+\S+:\s*\S/.test(l));
-      expect(valueLines.length).toBeGreaterThan(0);
-      for (const l of valueLines) {
-        const value = l.slice(l.indexOf(":") + 1).trim().replace(/^["']|["']$/g, "");
-        expect(/REPLACE_ME/.test(value), `placeholder expected, got: ${l.trim()}`).toBe(true);
+      let inStringData = false;
+      const pairs: Array<[string, string]> = [];
+      for (const l of lines) {
+        if (/^\s*stringData:/.test(l)) { inStringData = true; continue; }
+        if (/^\S/.test(l) || /^\s*(apiVersion|kind|metadata|type|---)/.test(l)) {
+          if (!/^\s+/.test(l)) inStringData = false;
+          continue;
+        }
+        const m = /^\s+([A-Za-z0-9_]+):\s*(\S.*)$/.exec(l);
+        if (inStringData && m) pairs.push([m[1], m[2].trim().replace(/^["']|["']$/g, "")]);
       }
+      expect(pairs.length).toBeGreaterThan(0);
+      for (const [k, v] of pairs) {
+        if (NON_SECRET_KEYS.has(k)) continue;
+        expect(/REPLACE_ME/.test(v), `placeholder expected for ${k}, got: ${v}`).toBe(true);
+      }
+    }
+  });
+});
+
+describe("k8s ParadeDB datastore manifests", () => {
+  it("ships the StatefulSet, headless Service, and backup CronJob, wired into the base kustomization", () => {
+    for (const f of ["paradedb-statefulset.yaml", "paradedb-service.yaml", "paradedb-backup-cronjob.yaml"]) {
+      expect(existsSync(join(baseDir, f)), `k8s/base/${f} should exist`).toBe(true);
+    }
+    const kust = readBase("kustomization.yaml");
+    expect(kust).toMatch(/paradedb-statefulset\.yaml/);
+    expect(kust).toMatch(/paradedb-service\.yaml/);
+    expect(kust).toMatch(/paradedb-backup-cronjob\.yaml/);
+  });
+
+  it("the StatefulSet runs a ParadeDB image with an RWO volume claim template", () => {
+    const raw = readBase("paradedb-statefulset.yaml");
+    if (parseAll) {
+      const doc: any = parseAll(raw).find((d: any) => d?.kind === "StatefulSet");
+      expect(doc.spec.replicas).toBe(1);
+      expect(doc.spec.template.spec.containers[0].image).toMatch(/paradedb/);
+      expect(doc.spec.volumeClaimTemplates[0].spec.accessModes).toContain("ReadWriteOnce");
+    } else {
+      expect(raw).toMatch(/paradedb\/paradedb/);
+      expect(raw).toMatch(/ReadWriteOnce/);
     }
   });
 });

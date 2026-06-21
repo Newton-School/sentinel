@@ -4,6 +4,10 @@ env:
   variables:
     ECR_REPO: sentinel
     NODE_VERSION: "20"
+    # The test suite runs against Postgres (pgvector for embeddings). pg_search
+    # BM25 is absent on this image, so recall uses the portable ts_rank path —
+    # the same path validated locally. True BM25 is exercised on ParadeDB itself.
+    TEST_PG_BASE_URL: "postgres://postgres:postgres@localhost:5432"
 
 phases:
   install:
@@ -11,6 +15,11 @@ phases:
       nodejs: 20
     commands:
       - npm ci
+      # Postgres + pgvector for the test suite (Docker is available — the build
+      # phase below uses it). Mapped to localhost:5432 for TEST_PG_BASE_URL.
+      - echo "Starting Postgres (pgvector) for tests..."
+      - docker run -d --name testpg -p 5432:5432 -e POSTGRES_PASSWORD=postgres pgvector/pgvector:pg16
+      - for i in $(seq 1 30); do docker exec testpg pg_isready -U postgres >/dev/null 2>&1 && break; echo "waiting for postgres..."; sleep 2; done
 
   pre_build:
     commands:

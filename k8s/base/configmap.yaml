@@ -9,9 +9,11 @@ data:
   # (see secret.example.yaml). Merged into the container env via envFrom.
   LOG_LEVEL: "info"
   NODE_ENV: "production"
-  # Keep the SQLite DB on the persistent volume mounted at /app/data so it
-  # survives pod restarts/rollouts.
-  SQLITE_DB_PATH: "/app/data/sentinel.db"
+  # Postgres connection pool size for the main app (the memory MCP subprocess
+  # opens its own small pool per request). DATABASE_URL itself is a secret.
+  PG_POOL_MAX: "10"
+  # S3 bucket for the nightly pg_dump backups (paradedb-backup-cronjob.yaml).
+  BACKUP_BUCKET: "REPLACE_WITH_BACKUP_BUCKET"
   HEALTH_CHECK_PORT: "8930"
   # Company-brain / memory feature gates (read from process.env at runtime).
   # Both require an OpenAI/embedding key in the Secret to actually do anything.

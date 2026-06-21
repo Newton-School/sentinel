@@ -29,8 +29,8 @@ COPY --from=builder /app/dist ./dist
 # process drops privileges. Chrome is installed system-wide under
 # /opt/google/chrome (world-readable/executable), so pwuser can launch it.
 # Make /app — and especially the /app/data volume mount point where the
-# SQLite DB, persistent Chrome profile, and meet-bot logs are written —
-# owned by and writable for pwuser.
+# persistent Chrome profile and meet-bot logs are written (the datastore now
+# lives in ParadeDB, not on this volume) — owned by and writable for pwuser.
 RUN mkdir -p /app/data && chown -R pwuser:pwuser /app
 USER pwuser
 VOLUME ["/app/data"]

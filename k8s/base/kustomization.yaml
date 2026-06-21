@@ -11,5 +11,9 @@ resources:
   - pvc.yaml
   - deployment.yaml
   - service.yaml
+  # ParadeDB (Postgres + pg_search + pgvector) — the datastore.
+  - paradedb-statefulset.yaml
+  - paradedb-service.yaml
+  - paradedb-backup-cronjob.yaml
   # Requires the Prometheus Operator CRD — remove if the cluster lacks it.
   - servicemonitor.yaml
