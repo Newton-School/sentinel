@@ -8,6 +8,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
+    "dashboard": "tsx src/dashboard/index.ts",
+    "dashboard:start": "node dist/dashboard/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "meet-bot:setup": "tsx src/meet-bot/setup.ts",

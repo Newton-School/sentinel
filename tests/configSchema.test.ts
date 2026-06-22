@@ -87,6 +87,21 @@ describe("real envSchema validation", () => {
       if (overridden.success) expect(overridden.data.AGENT_MAX_TURNS).toBe(7);
     });
 
+    it("defaults DASHBOARD_PORT to 8940 and coerces an override", () => {
+      const def = envSchema.safeParse({ ...base });
+      if (def.success) expect(def.data.DASHBOARD_PORT).toBe(8940);
+      const over = envSchema.safeParse({ ...base, DASHBOARD_PORT: "9001" });
+      if (over.success) expect(over.data.DASHBOARD_PORT).toBe(9001);
+    });
+
+    it("accepts an optional read-only database URL for the dashboard", () => {
+      const none = envSchema.safeParse({ ...base });
+      if (none.success) expect(none.data.DATABASE_URL_READONLY).toBeUndefined();
+      const set = envSchema.safeParse({ ...base, DATABASE_URL_READONLY: "postgres://ro@db/sentinel" });
+      expect(set.success).toBe(true);
+      if (set.success) expect(set.data.DATABASE_URL_READONLY).toBe("postgres://ro@db/sentinel");
+    });
+
     it("parses GENERAL_MCP_SERVERS into a set (or leaves it undefined)", () => {
       const none = envSchema.safeParse({ ...base });
       if (none.success) expect(none.data.GENERAL_MCP_SERVERS).toBeUndefined();

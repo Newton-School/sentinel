@@ -65,6 +65,12 @@ export const envSchema = z
 
   HEALTH_CHECK_PORT: z.coerce.number().default(8930),
 
+  // Read-only observability dashboard (separate service). Its own port and an
+  // optional SELECT-only Postgres URL; when DATABASE_URL_READONLY is unset the
+  // dashboard falls back to DATABASE_URL (fine for local dev).
+  DASHBOARD_PORT: z.coerce.number().default(8940),
+  DATABASE_URL_READONLY: z.string().min(1).optional(),
+
   // Postgres (ParadeDB in prod) — system of record for personas, the company
   // brain (facts + entity graph), telemetry, and feedback. Required in prod;
   // the memory MCP subprocess receives the same URL via its env.
