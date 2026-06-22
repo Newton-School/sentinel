@@ -50,7 +50,7 @@ const PROMPTS: Record<PromptId, PromptDef> = {
   extraction: def("extraction", "1.0.0", EXTRACTION_INSTRUCTIONS.join("\n")),
   consolidation: def("consolidation", "1.0.0", CONSOLIDATION_SYSTEM_TEMPLATE),
   system: def("system", "1.0.0", BASE_PROMPT),
-  analytics: def("analytics", "1.0.1", ANALYTICS_BRAIN),
+  analytics: def("analytics", "1.1.0", ANALYTICS_BRAIN),
   analytics_classifier: def("analytics_classifier", "1.1.0", ANALYTICS_CLASSIFIER_INSTRUCTIONS),
 };
 
