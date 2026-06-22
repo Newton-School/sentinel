@@ -86,6 +86,63 @@ export interface NegativeFeedback {
   createdAt: string;
 }
 
+// ── Company brain ──────────────────────────────────────────────────────────
+
+export interface EntitySummary {
+  id: number;
+  type: string;
+  canonicalName: string;
+  aliases: string[];
+  status: string;
+  visibility: string;
+  factCount: number;
+  slackUserId: string | null;
+  email: string | null;
+  updatedAt: string;
+}
+
+export interface GraphNode { id: number; type: string; name: string; factCount: number; }
+export interface GraphEdge { src: number; dst: number; relation: string; confidence: number; }
+export interface Graph { nodes: GraphNode[]; edges: GraphEdge[]; capped: boolean; }
+
+export interface Relationship {
+  relation: string;
+  direction: "out" | "in";
+  otherId: number;
+  otherName: string;
+  otherType: string;
+  confidence: number;
+}
+
+export interface MemorySummary {
+  id: number;
+  text: string;
+  category: string;
+  entities: string[];
+  sourceType: string;
+  sourceLabel: string | null;
+  speaker: string | null;
+  assertedAt: string | null;
+  evidenceQuote: string | null;
+  confidence: number;
+  verified: boolean;
+  visibility: string;
+  sensitivity: string;
+  createdAt: string;
+}
+
+export interface EntityDetail {
+  entity: EntitySummary;
+  profileMd: string | null;
+  builtAt: string | null;
+  relationships: Relationship[];
+  backingFacts: MemorySummary[];
+}
+
+export interface PersonaSummary { userId: string; displayName: string; role: string | null; updatedAt: string; }
+export interface PersonaTrait { label: string; value: string; confidence: number; evidenceCount: number; updatedAt: string; }
+export interface PersonaDetail extends PersonaSummary { traits: PersonaTrait[]; }
+
 function qs(params: Record<string, string | number | undefined>): string {
   const u = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
@@ -116,4 +173,13 @@ export const api = {
   trace: (id: string) => get<TraceDetail>(`/api/traces/${encodeURIComponent(id)}`),
   negativeFeedback: (limit?: number) =>
     get<{ items: NegativeFeedback[] }>(`/api/feedback${qs({ sentiment: "negative", limit })}`),
+  entities: (p: { type?: string; search?: string; limit?: number } = {}) =>
+    get<{ items: EntitySummary[] }>(`/api/entities${qs(p)}`),
+  entity: (id: number) => get<EntityDetail>(`/api/entities/${id}`),
+  graph: (p: { types?: string; nodeLimit?: number } = {}) => get<Graph>(`/api/graph${qs(p)}`),
+  memories: (p: { category?: string; sourceType?: string; search?: string; since?: string; limit?: number } = {}) =>
+    get<{ items: MemorySummary[] }>(`/api/memories${qs(p)}`),
+  personas: (limit?: number) => get<{ items: PersonaSummary[] }>(`/api/personas${qs({ limit })}`),
+  persona: (userId: string) => get<PersonaDetail>(`/api/personas/${encodeURIComponent(userId)}`),
 };
+
