@@ -56,3 +56,16 @@ describe("buildspec.yml CI pipeline", () => {
     expect(block).toMatch(/aws ecr get-login-password/);
   });
 });
+
+describe("buildspec.yml — dashboard image", () => {
+  const buildspec = readFileSync(join(process.cwd(), "buildspec.yml"), "utf8");
+
+  it("builds the dashboard image from Dockerfile.dashboard", () => {
+    expect(buildspec).toMatch(/Dockerfile\.dashboard/);
+  });
+
+  it("builds and pushes a separate sentinel-dashboard image", () => {
+    expect(buildspec).toMatch(/sentinel-dashboard/);
+    expect(buildspec).toMatch(/docker push[^\n]*dashboard/i);
+  });
+});

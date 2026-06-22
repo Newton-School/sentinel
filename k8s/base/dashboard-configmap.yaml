@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sentinel-dashboard-config
+  labels:
+    app: sentinel-dashboard
+data:
+  # Non-secret tunables for the dashboard service. The SELECT-only
+  # DATABASE_URL_READONLY is the ONLY secret it needs (sentinel-dashboard-secrets).
+  LOG_LEVEL: "info"
+  NODE_ENV: "production"
+  DASHBOARD_PORT: "8940"
+  # Small pool — the dashboard issues short read queries; keep load off the
+  # primary that the bot writes to.
+  PG_POOL_MAX: "5"
+  # The built SPA dir is baked into the image (Dockerfile.dashboard); set here
+  # too so it's explicit/overridable.
+  DASHBOARD_STATIC_DIR: "/app/web"

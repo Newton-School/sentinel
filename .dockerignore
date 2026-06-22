@@ -4,6 +4,10 @@
 # the COPY logic ever changes to a glob.
 node_modules
 dist
+# SPA package (built fresh inside Dockerfile.dashboard). The bare node_modules/
+# dist above only match the repo root, so the nested ones need explicit entries.
+dashboard-web/node_modules
+dashboard-web/dist
 .env
 .env.*
 *.db

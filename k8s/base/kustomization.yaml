@@ -11,6 +11,14 @@ resources:
   - pvc.yaml
   - deployment.yaml
   - service.yaml
+  # Read-only observability dashboard (separate, stateless service). Its
+  # SELECT-only role is created out-of-band via readonly-role.sql, and its
+  # Secret (sentinel-dashboard-secrets, with DATABASE_URL_READONLY) is applied
+  # out-of-band like sentinel-secrets.
+  - dashboard-configmap.yaml
+  - dashboard-deployment.yaml
+  - dashboard-service.yaml
+  - dashboard-ingress.yaml
   # ParadeDB (Postgres + pg_search + pgvector) — the datastore.
   - paradedb-statefulset.yaml
   - paradedb-service.yaml

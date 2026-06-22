@@ -1,0 +1,41 @@
+# Read-only observability dashboard image — SPA + JSON API. Deliberately NOT the
+# Playwright base: a slim node:20-alpine image (no browser), run as its own
+# stateless, horizontally-scalable Deployment, separate from the bot.
+
+FROM node:20-alpine AS builder
+# The root package.json lists playwright, but the dashboard never launches a
+# browser — skip the (large, slow) browser download during npm ci.
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+WORKDIR /app
+# Compile the API (tsc → dist/, including dist/dashboard) from the root package.
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY tsconfig.json ./
+COPY src/ ./src/
+RUN npm run build
+# Build the SPA (Vite → dashboard-web/dist).
+COPY dashboard-web/ ./dashboard-web/
+RUN npm --prefix dashboard-web ci && npm --prefix dashboard-web run build
+
+FROM node:20-alpine AS runtime
+# curl: HEALTHCHECK below. dumb-init: PID 1 — forwards SIGTERM (K8s graceful
+# shutdown) and reaps any child, instead of leaving zombies / ignoring signals.
+RUN apk add --no-cache curl dumb-init
+ENV NODE_ENV=production
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV DASHBOARD_PORT=8940
+# The built SPA is served from here by the API (single origin).
+ENV DASHBOARD_STATIC_DIR=/app/web
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/dashboard-web/dist ./web
+# Drop to the non-root `node` user (uid 1000) shipped by the base image.
+RUN chown -R node:node /app
+USER node
+EXPOSE 8940
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -f http://localhost:8940/api/health || exit 1
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["node", "dist/dashboard/index.js"]

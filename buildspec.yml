@@ -3,6 +3,8 @@ version: 0.2
 env:
   variables:
     ECR_REPO: sentinel
+    # Separate repo/image for the read-only dashboard service (slim, browser-free).
+    ECR_REPO_DASHBOARD: sentinel-dashboard
     NODE_VERSION: "20"
     # The test suite runs against Postgres (pgvector for embeddings). pg_search
     # BM25 is absent on this image, so recall uses the portable ts_rank path —
@@ -32,21 +34,28 @@ phases:
 
   build:
     commands:
-      - echo "Building Docker image..."
+      - echo "Building bot Docker image..."
       - IMAGE_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$ECR_REPO
       - docker build -t $IMAGE_URI:$CODEBUILD_RESOLVED_SOURCE_VERSION -t $IMAGE_URI:latest .
+      - echo "Building dashboard Docker image (Dockerfile.dashboard)..."
+      - DASHBOARD_IMAGE_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$ECR_REPO_DASHBOARD
+      - docker build -f Dockerfile.dashboard -t $DASHBOARD_IMAGE_URI:$CODEBUILD_RESOLVED_SOURCE_VERSION -t $DASHBOARD_IMAGE_URI:latest .
 
   post_build:
     commands:
       - echo "Pushing to ECR..."
       - docker push $IMAGE_URI:$CODEBUILD_RESOLVED_SOURCE_VERSION
       - docker push $IMAGE_URI:latest
-      - echo "Writing image definition for K8s deployment..."
+      - docker push $DASHBOARD_IMAGE_URI:$CODEBUILD_RESOLVED_SOURCE_VERSION
+      - docker push $DASHBOARD_IMAGE_URI:latest
+      - echo "Writing image definitions for K8s deployment..."
       - printf '{"ImageURI":"%s"}' $IMAGE_URI:$CODEBUILD_RESOLVED_SOURCE_VERSION > imageDetail.json
+      - printf '{"ImageURI":"%s"}' $DASHBOARD_IMAGE_URI:$CODEBUILD_RESOLVED_SOURCE_VERSION > imageDetailDashboard.json
 
 artifacts:
   files:
     - imageDetail.json
+    - imageDetailDashboard.json
     - k8s/**/*
 
 cache:
