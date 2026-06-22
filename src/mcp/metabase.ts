@@ -8,14 +8,15 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { assertReadOnlySql } from "./sqlReadOnly.js";
 import { createMetabaseClient } from "./metabaseClient.js";
 import {
-  shapeQueryResult,
-  mapDashboards,
-  mapDatabases,
-  type MetabaseDataset,
-} from "./metabaseShape.js";
+  runQuery,
+  getQuestion,
+  getCardSql,
+  getDashboard,
+  listDashboards,
+  listDatabases,
+} from "./metabaseTools.js";
 import { assertEnv } from "./requireEnv.js";
 
 // Validate required env up front so a misconfigured server fails with a clear
@@ -59,66 +60,37 @@ server.tool(
       .default(1)
       .describe("Metabase database ID (default: 1)"),
   },
-  async ({ sql, database_id }) => {
-    // Enforce read-only access at the tool boundary. The agent auto-approves MCP
-    // tool calls, so a prompt-injected or hallucinated mutating statement must be
-    // rejected before it reaches the warehouse.
-    try {
-      assertReadOnlySql(sql);
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: reason.startsWith("Rejected:") ? reason : `Rejected: ${reason}`,
-          },
-        ],
-        isError: true,
-      };
-    }
-
-    const result = (await metabaseFetch("/api/dataset", {
-      method: "POST",
-      body: JSON.stringify({
-        database: database_id,
-        type: "native",
-        native: { query: sql },
-      }),
-    })) as { data: MetabaseDataset };
-
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(shapeQueryResult(result.data), null, 2),
-        },
-      ],
-    };
-  }
+  async ({ sql, database_id }) => runQuery(metabaseFetch, sql, database_id)
 );
 
-// Tool: Get a saved question (card) by ID
+// Tool: Run a saved question (card) by ID and return its rows.
 server.tool(
   "metabase_get_question",
-  "Fetch results from a saved Metabase question/card by its ID.",
+  "Run a saved Metabase question/card by its ID and return the resulting rows.",
   {
     question_id: z.number().describe("The Metabase question (card) ID"),
   },
-  async ({ question_id }) => {
-    const result = (await metabaseFetch(
-      `/api/card/${question_id}/query`
-    )) as { data: MetabaseDataset };
+  async ({ question_id }) => getQuestion(metabaseFetch, question_id)
+);
 
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(shapeQueryResult(result.data), null, 2),
-        },
-      ],
-    };
-  }
+// Tool: Read a saved question's underlying SQL definition (not its rows).
+server.tool(
+  "metabase_get_card_sql",
+  "Read the underlying native SQL + parameters of a saved Metabase question/card by its ID. Use this to reproduce a dashboard card's exact numbers instead of hand-writing the query.",
+  {
+    card_id: z.number().describe("The Metabase question (card) ID"),
+  },
+  async ({ card_id }) => getCardSql(metabaseFetch, card_id)
+);
+
+// Tool: Fetch a single dashboard by ID, including its tabs and cards.
+server.tool(
+  "metabase_get_dashboard",
+  "Fetch a Metabase dashboard by its ID, including its tabs and the cards (saved question IDs) it contains. Use this to open a dashboard URL, then read/run the cards via metabase_get_card_sql / metabase_get_question.",
+  {
+    dashboard_id: z.number().describe("The Metabase dashboard ID"),
+  },
+  async ({ dashboard_id }) => getDashboard(metabaseFetch, dashboard_id)
 );
 
 // Tool: List dashboards
@@ -126,22 +98,7 @@ server.tool(
   "metabase_list_dashboards",
   "List all Metabase dashboards. Returns dashboard names and IDs.",
   {},
-  async () => {
-    const dashboards = (await metabaseFetch("/api/dashboard")) as Array<{
-      id: number;
-      name: string;
-      description: string | null;
-    }>;
-
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(mapDashboards(dashboards), null, 2),
-        },
-      ],
-    };
-  }
+  async () => listDashboards(metabaseFetch)
 );
 
 // Tool: List databases
@@ -149,20 +106,7 @@ server.tool(
   "metabase_list_databases",
   "List all databases connected to Metabase. Use this to find the correct database_id for SQL queries.",
   {},
-  async () => {
-    const result = (await metabaseFetch("/api/database")) as {
-      data: Array<{ id: number; name: string; engine: string }>;
-    };
-
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(mapDatabases(result.data), null, 2),
-        },
-      ],
-    };
-  }
+  async () => listDatabases(metabaseFetch)
 );
 
 // Start server
