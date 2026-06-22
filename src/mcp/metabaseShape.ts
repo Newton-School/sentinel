@@ -127,11 +127,23 @@ export function mapDashboardDetail(dash: DashboardDetailResponse): DashboardDeta
   };
 }
 
+/** A Metabase card parameter (from `card.parameters`), reused to run the card. */
+export interface CardParameter {
+  slug?: string;
+  name?: string;
+  type?: string;
+  /** Metabase parameter target, e.g. ["variable", ["template-tag", "course"]]. */
+  target?: unknown;
+}
+
 /** The (partial) raw shape of a card from GET /api/card/:id. */
 export interface CardDetailResponse {
   id: number;
   name: string;
+  /** Top-level query kind ("native" | "query") — present even in pMBQL cards. */
+  query_type?: string | null;
   database_id?: number | null;
+  parameters?: CardParameter[] | null;
   dataset_query?: {
     type?: string;
     database?: number | null;
@@ -139,6 +151,8 @@ export interface CardDetailResponse {
       query?: string;
       "template-tags"?: Record<string, unknown> | null;
     } | null;
+    // New pMBQL (Metabase Lib) format: native SQL lives in stages[].native.
+    stages?: Array<{ native?: unknown }> | null;
   } | null;
 }
 
@@ -163,12 +177,37 @@ export function mapCardSql(card: CardDetailResponse): CardSqlSummary {
   const dq = card.dataset_query ?? {};
   const native = dq.native ?? {};
   const templateTags = native["template-tags"] ?? {};
+
+  // Parameter slugs come from card.parameters (the pMBQL source) unioned with
+  // legacy native template-tags, so the agent learns what to pass to run it.
+  const paramSlugs = (card.parameters ?? [])
+    .map((p) => p.slug ?? p.name)
+    .filter((s): s is string => typeof s === "string");
+  const parameters = Array.from(new Set([...paramSlugs, ...Object.keys(templateTags)]));
+
   return {
     id: card.id,
     name: card.name,
     database_id: card.database_id ?? dq.database ?? null,
-    query_type: typeof dq.type === "string" ? dq.type : "unknown",
-    sql: typeof native.query === "string" ? native.query : null,
-    parameters: Object.keys(templateTags),
+    query_type:
+      typeof card.query_type === "string"
+        ? card.query_type
+        : typeof dq.type === "string"
+          ? dq.type
+          : "unknown",
+    sql: extractNativeSql(dq),
+    parameters,
   };
+}
+
+/**
+ * Find the native SQL on a card's dataset_query, supporting both the legacy
+ * shape (`native.query`) and the new pMBQL shape (`stages[].native`).
+ */
+function extractNativeSql(dq: NonNullable<CardDetailResponse["dataset_query"]>): string | null {
+  if (typeof dq.native?.query === "string") return dq.native.query;
+  for (const stage of dq.stages ?? []) {
+    if (typeof stage.native === "string") return stage.native;
+  }
+  return null;
 }

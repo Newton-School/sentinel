@@ -6,6 +6,7 @@ import {
   getDashboard,
   listDashboards,
   listDatabases,
+  buildCardParameters,
 } from "../src/mcp/metabaseTools.js";
 
 /**
@@ -37,6 +38,83 @@ describe("getQuestion (metabase_get_question)", () => {
       rows: [{ n: 1 }],
       rowCount: 1,
     });
+  });
+});
+
+describe("buildCardParameters", () => {
+  const cardParams = [
+    { slug: "start_date", type: "date/single", target: ["variable", ["template-tag", "start_date"]] },
+    { slug: "course", type: "string/=", target: ["variable", ["template-tag", "course"]] },
+  ];
+
+  it("reuses each card param's type+target and injects the provided value, matched by slug", () => {
+    expect(
+      buildCardParameters(cardParams as any, { start_date: "2026-06-13", course: "Full Course" })
+    ).toEqual([
+      { type: "date/single", target: ["variable", ["template-tag", "start_date"]], value: "2026-06-13" },
+      { type: "string/=", target: ["variable", ["template-tag", "course"]], value: "Full Course" },
+    ]);
+  });
+
+  it("skips values whose slug has no matching card parameter (avoids a 400)", () => {
+    expect(buildCardParameters(cardParams as any, { nope: "x", course: "DS" })).toEqual([
+      { type: "string/=", target: ["variable", ["template-tag", "course"]], value: "DS" },
+    ]);
+  });
+
+  it("returns [] when no values are provided", () => {
+    expect(buildCardParameters(cardParams as any, {})).toEqual([]);
+  });
+});
+
+describe("getQuestion with parameters (parameterized cards)", () => {
+  it("fetches the card def, builds the body from matched params, and POSTs the run", async () => {
+    const fetchMock = vi
+      .fn()
+      // GET /api/card/:id (definition, to read param target/type)
+      .mockResolvedValueOnce({
+        id: 10142,
+        name: "Talktime X Movement",
+        query_type: "native",
+        parameters: [
+          { slug: "start_date", type: "date/single", target: ["variable", ["template-tag", "start_date"]] },
+          { slug: "course", type: "string/=", target: ["variable", ["template-tag", "course"]] },
+        ],
+        dataset_query: { stages: [{ native: "SELECT 1" }] },
+      })
+      // POST /api/card/:id/query (run with parameters)
+      .mockResolvedValueOnce({ data: { cols: [{ name: "stage" }], rows: [["Could Not Connect"]] } });
+
+    const result = await getQuestion(fetchMock, 10142, {
+      start_date: "2026-06-13",
+      course: "Full Course",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/card/10142"); // definition GET
+    const [runPath, runOpts] = fetchMock.mock.calls[1];
+    expect(runPath).toBe("/api/card/10142/query");
+    expect(runOpts.method).toBe("POST");
+    expect(JSON.parse(runOpts.body)).toEqual({
+      parameters: [
+        { type: "date/single", target: ["variable", ["template-tag", "start_date"]], value: "2026-06-13" },
+        { type: "string/=", target: ["variable", ["template-tag", "course"]], value: "Full Course" },
+      ],
+    });
+    expect(parseText(result)).toEqual({
+      columns: ["stage"],
+      rows: [{ stage: "Could Not Connect" }],
+      rowCount: 1,
+    });
+  });
+
+  it("runs bare (single POST, no definition fetch) when no parameters are given", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ data: { cols: [], rows: [] } });
+    await getQuestion(fetchMock, 9999, {});
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/card/9999/query");
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("POST");
+    expect(fetchMock.mock.calls[0][1]?.body).toBeUndefined();
   });
 });
 
