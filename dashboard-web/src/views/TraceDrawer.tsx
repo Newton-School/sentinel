@@ -27,6 +27,11 @@ export function TraceDrawer({ traceId, onClose }: { traceId: string; onClose: ()
 
         {data && (
           <div className="drawer-body">
+            {data.reply?.slackUrl && (
+              <a className="slack-link" href={data.reply.slackUrl} target="_blank" rel="noreferrer">
+                ↗ Open conversation in Slack
+              </a>
+            )}
             <section className="qa">
               <div className="qa-q">
                 <span className="qa-tag">Q</span>

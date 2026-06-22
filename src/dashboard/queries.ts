@@ -22,6 +22,21 @@ function clampLimit(n: number | undefined, fallback = DEFAULT_LIMIT): number {
 const sum = (xs: Array<number | null | undefined>): number =>
   xs.reduce<number>((a, x) => a + (x ?? 0), 0);
 
+/**
+ * A Slack message permalink for a reply, e.g.
+ *   https://<workspace>.slack.com/archives/<channel>/p<ts-without-dot>
+ * (opens the message in its thread). The dashboard has no Slack token, so the
+ * workspace subdomain is supplied by config; returns null when unset.
+ */
+export function slackPermalink(
+  workspace: string | undefined,
+  channelId: string,
+  ts: string
+): string | null {
+  if (!workspace) return null;
+  return `https://${workspace}.slack.com/archives/${channelId}/p${ts.replace(".", "")}`;
+}
+
 export type Sentiment = "positive" | "negative";
 
 // ── Conversations feed ─────────────────────────────────────────────────────
@@ -31,6 +46,8 @@ export interface ConversationFilters {
   offset?: number;
   userId?: string;
   sentiment?: Sentiment;
+  /** Slack workspace subdomain; when set, rows include a slackUrl permalink. */
+  slackWorkspace?: string;
 }
 
 export interface ConversationRow {
@@ -42,6 +59,7 @@ export interface ConversationRow {
   question: string | null;
   answer: string | null;
   sentiment: Sentiment | null;
+  slackUrl: string | null;
   createdAt: string;
 }
 
@@ -94,6 +112,7 @@ export async function listConversations(
     question: r.question,
     answer: r.answer,
     sentiment: r.sentiment,
+    slackUrl: slackPermalink(opts.slackWorkspace, r.channel_id, r.reply_ts),
     createdAt: r.created_at,
   }));
 }
@@ -141,6 +160,7 @@ export interface TraceDetail {
     userId: string | null;
     question: string | null;
     answer: string | null;
+    slackUrl: string | null;
     createdAt: string;
   } | null;
   calls: TraceCall[];
@@ -153,7 +173,11 @@ export interface TraceDetail {
  * LLM call in time order (reply + the extract/embed/etc. fan-out), the feedback
  * it received, and rolled-up totals. Returns null when the trace is unknown.
  */
-export async function getTrace(db: Queryable, traceId: string): Promise<TraceDetail | null> {
+export async function getTrace(
+  db: Queryable,
+  traceId: string,
+  opts: { slackWorkspace?: string } = {}
+): Promise<TraceDetail | null> {
   const [replyRes, callsRes, fbRes] = await Promise.all([
     db.query(
       `SELECT channel_id, reply_ts, user_id, question, answer, created_at
@@ -211,6 +235,7 @@ export async function getTrace(db: Queryable, traceId: string): Promise<TraceDet
           userId: (replyRow.user_id as string | null) ?? null,
           question: (replyRow.question as string | null) ?? null,
           answer: (replyRow.answer as string | null) ?? null,
+          slackUrl: slackPermalink(opts.slackWorkspace, replyRow.channel_id as string, replyRow.reply_ts as string),
           createdAt: replyRow.created_at as string,
         }
       : null,
@@ -239,6 +264,7 @@ export interface NegativeFeedbackRow {
   model: string | null;
   promptVersion: string | null;
   costUsd: number | null;
+  slackUrl: string | null;
   createdAt: string;
 }
 
@@ -249,7 +275,7 @@ export interface NegativeFeedbackRow {
  */
 export async function listNegativeFeedback(
   db: Queryable,
-  opts: { limit?: number } = {}
+  opts: { limit?: number; slackWorkspace?: string } = {}
 ): Promise<NegativeFeedbackRow[]> {
   const limit = clampLimit(opts.limit);
   const { rows } = await db.query(
@@ -280,6 +306,7 @@ export async function listNegativeFeedback(
     model: (r.model as string | null) ?? null,
     promptVersion: (r.prompt_version as string | null) ?? null,
     costUsd: (r.cost_usd as number | null) ?? null,
+    slackUrl: slackPermalink(opts.slackWorkspace, r.channel_id as string, r.reply_ts as string),
     createdAt: r.created_at as string,
   }));
 }

@@ -151,4 +151,29 @@ describe("dashboard query layer", () => {
       expect(recent.negativeCount).toBe(0);
     });
   });
+
+  describe("slack permalinks", () => {
+    it("builds a permalink only when a workspace is configured", async () => {
+      const { q, pool } = await load();
+      await seed(pool);
+      const url = (ts: string) => `https://acme.slack.com/archives/C1/p${ts.replace(".", "")}`;
+
+      const withWs = await q.listConversations(pool, { slackWorkspace: "acme" });
+      expect(withWs[0].slackUrl).toBe(url(withWs[0].replyTs));
+      expect((await q.listConversations(pool, {}))[0].slackUrl).toBeNull();
+
+      const trace = await q.getTrace(pool, "T1", { slackWorkspace: "acme" });
+      expect(trace!.reply!.slackUrl).toBe(url(trace!.reply!.replyTs));
+      expect((await q.getTrace(pool, "T1"))!.reply!.slackUrl).toBeNull();
+
+      const neg = await q.listNegativeFeedback(pool, { slackWorkspace: "acme" });
+      expect(neg[0].slackUrl).toBe(url(neg[0].replyTs));
+    });
+
+    it("slackPermalink strips the dot from the ts and is null without a workspace", async () => {
+      const { q } = await load();
+      expect(q.slackPermalink("acme", "C9", "1719050400.123456")).toBe("https://acme.slack.com/archives/C9/p1719050400123456");
+      expect(q.slackPermalink(undefined, "C9", "1.2")).toBeNull();
+    });
+  });
 });

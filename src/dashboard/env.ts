@@ -20,6 +20,9 @@ const schema = z.object({
   // The bot's /ready URL, proxied by the health view (e.g. http://sentinel:8930/ready).
   // Unset → the health view shows bot status as unknown.
   BOT_READY_URL: z.string().url().optional(),
+  // Slack workspace subdomain (e.g. "newtonschool" for newtonschool.slack.com).
+  // When set, reply rows include a Slack permalink ("Open in Slack").
+  DASHBOARD_SLACK_WORKSPACE: z.string().min(1).optional(),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
   // ACL role the dashboard views as. In the active 'founders' ACL mode this is
   // the whole gate (founder → sees the company brain; anything else → nothing),

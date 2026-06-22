@@ -35,6 +35,7 @@ const server = createDashboardServer({
   viewer: dashboardViewerScope(dashboardEnv.DASHBOARD_VIEWER_ROLE),
   showSensitive: dashboardEnv.DASHBOARD_SHOW_SENSITIVE,
   fetchReadiness,
+  slackWorkspace: dashboardEnv.DASHBOARD_SLACK_WORKSPACE,
 });
 
 server.listen(dashboardEnv.DASHBOARD_PORT, () => {

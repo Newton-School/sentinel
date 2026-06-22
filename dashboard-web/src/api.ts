@@ -21,6 +21,7 @@ export interface Conversation {
   question: string | null;
   answer: string | null;
   sentiment: Sentiment | null;
+  slackUrl: string | null;
   createdAt: string;
 }
 
@@ -65,6 +66,7 @@ export interface TraceDetail {
     userId: string | null;
     question: string | null;
     answer: string | null;
+    slackUrl: string | null;
     createdAt: string;
   } | null;
   calls: TraceCall[];
@@ -83,6 +85,7 @@ export interface NegativeFeedback {
   model: string | null;
   promptVersion: string | null;
   costUsd: number | null;
+  slackUrl: string | null;
   createdAt: string;
 }
 

@@ -34,6 +34,11 @@ export function Feedback({ onOpenTrace }: { onOpenTrace: (traceId: string) => vo
                 {f.promptVersion && <span className="chip mono">{f.promptVersion}</span>}
                 <span className="chip"><Money usd={f.costUsd} /></span>
                 <span className="muted small spacer">by {f.reactorUserId} · <RelTime iso={f.createdAt} /></span>
+                {f.slackUrl && (
+                  <a className="slack-chip" href={f.slackUrl} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+                    Slack ↗
+                  </a>
+                )}
               </div>
               <p className="q">{f.question ?? <span className="muted">— question not recorded</span>}</p>
               <p className="a">{f.answer ?? <span className="muted">— answer not recorded</span>}</p>
