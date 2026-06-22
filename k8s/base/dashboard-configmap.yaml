@@ -19,3 +19,6 @@ data:
   # The bot's in-cluster /ready, proxied by the System health view (the bot
   # Service is `sentinel` on 8930). Unset → health view shows bot as unknown.
   BOT_READY_URL: "http://sentinel:8930/ready"
+  # Slack workspace subdomain (e.g. "newtonschool" for newtonschool.slack.com).
+  # When set, reply rows get an "Open in Slack" permalink. REPLACE with yours.
+  DASHBOARD_SLACK_WORKSPACE: "REPLACE_WITH_SLACK_WORKSPACE"

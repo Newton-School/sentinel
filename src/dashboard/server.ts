@@ -53,6 +53,8 @@ export interface DashboardDeps {
   showSensitive?: boolean;
   /** Fetches the bot's /ready for the health view; omit → bot status unknown. */
   fetchReadiness?: ReadinessFetcher;
+  /** Slack workspace subdomain → reply rows get a Slack permalink (slackUrl). */
+  slackWorkspace?: string;
 }
 
 const MIME: Record<string, string> = {
@@ -154,7 +156,7 @@ async function handleApi(
   if (pathname === "/api/conversations") {
     const q = parse(ConversationParams, params);
     if (!q) return sendJson(res, 400, { error: "invalid query parameters" });
-    const items = await listConversations(deps.db, q);
+    const items = await listConversations(deps.db, { ...q, slackWorkspace: deps.slackWorkspace });
     sendJson(res, 200, { items, limit: q.limit ?? null, offset: q.offset ?? 0 });
     return;
   }
@@ -162,7 +164,7 @@ async function handleApi(
   if (pathname === "/api/feedback") {
     const q = parse(FeedbackParams, params);
     if (!q) return sendJson(res, 400, { error: "invalid query parameters" });
-    const items = await listNegativeFeedback(deps.db, { limit: q.limit });
+    const items = await listNegativeFeedback(deps.db, { limit: q.limit, slackWorkspace: deps.slackWorkspace });
     sendJson(res, 200, { items });
     return;
   }
@@ -170,7 +172,7 @@ async function handleApi(
   const traceMatch = /^\/api\/traces\/([^/]+)$/.exec(pathname);
   if (traceMatch) {
     const traceId = decodeURIComponent(traceMatch[1]);
-    const trace = await getTrace(deps.db, traceId);
+    const trace = await getTrace(deps.db, traceId, { slackWorkspace: deps.slackWorkspace });
     if (!trace) return sendJson(res, 404, { error: "trace not found" });
     sendJson(res, 200, trace);
     return;

@@ -50,6 +50,11 @@ export function Conversations({ onOpenTrace }: { onOpenTrace: (traceId: string) 
                 <span className="who">{c.displayName ?? c.userId ?? "unknown"}</span>
                 <SentimentBadge sentiment={c.sentiment} />
                 <span className="muted small spacer"><RelTime iso={c.createdAt} /></span>
+                {c.slackUrl && (
+                  <a className="slack-chip" href={c.slackUrl} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+                    Slack ↗
+                  </a>
+                )}
               </div>
               <p className="q">{c.question ?? <span className="muted">— question not recorded</span>}</p>
               <p className="a">{c.answer ?? <span className="muted">— answer not recorded</span>}</p>
