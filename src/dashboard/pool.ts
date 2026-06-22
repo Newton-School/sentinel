@@ -7,7 +7,7 @@
  */
 
 import pg from "pg";
-import { config } from "../config.js";
+import { dashboardEnv, type DashboardEnv } from "./env.js";
 
 const { Pool } = pg;
 
@@ -18,8 +18,10 @@ let _pool: pg.Pool | null = null;
  * (DATABASE_URL_READONLY), falling back to DATABASE_URL for local dev. Throws
  * when neither is set.
  */
-export function resolveReadOnlyDbUrl(): string {
-  const url = config.DATABASE_URL_READONLY ?? config.DATABASE_URL;
+export function resolveReadOnlyDbUrl(
+  env: Pick<DashboardEnv, "DATABASE_URL_READONLY" | "DATABASE_URL"> = dashboardEnv
+): string {
+  const url = env.DATABASE_URL_READONLY ?? env.DATABASE_URL;
   if (!url) {
     throw new Error(
       "dashboard requires DATABASE_URL_READONLY (or DATABASE_URL) to be set"
@@ -31,7 +33,7 @@ export function resolveReadOnlyDbUrl(): string {
 /** Lazily create and memoize the read-only pool. */
 export function getReadOnlyPool(): pg.Pool {
   if (_pool) return _pool;
-  _pool = new Pool({ connectionString: resolveReadOnlyDbUrl(), max: config.PG_POOL_MAX });
+  _pool = new Pool({ connectionString: resolveReadOnlyDbUrl(), max: dashboardEnv.PG_POOL_MAX });
   return _pool;
 }
 

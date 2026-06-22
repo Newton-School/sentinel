@@ -65,11 +65,9 @@ export const envSchema = z
 
   HEALTH_CHECK_PORT: z.coerce.number().default(8930),
 
-  // Read-only observability dashboard (separate service). Its own port and an
-  // optional SELECT-only Postgres URL; when DATABASE_URL_READONLY is unset the
-  // dashboard falls back to DATABASE_URL (fine for local dev).
-  DASHBOARD_PORT: z.coerce.number().default(8940),
-  DATABASE_URL_READONLY: z.string().min(1).optional(),
+  // NOTE: the read-only dashboard is a separate service with its own env schema
+  // (src/dashboard/env.ts) — it deliberately does NOT reuse this config, so its
+  // Ingress-facing pod never needs the bot's Slack/OpenAI secrets.
 
   // Postgres (ParadeDB in prod) — system of record for personas, the company
   // brain (facts + entity graph), telemetry, and feedback. Required in prod;

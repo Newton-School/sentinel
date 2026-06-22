@@ -1,26 +1,25 @@
 /**
  * Dashboard service entrypoint. Opens the read-only pool, starts the HTTP API
  * (serving the built SPA when DASHBOARD_STATIC_DIR is set), and shuts down
- * cleanly. This is a separate process from the bot — no Slack socket, no
- * Playwright, no migrations.
+ * cleanly. A separate process from the bot — no Slack socket, no Playwright, no
+ * migrations, and (by design) none of the bot's secrets.
  */
 
-import { config } from "../config.js";
-import { createLogger } from "../logging/logger.js";
+import pino from "pino";
+import { dashboardEnv } from "./env.js";
 import { getReadOnlyPool, closeReadOnlyPool } from "./pool.js";
 import { createDashboardServer } from "./server.js";
 
-const log = createLogger("dashboard");
-
-// Built SPA directory, injected by the container image (wired in with the SPA).
-// Unset → API-only (e.g. when running the API alone in dev).
-const staticDir = process.env.DASHBOARD_STATIC_DIR;
+const log = pino({ name: "dashboard", level: dashboardEnv.LOG_LEVEL });
 
 const db = getReadOnlyPool();
-const server = createDashboardServer({ db, staticDir, log });
+const server = createDashboardServer({ db, staticDir: dashboardEnv.DASHBOARD_STATIC_DIR, log });
 
-server.listen(config.DASHBOARD_PORT, () => {
-  log.info({ port: config.DASHBOARD_PORT, staticDir: staticDir ?? null }, "Dashboard server listening");
+server.listen(dashboardEnv.DASHBOARD_PORT, () => {
+  log.info(
+    { port: dashboardEnv.DASHBOARD_PORT, staticDir: dashboardEnv.DASHBOARD_STATIC_DIR ?? null },
+    "Dashboard server listening"
+  );
 });
 
 let shuttingDown = false;
