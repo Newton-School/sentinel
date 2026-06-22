@@ -5,8 +5,11 @@ import { Stat } from "./ui";
 import { Conversations } from "./views/Conversations";
 import { Feedback } from "./views/Feedback";
 import { TraceDrawer } from "./views/TraceDrawer";
+import { CompanyBrain } from "./views/CompanyBrain";
+import { Knowledge } from "./views/Knowledge";
+import { People } from "./views/People";
 
-type Tab = "conversations" | "feedback";
+type Tab = "conversations" | "feedback" | "brain" | "knowledge" | "people";
 
 function SummaryBar() {
   const { data } = useAsync(() => api.summary(), []);
@@ -60,19 +63,22 @@ export function App() {
       <SummaryBar />
 
       <nav className="tabs">
-        <button className={tab === "conversations" ? "tab tab-on" : "tab"} onClick={() => setTab("conversations")}>
-          Conversations
-        </button>
-        <button className={tab === "feedback" ? "tab tab-on" : "tab"} onClick={() => setTab("feedback")}>
-          👎 Triage
-        </button>
+        <button className={tab === "conversations" ? "tab tab-on" : "tab"} onClick={() => setTab("conversations")}>Conversations</button>
+        <button className={tab === "feedback" ? "tab tab-on" : "tab"} onClick={() => setTab("feedback")}>👎 Triage</button>
+        <button className={tab === "brain" ? "tab tab-on" : "tab"} onClick={() => setTab("brain")}>Company Brain</button>
+        <button className={tab === "knowledge" ? "tab tab-on" : "tab"} onClick={() => setTab("knowledge")}>Knowledge</button>
+        <button className={tab === "people" ? "tab tab-on" : "tab"} onClick={() => setTab("people")}>People</button>
         <a className="tab tab-link" href="https://github.com/Newton-School/sentinel/blob/main/grafana/sentinel-llmops-dashboard.json" target="_blank" rel="noreferrer">
           Ops metrics (Grafana) ↗
         </a>
       </nav>
 
       <main className="content">
-        {tab === "conversations" ? <Conversations onOpenTrace={setTrace} /> : <Feedback onOpenTrace={setTrace} />}
+        {tab === "conversations" && <Conversations onOpenTrace={setTrace} />}
+        {tab === "feedback" && <Feedback onOpenTrace={setTrace} />}
+        {tab === "brain" && <CompanyBrain />}
+        {tab === "knowledge" && <Knowledge />}
+        {tab === "people" && <People />}
       </main>
 
       {trace && <TraceDrawer traceId={trace} onClose={() => setTrace(null)} />}
