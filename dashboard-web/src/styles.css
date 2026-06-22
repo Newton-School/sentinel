@@ -194,8 +194,28 @@ body {
 .row-click { cursor: pointer; }
 .row-click:hover { background: #fde8e8; }
 
+/* Executive impact */
+.hero { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 20px; }
+.hero-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); }
+.hero-val { font-size: 28px; font-weight: 800; letter-spacing: -0.02em; }
+.hero-lbl { color: var(--muted); font-size: 12px; margin-top: 4px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.delta { font-weight: 700; font-size: 11px; }
+.delta.up { color: var(--pos); }
+.delta.down { color: var(--neg); }
+.delta.flat { color: var(--muted); }
+.impact-block { margin-bottom: 22px; }
+.impact-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.trend { width: 100%; height: auto; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+.hbars { display: flex; flex-direction: column; gap: 8px; }
+.hbar { display: grid; grid-template-columns: 130px 1fr 40px; align-items: center; gap: 10px; }
+.hbar-label { font-size: 13px; text-transform: capitalize; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hbar-track { background: var(--chip-bg); border-radius: 999px; height: 12px; overflow: hidden; }
+.hbar-fill { background: var(--brand); height: 100%; }
+.hbar-val { text-align: right; font-weight: 600; font-size: 13px; }
+
 @media (max-width: 860px) {
-  .brain-grid, .people-grid { grid-template-columns: 1fr; }
+  .brain-grid, .people-grid, .impact-grid { grid-template-columns: 1fr; }
+  .hero { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 640px) {
   .summary { grid-template-columns: repeat(2, 1fr); }

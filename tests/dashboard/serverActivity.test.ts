@@ -67,6 +67,18 @@ describe("dashboard API — activity (DB-backed)", () => {
     expect(a.meetings.map((m: any) => m.eventId)).toContain("e1");
     expect(a.failedCalls.map((f: any) => f.errorKind)).toContain("timeout");
   });
+
+  it("GET /api/impact → KPI + trend shape", async () => {
+    const r = await get(port, "/api/impact");
+    expect(r.status).toBe(200);
+    const b = r.json();
+    expect(b.current).toBeDefined();
+    expect(b.previous).toBeDefined();
+    expect(Array.isArray(b.weekly)).toBe(true);
+    expect(Array.isArray(b.categories)).toBe(true);
+    expect(Array.isArray(b.sources)).toBe(true);
+    expect(Array.isArray(b.topUsers)).toBe(true);
+  });
 });
 
 describe("dashboard API — /api/system readiness proxy (fakes)", () => {
