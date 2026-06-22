@@ -96,6 +96,57 @@
       "targets": [
         { "expr": "sentinel_eval_mean_score", "legendFormat": "{{suite}}" }
       ]
+    },
+    {
+      "id": 8,
+      "title": "Request rate (req/min) by type",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "targets": [
+        {
+          "expr": "sum by (type) (rate(sentinel_requests_total[5m])) * 60",
+          "legendFormat": "{{type}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Request error rate",
+      "type": "stat",
+      "datasource": { "type": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "targets": [
+        {
+          "expr": "sum(rate(sentinel_errors_total[5m])) / clamp_min(sum(rate(sentinel_requests_total[5m])), 1)",
+          "legendFormat": "error rate"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Avg request duration (ms)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "targets": [
+        {
+          "expr": "sum(rate(sentinel_request_duration_ms_sum[5m])) / clamp_min(sum(rate(sentinel_requests_total[5m])), 1)",
+          "legendFormat": "avg ms"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Memory pipeline errors (per min)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "targets": [
+        { "expr": "sum(rate(sentinel_memory_extract_errors_total[5m])) * 60", "legendFormat": "extract errors" },
+        { "expr": "sum(rate(sentinel_memory_retrieval_empty_total[5m])) * 60", "legendFormat": "retrieval empty" },
+        { "expr": "sum(rate(sentinel_memory_embeddings_total{result=\"error\"}[5m])) * 60", "legendFormat": "embedding errors" }
+      ]
     }
   ]
 }
