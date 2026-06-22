@@ -13,7 +13,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import type { Queryable } from "../state/db.js";
+import type { ViewerScope } from "../access/scope.js";
 import { listConversations, getTrace, listNegativeFeedback, getSummary } from "./queries.js";
+import {
+  dashboardViewerScope,
+  listEntities,
+  getEntityDetail,
+  getGraph,
+  listMemories,
+  listPersonas,
+  getPersona,
+} from "./brain.js";
 
 export interface DashboardLogger {
   error: (...args: unknown[]) => void;
@@ -24,6 +34,10 @@ export interface DashboardDeps {
   /** Absolute path to the built SPA (index.html + assets). Omit to serve API only. */
   staticDir?: string;
   log?: DashboardLogger;
+  /** ACL viewer for company-brain routes; defaults to a no-access "unknown" role. */
+  viewer?: ViewerScope;
+  /** Whether brain memory routes may surface sensitivity='sensitive' rows. */
+  showSensitive?: boolean;
 }
 
 const MIME: Record<string, string> = {
@@ -66,6 +80,31 @@ const SummaryParams = z.object({
 const FeedbackParams = z.object({
   // P0 surfaces the 👎 queue only; an explicit other value is rejected.
   sentiment: z.enum(["negative"]).default("negative"),
+  limit: z.coerce.number().int().positive().optional(),
+});
+
+const EntityListParams = z.object({
+  type: z.string().min(1).optional(),
+  search: z.string().min(1).optional(),
+  limit: z.coerce.number().int().positive().optional(),
+  offset: z.coerce.number().int().nonnegative().optional(),
+});
+
+const GraphParams = z.object({
+  types: z.string().min(1).optional(), // comma-separated entity types
+  minConfidence: z.coerce.number().min(0).max(1).optional(),
+  nodeLimit: z.coerce.number().int().positive().optional(),
+});
+
+const MemoryParams = z.object({
+  category: z.string().min(1).optional(),
+  sourceType: z.string().min(1).optional(),
+  since: z.string().datetime().optional(),
+  search: z.string().min(1).optional(),
+  limit: z.coerce.number().int().positive().optional(),
+});
+
+const PersonaListParams = z.object({
   limit: z.coerce.number().int().positive().optional(),
 });
 
@@ -115,6 +154,59 @@ async function handleApi(
     const trace = await getTrace(deps.db, traceId);
     if (!trace) return sendJson(res, 404, { error: "trace not found" });
     sendJson(res, 200, trace);
+    return;
+  }
+
+  // ── Company-brain routes (ACL-enforced via the viewer) ───────────────────
+  const viewer = deps.viewer ?? dashboardViewerScope("unknown");
+  const showSensitive = deps.showSensitive ?? false;
+
+  if (pathname === "/api/entities") {
+    const q = parse(EntityListParams, params);
+    if (!q) return sendJson(res, 400, { error: "invalid query parameters" });
+    sendJson(res, 200, { items: await listEntities(deps.db, viewer, q) });
+    return;
+  }
+
+  const entityMatch = /^\/api\/entities\/([^/]+)$/.exec(pathname);
+  if (entityMatch) {
+    const id = Number(decodeURIComponent(entityMatch[1]));
+    if (!Number.isInteger(id)) return sendJson(res, 400, { error: "invalid entity id" });
+    const detail = await getEntityDetail(deps.db, id, viewer);
+    if (!detail) return sendJson(res, 404, { error: "entity not found" });
+    sendJson(res, 200, detail);
+    return;
+  }
+
+  if (pathname === "/api/graph") {
+    const q = parse(GraphParams, params);
+    if (!q) return sendJson(res, 400, { error: "invalid query parameters" });
+    const types = q.types ? q.types.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
+    sendJson(res, 200, await getGraph(deps.db, viewer, { types, minConfidence: q.minConfidence, nodeLimit: q.nodeLimit }));
+    return;
+  }
+
+  if (pathname === "/api/memories") {
+    const q = parse(MemoryParams, params);
+    if (!q) return sendJson(res, 400, { error: "invalid query parameters" });
+    const items = await listMemories(deps.db, viewer, { ...q, showSensitive });
+    sendJson(res, 200, { items });
+    return;
+  }
+
+  if (pathname === "/api/personas") {
+    const q = parse(PersonaListParams, params);
+    if (!q) return sendJson(res, 400, { error: "invalid query parameters" });
+    sendJson(res, 200, { items: await listPersonas(deps.db, q) });
+    return;
+  }
+
+  const personaMatch = /^\/api\/personas\/([^/]+)$/.exec(pathname);
+  if (personaMatch) {
+    const userId = decodeURIComponent(personaMatch[1]);
+    const persona = await getPersona(deps.db, userId);
+    if (!persona) return sendJson(res, 404, { error: "persona not found" });
+    sendJson(res, 200, persona);
     return;
   }
 

@@ -18,6 +18,16 @@ const schema = z.object({
   // Directory of the built SPA to serve; unset → API-only.
   DASHBOARD_STATIC_DIR: z.string().min(1).optional(),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
+  // ACL role the dashboard views as. In the active 'founders' ACL mode this is
+  // the whole gate (founder → sees the company brain; anything else → nothing),
+  // so match the Ingress auth group to this role. Default 'founder'.
+  DASHBOARD_VIEWER_ROLE: z.enum(["founder", "leadership", "manager", "member", "unknown"]).default("founder"),
+  // Whether the memory browser may surface sensitivity='sensitive' facts.
+  // (z.coerce.boolean treats any non-empty string as true, so parse explicitly.)
+  DASHBOARD_SHOW_SENSITIVE: z
+    .string()
+    .default("0")
+    .transform((s) => s === "1" || s.toLowerCase() === "true"),
 });
 
 export type DashboardEnv = z.infer<typeof schema>;
