@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentinel-dashboard
+  labels:
+    app: sentinel-dashboard
+spec:
+  # Stateless read-only UI: scale horizontally and roll without downtime —
+  # unlike the bot (single-replica, Slack socket + Chrome profile on an RWO PVC).
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: sentinel-dashboard
+  template:
+    metadata:
+      labels:
+        app: sentinel-dashboard
+    spec:
+      # Pull from the same ECR registry as the bot.
+      imagePullSecrets:
+        - name: ecr-registry
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: dashboard
+          # Image NAME `sentinel-dashboard` — the kustomize overlay rewrites it
+          # to the real ECR repo + tag.
+          image: sentinel-dashboard:latest
+          ports:
+            - name: http
+              containerPort: 8940
+          envFrom:
+            # ONLY a SELECT-only DATABASE_URL_READONLY lives here — the dashboard
+            # deliberately never receives the bot's Slack/OpenAI secrets.
+            - secretRef:
+                name: sentinel-dashboard-secrets
+            - configMapRef:
+                name: sentinel-dashboard-config
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8940
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8940
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

@@ -14,6 +14,9 @@ images:
   - name: sentinel
     newName: REPLACE_WITH_ECR_REPO  # e.g. 123456789012.dkr.ecr.ap-south-1.amazonaws.com/sentinel
     newTag: staging
+  - name: sentinel-dashboard
+    newName: REPLACE_WITH_ECR_REPO_DASHBOARD  # e.g. 123456789012.dkr.ecr.ap-south-1.amazonaws.com/sentinel-dashboard
+    newTag: staging
 
 # Real Secrets live in the sentinel-staging namespace, applied out-of-band /
 # via sealed-secrets — NOT generated here:

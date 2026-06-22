@@ -1,0 +1,37 @@
+# First Ingress in the repo. Exposes the dashboard externally, gated by
+# oauth2-proxy (Google Workspace, restricted to @newtonschool.co) via nginx
+# external-auth annotations, with TLS from cert-manager. The dashboard surfaces
+# real conversation content + PII, so NO request reaches it unauthenticated.
+#
+# Prerequisites in the cluster (operator-provided, environment-specific):
+#   - an nginx ingress controller
+#   - cert-manager + a ClusterIssuer
+#   - a deployed oauth2-proxy (Google Workspace, @newtonschool.co)
+# REPLACE the host, issuer, and oauth2-proxy host below.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sentinel-dashboard
+  labels:
+    app: sentinel-dashboard
+  annotations:
+    cert-manager.io/cluster-issuer: "REPLACE_WITH_CLUSTER_ISSUER" # e.g. letsencrypt-prod
+    nginx.ingress.kubernetes.io/auth-url: "https://REPLACE_WITH_OAUTH2_PROXY_HOST/oauth2/auth"
+    nginx.ingress.kubernetes.io/auth-signin: "https://REPLACE_WITH_OAUTH2_PROXY_HOST/oauth2/start?rd=$escaped_request_uri"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - REPLACE_WITH_DASHBOARD_HOST # e.g. sentinel.internal.newtonschool.co
+      secretName: sentinel-dashboard-tls
+  rules:
+    - host: REPLACE_WITH_DASHBOARD_HOST
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: sentinel-dashboard
+                port:
+                  number: 8940
