@@ -9,9 +9,13 @@ describe("dashboard env", () => {
     expect(env.PG_POOL_MAX).toBe(10);
     expect(env.LOG_LEVEL).toBe("info");
     expect(env.DATABASE_URL_READONLY).toBeUndefined();
-    const over = loadDashboardEnv({ DASHBOARD_PORT: "9001", PG_POOL_MAX: "20" } as unknown as NodeJS.ProcessEnv);
+    expect(env.DASHBOARD_VIEWER_ROLE).toBe("founder");
+    expect(env.DASHBOARD_SHOW_SENSITIVE).toBe(false);
+    const over = loadDashboardEnv({ DASHBOARD_PORT: "9001", PG_POOL_MAX: "20", DASHBOARD_SHOW_SENSITIVE: "1", DASHBOARD_VIEWER_ROLE: "member" } as unknown as NodeJS.ProcessEnv);
     expect(over.DASHBOARD_PORT).toBe(9001);
     expect(over.PG_POOL_MAX).toBe(20);
+    expect(over.DASHBOARD_SHOW_SENSITIVE).toBe(true);
+    expect(over.DASHBOARD_VIEWER_ROLE).toBe("member");
   });
 
   it("does NOT require any of the bot's Slack/OpenAI secrets", () => {

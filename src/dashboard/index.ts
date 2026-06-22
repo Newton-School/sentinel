@@ -9,11 +9,18 @@ import pino from "pino";
 import { dashboardEnv } from "./env.js";
 import { getReadOnlyPool, closeReadOnlyPool } from "./pool.js";
 import { createDashboardServer } from "./server.js";
+import { dashboardViewerScope } from "./brain.js";
 
 const log = pino({ name: "dashboard", level: dashboardEnv.LOG_LEVEL });
 
 const db = getReadOnlyPool();
-const server = createDashboardServer({ db, staticDir: dashboardEnv.DASHBOARD_STATIC_DIR, log });
+const server = createDashboardServer({
+  db,
+  staticDir: dashboardEnv.DASHBOARD_STATIC_DIR,
+  log,
+  viewer: dashboardViewerScope(dashboardEnv.DASHBOARD_VIEWER_ROLE),
+  showSensitive: dashboardEnv.DASHBOARD_SHOW_SENSITIVE,
+});
 
 server.listen(dashboardEnv.DASHBOARD_PORT, () => {
   log.info(
