@@ -149,6 +149,72 @@ describe("assertReadOnlySql", () => {
     });
   });
 
+  describe("regex fallback ignores string-literal contents (#testing-kpis CALL bug)", () => {
+    // These queries use Postgres-only syntax (FILTER, ILIKE) that the MySQL-
+    // dialect parser cannot model, so they take the REGEX FALLBACK path — the
+    // path that historically scanned forbidden keywords without ignoring string
+    // literals. A forbidden keyword that appears ONLY inside a literal must not
+    // false-reject these legitimate reads. The reported failure was a SELECT
+    // rejected because "Call" appears inside 'Outbound Phone Call Activity'.
+    it("allows COUNT(*) FILTER with an 'Outbound Phone Call Activity' literal (CALL inside a literal)", () => {
+      expect(() =>
+        assertReadOnlySql(
+          "SELECT lead_id, COUNT(*) FILTER (WHERE activity_event_name = 'Outbound Phone Call Activity') AS c FROM t GROUP BY 1"
+        )
+      ).not.toThrow();
+    });
+
+    it("allows ILIKE against a literal containing 'Call'", () => {
+      expect(() =>
+        assertReadOnlySql(
+          "SELECT 1 FROM t WHERE activity_event_name ILIKE '%Outbound Phone Call Activity%'"
+        )
+      ).not.toThrow();
+    });
+
+    it("allows literals containing other forbidden words ('create'/'drop') on the fallback path", () => {
+      expect(() =>
+        assertReadOnlySql(
+          "SELECT 1 FROM t WHERE stage ILIKE '%create account%' OR note ILIKE '%drop off%'"
+        )
+      ).not.toThrow();
+    });
+
+    it("handles SQL doubled-quote escaping inside a fallback-path literal", () => {
+      expect(() =>
+        assertReadOnlySql(
+          "SELECT 1 FROM t WHERE note = 'it''s a call we couldn''t make' AND x ILIKE '%y%'"
+        )
+      ).not.toThrow();
+    });
+
+    it("does NOT treat a semicolon inside a string literal as a statement separator", () => {
+      // ILIKE forces the fallback; the '; DROP TABLE t' is inside a literal and
+      // must not be split off as a second statement.
+      expect(() =>
+        assertReadOnlySql(
+          "SELECT 1 FROM t WHERE note = 'a; DROP TABLE t' AND x ILIKE '%y%'"
+        )
+      ).not.toThrow();
+    });
+
+    // Regression guards: blanking literals must NOT weaken rejection of real
+    // writes sitting OUTSIDE quotes on the fallback path.
+    it("still rejects a real stacked write on the fallback path (ILIKE then ; DROP)", () => {
+      expect(() =>
+        assertReadOnlySql("SELECT 1 FROM t WHERE x ILIKE '%y%'; DROP TABLE t")
+      ).toThrow();
+    });
+
+    it("still rejects a real forbidden keyword outside a literal on the fallback path", () => {
+      expect(() =>
+        assertReadOnlySql(
+          "WITH x AS (DELETE FROM t WHERE note ILIKE '%keep%' RETURNING *) SELECT * FROM x"
+        )
+      ).toThrow();
+    });
+  });
+
   describe("rejected non-read-only queries", () => {
     it("rejects UPDATE", () => {
       expect(() =>

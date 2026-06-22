@@ -103,12 +103,65 @@ function stripComments(sql: string): string {
 }
 
 /**
+ * Replace the CONTENTS of single- and double-quoted string literals with
+ * spaces, preserving the quote delimiters and the overall character positions.
+ *
+ * The AST path already ignores literal contents; the regex fallback did not, so
+ * a benign read like `WHERE event = 'Outbound Phone Call Activity'` was rejected
+ * because `CALL` appears inside the literal (the #testing-kpis bug). Blanking
+ * literals before the keyword scan AND the statement split fixes that, and also
+ * prevents a `;` inside a literal from being miscounted as a statement
+ * separator. Real DML/DDL keywords sitting OUTSIDE quotes are untouched.
+ *
+ * Handles SQL doubled-quote escaping (`''` / `""`) and backslash escapes so the
+ * closing quote is found correctly.
+ */
+function blankStringLiterals(sql: string): string {
+  let out = "";
+  for (let i = 0; i < sql.length; ) {
+    const c = sql[i];
+    if (c === "'" || c === '"') {
+      const quote = c;
+      out += quote;
+      i++;
+      while (i < sql.length) {
+        const ch = sql[i];
+        if (ch === "\\" && i + 1 < sql.length) {
+          out += "  "; // blank the backslash + escaped char, stay inside
+          i += 2;
+          continue;
+        }
+        if (ch === quote) {
+          if (sql[i + 1] === quote) {
+            out += "  "; // doubled-quote escape — still inside the literal
+            i += 2;
+            continue;
+          }
+          out += quote; // closing quote
+          i++;
+          break;
+        }
+        out += " "; // blank one char of literal content
+        i++;
+      }
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out;
+}
+
+/**
  * Regex-based read-only guard. This is the historical implementation, kept as
  * the fallback path for SQL that node-sql-parser cannot parse. Throws an Error
  * if `sql` is not a safe, single, read-only statement; returns void otherwise.
  */
 function assertReadOnlySqlRegex(sql: string): void {
-  const cleaned = stripComments(sql);
+  // Blank string-literal contents (after stripping comments) so the statement
+  // split and the forbidden-keyword scan never match text inside a literal —
+  // e.g. `CALL` in 'Outbound Phone Call Activity' or a `;` inside a string.
+  const cleaned = blankStringLiterals(stripComments(sql));
 
   if (cleaned.length === 0) {
     throw new Error("Rejected: empty SQL (no statement after stripping comments).");
