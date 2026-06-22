@@ -66,11 +66,18 @@ server.tool(
 // Tool: Run a saved question (card) by ID and return its rows.
 server.tool(
   "metabase_get_question",
-  "Run a saved Metabase question/card by its ID and return the resulting rows.",
+  "Run a saved Metabase question/card by its ID and return the resulting rows. For a parameterized dashboard card (e.g. start_date/end_date/course/team_lead), pass `parameters` as a {slug: value} map — get the slugs from metabase_get_card_sql and the values from the dashboard URL's query string. Running a parameterized card without its parameters fails.",
   {
     question_id: z.number().describe("The Metabase question (card) ID"),
+    parameters: z
+      .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
+      .optional()
+      .describe(
+        'Optional map of card parameter slug → value, e.g. {"start_date":"2026-06-13","course":"Full Course"}.'
+      ),
   },
-  async ({ question_id }) => getQuestion(metabaseFetch, question_id)
+  async ({ question_id, parameters }) =>
+    getQuestion(metabaseFetch, question_id, parameters)
 );
 
 // Tool: Read a saved question's underlying SQL definition (not its rows).

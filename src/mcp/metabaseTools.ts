@@ -19,7 +19,36 @@ import {
   type MetabaseDataset,
   type DashboardDetailResponse,
   type CardDetailResponse,
+  type CardParameter,
 } from "./metabaseShape.js";
+
+/** A scalar value supplied for a card parameter (slug → value). */
+export type CardParameterValues = Record<string, string | number | boolean>;
+
+/**
+ * Build the Metabase `parameters` array for running a saved card, reusing each
+ * card parameter's `type` + `target` and injecting the caller's value, matched
+ * by slug (or name). Slugs with no matching card parameter are skipped so we
+ * never send an unknown parameter that Metabase would reject with a 400.
+ */
+export function buildCardParameters(
+  cardParameters: CardParameter[],
+  values: CardParameterValues
+): Array<{ type: string; target: unknown; value: unknown }> {
+  const out: Array<{ type: string; target: unknown; value: unknown }> = [];
+  for (const p of cardParameters) {
+    const slug = p.slug ?? p.name;
+    if (
+      slug != null &&
+      Object.prototype.hasOwnProperty.call(values, slug) &&
+      p.type != null &&
+      p.target != null
+    ) {
+      out.push({ type: p.type, target: p.target, value: values[slug] });
+    }
+  }
+  return out;
+}
 
 /** The authenticated fetch contract provided by `metabaseClient`. */
 export type MetabaseFetch = (path: string, options?: RequestInit) => Promise<unknown>;
@@ -84,11 +113,24 @@ export async function runQuery(
  */
 export async function getQuestion(
   metabaseFetch: MetabaseFetch,
-  question_id: number
+  question_id: number,
+  parameters?: CardParameterValues
 ): Promise<ToolResult> {
-  const result = (await metabaseFetch(`/api/card/${question_id}/query`, {
-    method: "POST",
-  })) as { data: MetabaseDataset };
+  const options: RequestInit = { method: "POST" };
+
+  // Parameterized dashboard cards (start_date/course/team_lead/…) 400 if run
+  // bare. When the caller supplies values, fetch the card's parameter defs and
+  // build the run body by reusing each param's target/type with the new value.
+  if (parameters && Object.keys(parameters).length > 0) {
+    const card = (await metabaseFetch(`/api/card/${question_id}`)) as CardDetailResponse;
+    const built = buildCardParameters(card.parameters ?? [], parameters);
+    options.body = JSON.stringify({ parameters: built });
+  }
+
+  const result = (await metabaseFetch(
+    `/api/card/${question_id}/query`,
+    options
+  )) as { data: MetabaseDataset };
 
   return textResult(shapeQueryResult(result.data));
 }

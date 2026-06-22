@@ -218,4 +218,50 @@ describe("mapCardSql", () => {
       parameters: [],
     });
   });
+
+  it("extracts SQL from a pMBQL stages[].native card and reads slugs from card.parameters", () => {
+    // The live Metabase returns the new pMBQL format: dataset_query is
+    // { lib/type, database, stages:[{ native }] } with NO dataset_query.native,
+    // top-level query_type='native', and parameters declared on card.parameters.
+    const out = mapCardSql({
+      id: 10142,
+      name: "Talktime X Movement",
+      query_type: "native",
+      database_id: 29,
+      parameters: [
+        { slug: "start_date", type: "date/single", target: ["variable", ["template-tag", "start_date"]] },
+        { slug: "course", type: "string/=", target: ["variable", ["template-tag", "course"]] },
+      ],
+      dataset_query: {
+        "lib/type": "mbql/query",
+        database: 29,
+        stages: [{ native: "SELECT 1 -- talktime" }],
+      },
+    } as any);
+    expect(out).toEqual({
+      id: 10142,
+      name: "Talktime X Movement",
+      database_id: 29,
+      query_type: "native",
+      sql: "SELECT 1 -- talktime",
+      parameters: ["start_date", "course"],
+    });
+  });
+
+  it("prefers top-level query_type and unions card.parameters slugs with legacy template-tags", () => {
+    const out = mapCardSql({
+      id: 8,
+      name: "mixed",
+      query_type: "native",
+      parameters: [{ slug: "course", type: "string/=", target: ["x"] }],
+      dataset_query: {
+        type: "native",
+        database: 4,
+        native: { query: "SELECT {{course}}", "template-tags": { course: {}, region: {} } },
+      },
+    } as any);
+    expect(out.query_type).toBe("native");
+    expect(out.sql).toBe("SELECT {{course}}");
+    expect(out.parameters).toEqual(["course", "region"]);
+  });
 });
