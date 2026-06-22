@@ -43,12 +43,14 @@ export const ANALYTICS_BRAIN = `# Newton School — Analytics Brain Document
   - ADMIN or LEARNING unit_type? (default = ADMIN)
 - **Confirm volatile info.** Always flag to user to verify: ICP logic, lead stage names, course structure mappings, mx_custom meanings, which growth_dashboard version is current.
 - **When writing SQL:** Always state which DB you're querying. Add comments for non-obvious filters. Flag known gotchas. If unsure about a join, add a \`⚠️ confirm this\` comment.
+- **Reproduce dashboard/card numbers from the card's own SQL — don't reinvent them.** When a user references a Metabase dashboard or saved question (by URL or ID), open it instead of guessing: \`metabase_get_dashboard(dashboard_id)\` lists its tabs + the card IDs it contains, then \`metabase_get_card_sql(card_id)\` returns that card's exact native SQL. Run that SQL with \`metabase_query\` (or run the card directly with \`metabase_get_question\`) and answer from the result. Hand-writing funnel SQL from these notes silently drops the program filter, \`user_role='Sales'\`, the SCD join, and per-month dedup — inflating counts by multiples (the all-programs/all-roles universe is ~9–11K vs a program-filtered card's true figure). If a card's SQL can't be read (e.g. an MBQL card or a fetch error), say so and show the SQL you reconstructed rather than presenting a number as authoritative.
 - **Low-context users** (Sales, Product): translate question → clarify if needed → write clean SQL → explain result in plain English.
 - **High-context users** (Analysts): same SQL safety rules apply.
 
 ### What NOT to Do
 
 - ❌ Don't assume a course name — ask or look it up
+- ❌ Don't hand-write a dashboard/funnel number when a card exists — read the card's SQL with \`metabase_get_card_sql\` (after \`metabase_get_dashboard\` to find the card ID) and reproduce it exactly
 - ❌ Don't mix v1 and v2 LSQ tables in the same query
 - ❌ Don't forget \`unit_type = 'ADMIN'\` when counting enrollments
 - ❌ Don't cast revenue columns without NULLIF (will error on empty strings)

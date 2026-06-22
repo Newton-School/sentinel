@@ -28,7 +28,7 @@ const PINNED = {
   extraction: { version: "1.0.0", hash: "7d9323b8ba5a" },
   consolidation: { version: "1.0.0", hash: "4f47602a149a" },
   system: { version: "1.0.0", hash: "89c11ce42da9" },
-  analytics: { version: "1.0.1", hash: "4d5b2210afd1" },
+  analytics: { version: "1.1.0", hash: "d8ca6d4e774b" },
   analytics_classifier: { version: "1.1.0", hash: "0890c764def3" },
 } as const;
 
@@ -77,5 +77,15 @@ describe("prompt registry — skeleton ↔ builder parity", () => {
     const persona = { userId: "U", displayName: "Dipesh", role: undefined, createdAt: "x", updatedAt: "x" };
     const built = buildAnalyticsSystemPrompt(persona as never, []);
     expect(built).toContain(ANALYTICS_BRAIN);
+  });
+});
+
+describe("analytics brain — dashboard/card accuracy guidance", () => {
+  // After PR #138 added metabase_get_dashboard / metabase_get_card_sql, the brain
+  // must instruct the agent to reproduce a dashboard number from the card's own
+  // SQL rather than hand-writing funnel SQL (the 15,752-vs-1,400 class of error).
+  it("tells the agent to read a card's SQL via the metabase card/dashboard tools", () => {
+    expect(ANALYTICS_BRAIN).toContain("metabase_get_card_sql");
+    expect(ANALYTICS_BRAIN).toContain("metabase_get_dashboard");
   });
 });
