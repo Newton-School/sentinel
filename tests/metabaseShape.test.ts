@@ -3,6 +3,8 @@ import {
   shapeQueryResult,
   mapDashboards,
   mapDatabases,
+  mapDashboardDetail,
+  mapCardSql,
 } from "../src/mcp/metabaseShape.js";
 
 describe("shapeQueryResult", () => {
@@ -101,5 +103,119 @@ describe("mapDatabases", () => {
 
   it("returns [] for an empty list", () => {
     expect(mapDatabases([])).toEqual([]);
+  });
+});
+
+describe("mapDashboardDetail", () => {
+  it("projects dashboard meta + tabs + the cards each tab holds", () => {
+    const out = mapDashboardDetail({
+      id: 528,
+      name: "Input Dashboard",
+      description: "the input dash",
+      tabs: [
+        { id: 288, name: "talktime-x-movement" },
+        { id: 289, name: "other tab" },
+      ],
+      dashcards: [
+        { id: 1, dashboard_tab_id: 288, card: { id: 10142, name: "talktime x movement" } },
+        { id: 2, dashboard_tab_id: 289, card: { id: 10200, name: "other card" } },
+      ],
+    } as any);
+    expect(out).toEqual({
+      id: 528,
+      name: "Input Dashboard",
+      description: "the input dash",
+      tabs: [
+        { id: 288, name: "talktime-x-movement" },
+        { id: 289, name: "other tab" },
+      ],
+      cards: [
+        { card_id: 10142, name: "talktime x movement", tab_id: 288 },
+        { card_id: 10200, name: "other card", tab_id: 289 },
+      ],
+    });
+  });
+
+  it("drops virtual/text dashcards that carry no card", () => {
+    const out = mapDashboardDetail({
+      id: 485,
+      name: "MoM DS Funnel",
+      description: null,
+      dashcards: [
+        { id: 1, dashboard_tab_id: null, card: { id: 9601, name: "funnel" } },
+        // A text/heading card has no `card` object.
+        { id: 2, dashboard_tab_id: null, card: null },
+      ],
+    } as any);
+    expect(out).toEqual({
+      id: 485,
+      name: "MoM DS Funnel",
+      description: null,
+      tabs: [],
+      cards: [{ card_id: 9601, name: "funnel", tab_id: null }],
+    });
+  });
+
+  it("tolerates missing tabs/dashcards", () => {
+    const out = mapDashboardDetail({ id: 1, name: "bare" } as any);
+    expect(out).toEqual({ id: 1, name: "bare", description: null, tabs: [], cards: [] });
+  });
+});
+
+describe("mapCardSql", () => {
+  it("extracts native SQL, database id, and template-tag parameter names", () => {
+    const out = mapCardSql({
+      id: 10142,
+      name: "talktime x movement",
+      database_id: 29,
+      dataset_query: {
+        type: "native",
+        database: 29,
+        native: {
+          query: "SELECT * FROM lsq_leads_x_activities_v2 WHERE course = {{course}}",
+          "template-tags": {
+            course: { name: "course", type: "text" },
+            start_date: { name: "start_date", type: "date" },
+          },
+        },
+      },
+    } as any);
+    expect(out).toEqual({
+      id: 10142,
+      name: "talktime x movement",
+      database_id: 29,
+      query_type: "native",
+      sql: "SELECT * FROM lsq_leads_x_activities_v2 WHERE course = {{course}}",
+      parameters: ["course", "start_date"],
+    });
+  });
+
+  it("returns sql: null for an MBQL (non-native) card and falls back to dataset_query.database", () => {
+    const out = mapCardSql({
+      id: 9601,
+      name: "mbql card",
+      database_id: null,
+      dataset_query: { type: "query", database: 29, query: { "source-table": 5 } },
+    } as any);
+    expect(out).toEqual({
+      id: 9601,
+      name: "mbql card",
+      database_id: 29,
+      query_type: "query",
+      sql: null,
+      parameters: [],
+    });
+  });
+
+  it("tolerates a missing dataset_query", () => {
+    const out = mapCardSql({ id: 7, name: "empty" } as any);
+    expect(out).toEqual({
+      id: 7,
+      name: "empty",
+      database_id: null,
+      query_type: "unknown",
+      sql: null,
+      parameters: [],
+    });
   });
 });
