@@ -158,6 +158,22 @@ export interface BotReadiness {
 }
 export interface SystemStatus { bot: BotReadiness | null; }
 
+// ── Executive impact ─────────────────────────────────────────────────────────
+
+export interface ImpactKpis { queries: number; users: number; positive: number; negative: number; costUsd: number; }
+export interface WeeklyPoint { weekStart: string; queries: number; positiveRatio: number | null; }
+export interface Count { key: string; count: number; }
+export interface TopUser { userId: string; displayName: string | null; role: string | null; count: number; }
+export interface Impact {
+  current: ImpactKpis;
+  previous: ImpactKpis;
+  windowStart: string;
+  weekly: WeeklyPoint[];
+  categories: Count[];
+  sources: Count[];
+  topUsers: TopUser[];
+}
+
 function qs(params: Record<string, string | number | undefined>): string {
   const u = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
@@ -198,5 +214,6 @@ export const api = {
   persona: (userId: string) => get<PersonaDetail>(`/api/personas/${encodeURIComponent(userId)}`),
   activity: (limit?: number) => get<Activity>(`/api/activity${qs({ limit })}`),
   system: () => get<SystemStatus>(`/api/system`),
+  impact: () => get<Impact>(`/api/impact`),
 };
 

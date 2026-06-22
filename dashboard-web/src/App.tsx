@@ -9,8 +9,9 @@ import { CompanyBrain } from "./views/CompanyBrain";
 import { Knowledge } from "./views/Knowledge";
 import { People } from "./views/People";
 import { Health } from "./views/Health";
+import { Impact } from "./views/Impact";
 
-type Tab = "conversations" | "feedback" | "brain" | "knowledge" | "people" | "system";
+type Tab = "impact" | "conversations" | "feedback" | "brain" | "knowledge" | "people" | "system";
 
 function SummaryBar() {
   const { data } = useAsync(() => api.summary(), []);
@@ -47,7 +48,7 @@ function TraceLookup({ onOpen }: { onOpen: (id: string) => void }) {
 }
 
 export function App() {
-  const [tab, setTab] = useState<Tab>("conversations");
+  const [tab, setTab] = useState<Tab>("impact");
   const [trace, setTrace] = useState<string | null>(null);
 
   return (
@@ -64,6 +65,7 @@ export function App() {
       <SummaryBar />
 
       <nav className="tabs">
+        <button className={tab === "impact" ? "tab tab-on" : "tab"} onClick={() => setTab("impact")}>Impact</button>
         <button className={tab === "conversations" ? "tab tab-on" : "tab"} onClick={() => setTab("conversations")}>Conversations</button>
         <button className={tab === "feedback" ? "tab tab-on" : "tab"} onClick={() => setTab("feedback")}>👎 Triage</button>
         <button className={tab === "brain" ? "tab tab-on" : "tab"} onClick={() => setTab("brain")}>Company Brain</button>
@@ -76,6 +78,7 @@ export function App() {
       </nav>
 
       <main className="content">
+        {tab === "impact" && <Impact />}
         {tab === "conversations" && <Conversations onOpenTrace={setTrace} />}
         {tab === "feedback" && <Feedback onOpenTrace={setTrace} />}
         {tab === "brain" && <CompanyBrain />}

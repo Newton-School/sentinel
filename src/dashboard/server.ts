@@ -25,6 +25,7 @@ import {
   getPersona,
 } from "./brain.js";
 import { getActivity } from "./activity.js";
+import { getImpact } from "./impact.js";
 
 export interface DashboardLogger {
   error: (...args: unknown[]) => void;
@@ -233,6 +234,11 @@ async function handleApi(
     const q = parse(ActivityParams, params);
     if (!q) return sendJson(res, 400, { error: "invalid query parameters" });
     sendJson(res, 200, await getActivity(deps.db, { limit: q.limit }));
+    return;
+  }
+
+  if (pathname === "/api/impact") {
+    sendJson(res, 200, await getImpact(deps.db));
     return;
   }
 
