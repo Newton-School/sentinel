@@ -13,6 +13,20 @@ import { dashboardViewerScope } from "./brain.js";
 
 const log = pino({ name: "dashboard", level: dashboardEnv.LOG_LEVEL });
 
+const botReadyUrl = dashboardEnv.BOT_READY_URL;
+const fetchReadiness = botReadyUrl
+  ? async () => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 2000);
+      try {
+        const r = await fetch(botReadyUrl, { signal: ctrl.signal });
+        return (await r.json()) as Record<string, unknown>;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+  : undefined;
+
 const db = getReadOnlyPool();
 const server = createDashboardServer({
   db,
@@ -20,6 +34,7 @@ const server = createDashboardServer({
   log,
   viewer: dashboardViewerScope(dashboardEnv.DASHBOARD_VIEWER_ROLE),
   showSensitive: dashboardEnv.DASHBOARD_SHOW_SENSITIVE,
+  fetchReadiness,
 });
 
 server.listen(dashboardEnv.DASHBOARD_PORT, () => {

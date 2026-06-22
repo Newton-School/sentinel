@@ -16,3 +16,6 @@ data:
   # The built SPA dir is baked into the image (Dockerfile.dashboard); set here
   # too so it's explicit/overridable.
   DASHBOARD_STATIC_DIR: "/app/web"
+  # The bot's in-cluster /ready, proxied by the System health view (the bot
+  # Service is `sentinel` on 8930). Unset → health view shows bot as unknown.
+  BOT_READY_URL: "http://sentinel:8930/ready"

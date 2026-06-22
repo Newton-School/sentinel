@@ -17,6 +17,9 @@ const schema = z.object({
   PG_POOL_MAX: z.coerce.number().int().positive().default(10),
   // Directory of the built SPA to serve; unset → API-only.
   DASHBOARD_STATIC_DIR: z.string().min(1).optional(),
+  // The bot's /ready URL, proxied by the health view (e.g. http://sentinel:8930/ready).
+  // Unset → the health view shows bot status as unknown.
+  BOT_READY_URL: z.string().url().optional(),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
   // ACL role the dashboard views as. In the active 'founders' ACL mode this is
   // the whole gate (founder → sees the company brain; anything else → nothing),

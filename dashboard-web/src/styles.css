@@ -176,6 +176,24 @@ body {
 .bar { background: var(--chip-bg); border-radius: 999px; height: 8px; overflow: hidden; }
 .bar-fill { background: var(--brand); height: 100%; }
 
+/* System health */
+.health-block { margin-bottom: 22px; }
+.status-banner { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 16px; border-radius: var(--radius); font-weight: 600; margin-bottom: 10px; }
+.sb-ok { background: var(--pos-bg); color: var(--pos); }
+.sb-bad { background: #fef3c7; color: #b45309; }
+.status-banner .muted { font-weight: 400; }
+.mcp-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+.freshness { display: flex; flex-wrap: wrap; gap: 10px; }
+.fresh-card { background: var(--surface); border: 1px solid var(--line); border-left-width: 3px; border-radius: 10px; padding: 10px 14px; box-shadow: var(--shadow); min-width: 160px; }
+.fresh-ok { border-left-color: var(--pos); }
+.fresh-warn { border-left-color: #d97706; }
+.fresh-stale { border-left-color: var(--neg); }
+.fresh-src { font-weight: 700; text-transform: capitalize; }
+.fresh-age { color: var(--muted); font-size: 12px; }
+.join-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.row-click { cursor: pointer; }
+.row-click:hover { background: #fde8e8; }
+
 @media (max-width: 860px) {
   .brain-grid, .people-grid { grid-template-columns: 1fr; }
 }
