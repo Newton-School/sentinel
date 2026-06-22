@@ -24,10 +24,22 @@ import {
   listPersonas,
   getPersona,
 } from "./brain.js";
+import { getActivity } from "./activity.js";
 
 export interface DashboardLogger {
   error: (...args: unknown[]) => void;
 }
+
+/** The bot's /ready shape (proxied for the health view); all fields optional. */
+export interface BotReadiness {
+  status?: string;
+  slack?: string;
+  database?: string;
+  mcpServers?: string[];
+  unavailableSources?: string[];
+  uptime?: number;
+}
+export type ReadinessFetcher = () => Promise<BotReadiness | null>;
 
 export interface DashboardDeps {
   db: Queryable;
@@ -38,6 +50,8 @@ export interface DashboardDeps {
   viewer?: ViewerScope;
   /** Whether brain memory routes may surface sensitivity='sensitive' rows. */
   showSensitive?: boolean;
+  /** Fetches the bot's /ready for the health view; omit → bot status unknown. */
+  fetchReadiness?: ReadinessFetcher;
 }
 
 const MIME: Record<string, string> = {
@@ -105,6 +119,10 @@ const MemoryParams = z.object({
 });
 
 const PersonaListParams = z.object({
+  limit: z.coerce.number().int().positive().optional(),
+});
+
+const ActivityParams = z.object({
   limit: z.coerce.number().int().positive().optional(),
 });
 
@@ -207,6 +225,28 @@ async function handleApi(
     const persona = await getPersona(deps.db, userId);
     if (!persona) return sendJson(res, 404, { error: "persona not found" });
     sendJson(res, 200, persona);
+    return;
+  }
+
+  // ── System health (SRE) ──────────────────────────────────────────────────
+  if (pathname === "/api/activity") {
+    const q = parse(ActivityParams, params);
+    if (!q) return sendJson(res, 400, { error: "invalid query parameters" });
+    sendJson(res, 200, await getActivity(deps.db, { limit: q.limit }));
+    return;
+  }
+
+  if (pathname === "/api/system") {
+    // Proxy the bot's /ready; never fail the dashboard if the bot is unreachable.
+    let bot: BotReadiness | null = null;
+    if (deps.fetchReadiness) {
+      try {
+        bot = await deps.fetchReadiness();
+      } catch {
+        bot = null;
+      }
+    }
+    sendJson(res, 200, { bot });
     return;
   }
 

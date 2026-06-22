@@ -8,8 +8,9 @@ import { TraceDrawer } from "./views/TraceDrawer";
 import { CompanyBrain } from "./views/CompanyBrain";
 import { Knowledge } from "./views/Knowledge";
 import { People } from "./views/People";
+import { Health } from "./views/Health";
 
-type Tab = "conversations" | "feedback" | "brain" | "knowledge" | "people";
+type Tab = "conversations" | "feedback" | "brain" | "knowledge" | "people" | "system";
 
 function SummaryBar() {
   const { data } = useAsync(() => api.summary(), []);
@@ -68,6 +69,7 @@ export function App() {
         <button className={tab === "brain" ? "tab tab-on" : "tab"} onClick={() => setTab("brain")}>Company Brain</button>
         <button className={tab === "knowledge" ? "tab tab-on" : "tab"} onClick={() => setTab("knowledge")}>Knowledge</button>
         <button className={tab === "people" ? "tab tab-on" : "tab"} onClick={() => setTab("people")}>People</button>
+        <button className={tab === "system" ? "tab tab-on" : "tab"} onClick={() => setTab("system")}>System</button>
         <a className="tab tab-link" href="https://github.com/Newton-School/sentinel/blob/main/grafana/sentinel-llmops-dashboard.json" target="_blank" rel="noreferrer">
           Ops metrics (Grafana) ↗
         </a>
@@ -79,6 +81,7 @@ export function App() {
         {tab === "brain" && <CompanyBrain />}
         {tab === "knowledge" && <Knowledge />}
         {tab === "people" && <People />}
+        {tab === "system" && <Health onOpenTrace={setTrace} />}
       </main>
 
       {trace && <TraceDrawer traceId={trace} onClose={() => setTrace(null)} />}

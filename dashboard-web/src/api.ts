@@ -143,6 +143,21 @@ export interface PersonaSummary { userId: string; displayName: string; role: str
 export interface PersonaTrait { label: string; value: string; confidence: number; evidenceCount: number; updatedAt: string; }
 export interface PersonaDetail extends PersonaSummary { traits: PersonaTrait[]; }
 
+// ── System health ────────────────────────────────────────────────────────────
+
+export interface IngestCursor { source: string; cursor: string; updatedAt: string; }
+export interface JoinedMeeting { eventId: string; joinedAt: number; }
+export interface FailedCall {
+  callId: string; traceId: string; operation: string; errorKind: string | null;
+  model: string; latencyMs: number | null; userId: string | null; question: string | null; createdAt: string;
+}
+export interface Activity { cursors: IngestCursor[]; meetings: JoinedMeeting[]; failedCalls: FailedCall[]; }
+export interface BotReadiness {
+  status?: string; slack?: string; database?: string;
+  mcpServers?: string[]; unavailableSources?: string[]; uptime?: number;
+}
+export interface SystemStatus { bot: BotReadiness | null; }
+
 function qs(params: Record<string, string | number | undefined>): string {
   const u = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
@@ -181,5 +196,7 @@ export const api = {
     get<{ items: MemorySummary[] }>(`/api/memories${qs(p)}`),
   personas: (limit?: number) => get<{ items: PersonaSummary[] }>(`/api/personas${qs({ limit })}`),
   persona: (userId: string) => get<PersonaDetail>(`/api/personas/${encodeURIComponent(userId)}`),
+  activity: (limit?: number) => get<Activity>(`/api/activity${qs({ limit })}`),
+  system: () => get<SystemStatus>(`/api/system`),
 };
 
