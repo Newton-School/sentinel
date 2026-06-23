@@ -1,4 +1,4 @@
-FROM node:20-alpine AS builder
+FROM node:24.17.0-alpine3.24 AS builder
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -9,12 +9,19 @@ RUN npm run build
 # Runtime stage: the Playwright base image bundles browsers + all system
 # libraries Chrome needs, so the Meet bot can actually launch Chrome.
 FROM mcr.microsoft.com/playwright:v1.59.1-jammy
-# curl: HEALTHCHECK below. dumb-init: PID-1 init so the node process reaps the
-# per-request stdio MCP servers + detached Chrome-joiner children and forwards
-# SIGTERM (K8s graceful shutdown) instead of leaving zombies / ignoring the signal.
+# curl: HEALTHCHECK below + used by `n` to fetch Node. dumb-init: PID-1 init so the
+# node process reaps the per-request stdio MCP servers + detached Chrome-joiner
+# children and forwards SIGTERM (K8s graceful shutdown) instead of leaving zombies
+# / ignoring the signal.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends curl dumb-init \
   && rm -rf /var/lib/apt/lists/*
+# The Playwright base image ships a 24.x that predates the June 2026 Node security
+# releases. Upgrade to 24.17.0 (same v24 line / ABI 137, so Playwright's prebuilt
+# browsers and native bindings are unaffected) so the running process — not just the
+# build — gets the CVE fixes. `n` installs into /usr/local/bin, which precedes the
+# base image's /usr/bin/node on PATH; the version assertion fails the build otherwise.
+RUN npm install -g n && n 24.17.0 && hash -r && node -v | grep -qx v24.17.0
 WORKDIR /app
 # pwuser's home — Playwright/Chrome resolves ~ to /home/pwuser for its profile.
 ENV HOME=/home/pwuser

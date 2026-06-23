@@ -26,8 +26,13 @@ describe("Dockerfile runtime image", () => {
     expect(dockerfile).toMatch(/CMD \["node", "dist\/index\.js"\]/);
   });
 
-  it("keeps the builder stage on node:20-alpine", () => {
-    expect(dockerfile).toMatch(/FROM node:20-alpine AS builder/);
+  it("pins the builder stage to node:24.17.0-alpine3.24", () => {
+    expect(dockerfile).toMatch(/FROM node:24\.17\.0-alpine3\.24 AS builder/);
+  });
+
+  it("patches the runtime Node to 24.17.0 (June 2026 security releases)", () => {
+    expect(dockerfile).toMatch(/\bn 24\.17\.0\b/);
+    expect(dockerfile).toMatch(/node -v \| grep -qx v24\.17\.0/);
   });
 
   it("runs the runtime container as a non-root user", () => {
