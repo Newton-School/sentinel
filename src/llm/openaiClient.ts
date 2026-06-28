@@ -83,6 +83,8 @@ export interface ExtractJsonOptions {
   operation?: "extract" | "consolidate" | "summary";
   /** Versioned prompt id stamped onto the LLM trace row. */
   promptVersion?: string;
+  /** Set false to skip the llm_calls trace row (e.g. the offline eval judge). */
+  recordTrace?: boolean;
   maxTokens?: number;
   /** API key. Defaults to {@link openaiApiKey}; without one the call no-ops to null. */
   apiKey?: string;
@@ -141,7 +143,9 @@ export async function extractJson(opts: ExtractJsonOptions): Promise<unknown | n
   const model = opts.model ?? OPENAI_EXTRACT_MODEL;
   const operation = opts.operation ?? "extract";
   const startedAt = Date.now();
+  const record = opts.recordTrace !== false;
   const reportError = (errorKind: string): void => {
+    if (!record) return;
     recordLlmCall({
       provider: "openai",
       model,
@@ -213,17 +217,19 @@ export async function extractJson(opts: ExtractJsonOptions): Promise<unknown | n
 
     const inputTokens = payload.usage?.prompt_tokens;
     const outputTokens = payload.usage?.completion_tokens;
-    recordLlmCall({
-      provider: "openai",
-      model,
-      operation,
-      inputTokens,
-      outputTokens,
-      costUsd: computeCostUsd(model, inputTokens ?? 0, outputTokens ?? 0),
-      latencyMs: Date.now() - startedAt,
-      status: "ok",
-      promptVersion: opts.promptVersion,
-    });
+    if (record) {
+      recordLlmCall({
+        provider: "openai",
+        model,
+        operation,
+        inputTokens,
+        outputTokens,
+        costUsd: computeCostUsd(model, inputTokens ?? 0, outputTokens ?? 0),
+        latencyMs: Date.now() - startedAt,
+        status: "ok",
+        promptVersion: opts.promptVersion,
+      });
+    }
     return parsed;
   } catch (err) {
     recordMemoryExtractError();

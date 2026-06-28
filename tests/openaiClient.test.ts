@@ -246,6 +246,15 @@ describe("openaiClient.extractJson — telemetry", () => {
     expect(recordLlmCallSpy.mock.calls.at(-1)![0].promptVersion).toBe("extraction@1.0.0+abc123def456");
   });
 
+  it("skips trace recording when recordTrace is false (used by the eval judge)", async () => {
+    const { extractJson, __resetBudgetForTests } = await importClient();
+    __resetBudgetForTests();
+    const ok = (async () =>
+      apiResponse(bodyWithUsage({ facts: [] }, { prompt_tokens: 1, completion_tokens: 1 }))) as unknown as typeof fetch;
+    await extractJson({ system: "s", user: "u", schema: SCHEMA, apiKey: "k", fetchImpl: ok, now: () => 0, recordTrace: false });
+    expect(recordLlmCallSpy).not.toHaveBeenCalled();
+  });
+
   it("does NOT record a call when there is no API key (skipped, not attempted)", async () => {
     const { extractJson, __resetBudgetForTests } = await importClient();
     __resetBudgetForTests();

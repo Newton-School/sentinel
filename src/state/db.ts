@@ -17,6 +17,10 @@ export const MEMORY_RETENTION_DAYS = 90;
 /** Default retention window for llm_calls trace rows, in days. */
 export const LLM_CALLS_RETENTION_DAYS = 90;
 
+/** Default retention window for eval_runs rows, in days (kept long — eval
+ * history is valuable for tracking quality trends across prompt versions). */
+export const EVAL_RUNS_RETENTION_DAYS = 180;
+
 /**
  * True when the DB handle is already open. The LLM trace sink
  * (src/llm/traceStore.ts) consults this so it only writes a durable row when
@@ -77,6 +81,14 @@ export function getDb(): Database.Database {
       }
     } catch (err) {
       log.error({ err }, "llm_calls retention prune failed (non-fatal)");
+    }
+    try {
+      const deleted = pruneEvalRuns();
+      if (deleted > 0) {
+        log.info({ deleted }, "Pruned stale eval_runs rows");
+      }
+    } catch (err) {
+      log.error({ err }, "eval_runs retention prune failed (non-fatal)");
     }
   }
 
@@ -383,6 +395,25 @@ function runMigrations(db: Database.Database): void {
     log.info("Added prompt_version column to llm_calls");
   }
 
+  // Migration: offline eval-harness run history. One row per suite per run; the
+  // dashboard reads the latest per suite for the eval pass-rate gauge.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS eval_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id TEXT NOT NULL,
+      suite TEXT NOT NULL,
+      n_cases INTEGER NOT NULL,
+      n_pass INTEGER NOT NULL,
+      mean_score REAL NOT NULL,
+      prompt_version TEXT,
+      judge_version TEXT,
+      ran_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_eval_runs_ran_at ON eval_runs(ran_at);
+    CREATE INDEX IF NOT EXISTS idx_eval_runs_suite ON eval_runs(suite, ran_at);
+  `);
+
   log.info("Migrations complete");
 }
 
@@ -462,6 +493,25 @@ export function pruneLlmCalls(
   const cutoffIso = new Date(now - retentionDays * 24 * 60 * 60 * 1000).toISOString();
   const result = db.prepare(`DELETE FROM llm_calls WHERE created_at < ?`).run(cutoffIso);
   return result.changes;
+}
+
+/**
+ * Deletes eval_runs rows older than the retention window. `ran_at` is an ISO
+ * string compared lexicographically; rows strictly older than the cutoff are
+ * removed.
+ *
+ * @param retentionDays days of eval history to keep (default 180)
+ * @param nowMs reference "now" in epoch ms (defaults to Date.now()); injectable for tests
+ * @returns the number of rows deleted
+ */
+export function pruneEvalRuns(
+  retentionDays = EVAL_RUNS_RETENTION_DAYS,
+  nowMs?: number
+): number {
+  const db = getDb();
+  const now = nowMs ?? Date.now();
+  const cutoffIso = new Date(now - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+  return db.prepare(`DELETE FROM eval_runs WHERE ran_at < ?`).run(cutoffIso).changes;
 }
 
 export function closeDb(): void {
