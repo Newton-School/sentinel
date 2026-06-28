@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   record,
   recordLlmMetric,
+  recordFeedback,
   snapshot,
   renderPrometheus,
   reset,
@@ -222,6 +223,29 @@ describe("metrics registry", () => {
       const text = renderPrometheus();
       expect(text).not.toContain('operation="embed"');
       expect(snapshot().llm.calls).toEqual({});
+    });
+  });
+
+  describe("recordFeedback + feedback series", () => {
+    it("counts feedback by sentiment and renders a labeled series", () => {
+      recordFeedback("positive");
+      recordFeedback("positive");
+      recordFeedback("negative");
+
+      const s = snapshot();
+      expect(s.feedback.positive).toBe(2);
+      expect(s.feedback.negative).toBe(1);
+
+      const text = renderPrometheus();
+      expect(text).toMatch(/# TYPE sentinel_feedback_total counter/);
+      expect(text).toContain('sentinel_feedback_total{sentiment="positive"} 2');
+      expect(text).toContain('sentinel_feedback_total{sentiment="negative"} 1');
+    });
+
+    it("reset() clears feedback counters", () => {
+      recordFeedback("negative");
+      reset();
+      expect(snapshot().feedback).toEqual({ positive: 0, negative: 0 });
     });
   });
 });

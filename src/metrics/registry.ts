@@ -123,6 +123,8 @@ export interface MetricsSnapshot {
   memory: MemoryMetricsSnapshot;
   /** Per-call LLM trace metrics. */
   llm: LlmMetricsSnapshot;
+  /** Online user-feedback counts (👍/👎 reactions on bot replies). */
+  feedback: { positive: number; negative: number };
 }
 
 interface Counters {
@@ -144,6 +146,8 @@ interface Counters {
   llmCalls: Map<string, number>;
   /** Token/cost/latency aggregates keyed by "provider|model|operation". */
   llmAgg: Map<string, LlmAgg>;
+  feedbackPositive: number;
+  feedbackNegative: number;
 }
 
 function freshCounters(): Counters {
@@ -164,6 +168,8 @@ function freshCounters(): Counters {
     memoryEmbeddings: new Map(),
     llmCalls: new Map(),
     llmAgg: new Map(),
+    feedbackPositive: 0,
+    feedbackNegative: 0,
   };
 }
 
@@ -219,6 +225,12 @@ export function recordLlmMetric(input: RecordLlmMetricInput): void {
     }
     // latencies above the largest finite bucket only show up at +Inf (==count)
   }
+}
+
+/** Record one user-feedback reaction (👍/👎) on a bot reply. */
+export function recordFeedback(sentiment: "positive" | "negative"): void {
+  if (sentiment === "positive") counters.feedbackPositive += 1;
+  else counters.feedbackNegative += 1;
 }
 
 // --- Memory subsystem counters ----------------------------------------------
@@ -338,6 +350,10 @@ export function snapshot(): MetricsSnapshot {
       outputTokens: llmOutputTokens,
       costUsd: llmCostUsd,
       latency: llmLatency,
+    },
+    feedback: {
+      positive: counters.feedbackPositive,
+      negative: counters.feedbackNegative,
     },
   };
 }
@@ -519,6 +535,12 @@ export function renderPrometheus(): string {
     lines.push(`sentinel_llm_latency_ms_sum{${labels}} ${fmt(h.sum)}`);
     lines.push(`sentinel_llm_latency_ms_count{${labels}} ${h.count}`);
   }
+
+  // Online user feedback (👍/👎 on bot replies) by sentiment.
+  metric("sentinel_feedback_total", "counter", "User feedback reactions on bot replies", [
+    { labels: `sentiment="positive"`, value: s.feedback.positive },
+    { labels: `sentiment="negative"`, value: s.feedback.negative },
+  ]);
 
   // Trailing newline per Prometheus convention.
   return lines.join("\n") + "\n";

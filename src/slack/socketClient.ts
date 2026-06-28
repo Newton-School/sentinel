@@ -12,6 +12,42 @@ export type EventHandler = (
   client: InstanceType<typeof App>["client"]
 ) => Promise<void>;
 
+/** A normalized `reaction_added` on a message (the feedback signal). */
+export interface ReactionEnvelope {
+  reactorUserId: string;
+  channelId: string;
+  itemTs: string;
+  reaction: string;
+}
+
+export type ReactionHandler = (env: ReactionEnvelope) => void | Promise<void>;
+
+/**
+ * Normalize a `reaction_added` event, or null when it isn't a reaction on a
+ * message (only message reactions can be feedback on a bot reply).
+ */
+export function normalizeReactionAdded(event: {
+  user?: string;
+  reaction?: string;
+  item?: { type?: string; channel?: string; ts?: string };
+}): ReactionEnvelope | null {
+  if (
+    !event.user ||
+    !event.reaction ||
+    event.item?.type !== "message" ||
+    !event.item.channel ||
+    !event.item.ts
+  ) {
+    return null;
+  }
+  return {
+    reactorUserId: event.user,
+    channelId: event.item.channel,
+    itemTs: event.item.ts,
+    reaction: event.reaction,
+  };
+}
+
 /**
  * Authorization gate. Returns true only when `userId` is in the allow-list.
  * Security-critical: this is the single check that keeps non-listed Slack
@@ -98,7 +134,7 @@ function dedupeKey(envelope: SlackEventEnvelope): string {
   return `${envelope.channelId}:${envelope.messageTs}`;
 }
 
-export function createSlackApp(handler: EventHandler) {
+export function createSlackApp(handler: EventHandler, reactionHandler?: ReactionHandler) {
   const app = new App({
     token: config.SLACK_BOT_TOKEN,
     appToken: config.SLACK_APP_TOKEN,
@@ -195,6 +231,29 @@ export function createSlackApp(handler: EventHandler) {
 
     await handler(envelope, client);
   });
+
+  // Handle 👍/👎 reactions on the bot's replies (feedback loop). Only wired
+  // when a reaction handler is supplied (i.e. FEEDBACK_ENABLED), and requires
+  // the `reaction_added` event subscription + `reactions:read` scope on the
+  // Slack app.
+  if (reactionHandler) {
+    app.event("reaction_added", async ({ event }) => {
+      const e = event as {
+        user?: string;
+        reaction?: string;
+        item?: { type?: string; channel?: string; ts?: string };
+      };
+      // Ignore the bot's own reactions (e.g. :eyes:/:white_check_mark:).
+      if (!e.user || e.user === config.BOT_USER_ID) return;
+      if (!isAllowed(e.user)) {
+        log.warn({ userId: e.user }, "Unauthorized user reaction, ignoring");
+        return;
+      }
+      const env = normalizeReactionAdded(e);
+      if (!env) return;
+      await reactionHandler(env);
+    });
+  }
 
   return app;
 }
