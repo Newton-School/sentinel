@@ -22,6 +22,7 @@ import { trackQuery } from "./persona/tracker.js";
 import { slackReplyText } from "./slack/formatters.js";
 import { startHealthServer, type HealthStatus } from "./health/server.js";
 import { record, renderPrometheus } from "./metrics/registry.js";
+import { renderEvalGauges } from "./metrics/evalGauges.js";
 import { startMeetWatcher } from "./meet-bot/watcher.js";
 import { startIngestWatcher } from "./memory/ingestWatcher.js";
 import { startConsolidationWatcher } from "./memory/consolidationWatcher.js";
@@ -365,8 +366,9 @@ async function main(): Promise<void> {
     },
     // Liveness uptime: cheap, no Slack/DB dependency.
     uptimeSeconds,
-    // /metrics: Prometheus exposition of in-process request/token/cost counters.
-    renderPrometheus
+    // /metrics: in-process request/token/cost/feedback counters, plus eval
+    // pass-rate gauges read from eval_runs at scrape time.
+    () => renderPrometheus() + renderEvalGauges()
   );
 
   // Start Meet watcher (auto-joins upcoming meetings via Playwright bot)

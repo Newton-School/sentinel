@@ -15,7 +15,9 @@
     "monitor:memory": "tsx scripts/monitor-memory.ts",
     "eval": "tsx evals/runner.ts",
     "eval:gate": "tsx evals/runner.ts --gate",
-    "feedback:harvest": "tsx scripts/harvest-feedback.ts"
+    "feedback:harvest": "tsx scripts/harvest-feedback.ts",
+    "grafana:validate": "tsx scripts/provision-grafana.ts",
+    "grafana:provision": "tsx scripts/provision-grafana.ts --apply"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",

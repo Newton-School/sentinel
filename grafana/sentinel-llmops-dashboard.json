@@ -1,0 +1,101 @@
+{
+  "title": "Sentinel LLMOps",
+  "uid": "sentinel-llmops",
+  "tags": ["sentinel", "llmops"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "title": "LLM cost (USD/min) by model + operation",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (model, operation) (rate(sentinel_llm_cost_usd_total[5m])) * 60",
+          "legendFormat": "{{model}}/{{operation}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Token throughput (tokens/s) by model + operation",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (model, operation) (rate(sentinel_llm_input_tokens_total[5m]))",
+          "legendFormat": "in {{model}}/{{operation}}"
+        },
+        {
+          "expr": "sum by (model, operation) (rate(sentinel_llm_output_tokens_total[5m]))",
+          "legendFormat": "out {{model}}/{{operation}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "LLM latency p95 (ms) by operation",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(sentinel_llm_latency_ms_bucket[5m])))",
+          "legendFormat": "p95 {{operation}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "LLM error rate",
+      "type": "stat",
+      "datasource": { "type": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(sentinel_llm_calls_total{status=\"error\"}[5m])) / clamp_min(sum(rate(sentinel_llm_calls_total[5m])), 1)",
+          "legendFormat": "error rate"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "User feedback positive ratio (1h)",
+      "type": "stat",
+      "datasource": { "type": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum(rate(sentinel_feedback_total{sentiment=\"positive\"}[1h])) / clamp_min(sum(rate(sentinel_feedback_total[1h])), 1)",
+          "legendFormat": "positive ratio"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Eval pass ratio by suite",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 16 },
+      "targets": [
+        { "expr": "sentinel_eval_pass_ratio", "legendFormat": "{{suite}}" }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Eval mean score by suite",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 16 },
+      "targets": [
+        { "expr": "sentinel_eval_mean_score", "legendFormat": "{{suite}}" }
+      ]
+    }
+  ]
+}
