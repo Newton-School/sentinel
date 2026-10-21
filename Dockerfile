@@ -15,6 +15,7 @@ FROM mcr.microsoft.com/playwright:v1.59.1-jammy
 # / ignoring the signal.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends curl dumb-init \
+  && apt-get install -y --only-upgrade ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 # The Playwright base image ships a 24.x that predates the June 2026 Node security
 # releases. Upgrade to 24.17.0 (same v24 line / ABI 137, so Playwright's prebuilt
@@ -39,6 +40,7 @@ COPY --from=builder /app/dist ./dist
 # persistent Chrome profile and meet-bot logs are written (the datastore now
 # lives in ParadeDB, not on this volume) — owned by and writable for pwuser.
 RUN mkdir -p /app/data && chown -R pwuser:pwuser /app
+ENV NODE_OPTIONS=--use-openssl-ca
 USER pwuser
 VOLUME ["/app/data"]
 EXPOSE 8930
