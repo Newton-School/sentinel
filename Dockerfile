@@ -1,4 +1,4 @@
-FROM node:24.17.0-alpine3.24 AS builder
+FROM node:24.22.1-alpine3.24 AS builder
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -17,12 +17,12 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends curl dumb-init \
   && apt-get install -y --only-upgrade ca-certificates \
   && rm -rf /var/lib/apt/lists/*
-# The Playwright base image ships a 24.x that predates the June 2026 Node security
-# releases. Upgrade to 24.17.0 (same v24 line / ABI 137, so Playwright's prebuilt
+# The Playwright base image ships a 24.x that predates the October 2026 Node security
+# releases. Upgrade to 24.22.1 (same v24 line / ABI 137, so Playwright's prebuilt
 # browsers and native bindings are unaffected) so the running process — not just the
 # build — gets the CVE fixes. `n` installs into /usr/local/bin, which precedes the
 # base image's /usr/bin/node on PATH; the version assertion fails the build otherwise.
-RUN npm install -g n && n 24.17.0 && hash -r && node -v | grep -qx v24.17.0
+RUN npm install -g n && n 24.22.1 && hash -r && node -v | grep -qx v24.22.1
 WORKDIR /app
 # pwuser's home — Playwright/Chrome resolves ~ to /home/pwuser for its profile.
 ENV HOME=/home/pwuser
